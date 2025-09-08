@@ -1,5 +1,8 @@
 // File: ContentView.swift
 import SwiftUI
+import UIKit
+import CoreImage
+import CoreImage.CIFilterBuiltins
 
 @main
 struct BTCDIDAuthApp: App {
@@ -16,6 +19,8 @@ struct ContentView: View {
     @State private var nonce: String = "SampleNonce123"
     @State private var withdrawTo: String = "lnbc1..."
     @State private var isLoading: Bool = false
+    @State private var showIDSheet = false
+    private let showZKDevControls = false
     
     // States for advanced features
     @State private var inputHash: String = "input_hash"
@@ -27,18 +32,30 @@ struct ContentView: View {
     @State private var vccResult: String = "No VCC yet"
     @State private var dlcOutcome: String = "auth_verified"
     @State private var dlcResult: String = "No DLC yet"
+    @State private var showStep2Alert = false
+    @State private var paymentResult: String = "No payment yet"
+    @State private var showFullVCC = false
+    @State private var showCopiedToast = false
+    @State private var showFullPayment = false
     
     // Wallet selection states
     @State private var selectedWalletType: WalletType?
     @State private var lightningAddress: String = ""
     @State private var custodialUsername: String = ""
     @State private var breezSetup: String = ""
+    @State private var showQRScanner = false
+    @State private var showOtherWallets = false
+    @State private var showCustodialPicker = false
+    @State private var showNonCustodialPicker = false
+    @State private var chosenCustodial: String? = nil
+    @State private var chosenNonCustodial: String? = nil
+    @State private var connectError: String? = nil
     
     // Step completion tracking
     @State private var step1Complete = false
     @State private var step2Complete = false
     @State private var step3Complete = false
-
+    
     // Add this debug line:
     init() { print("🟡 isLoading initial state: \(isLoading)") }
     
@@ -87,17 +104,12 @@ struct ContentView: View {
                     // Step 3: Authenticate
                     stepCard(
                         stepNumber: 3,
-                        title: "Push",
+                        title: "Prove",
                         subtitle: "",
                         isComplete: step3Complete,
                         isEnabled: step1Complete && step2Complete
                     ) {
                         step3Content
-                    }
-                    
-                    // Advanced Features (collapsible)
-                    if step1Complete {
-                        advancedFeaturesSection
                     }
                     
                     Spacer(minLength: 60)
@@ -106,9 +118,134 @@ struct ContentView: View {
                 .padding(.top, 20)
             }
         }
+        .overlay(alignment: .bottom) {
+            if showCopiedToast {
+                Text("Copied")
+                    .font(.footnote.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(.ultraThinMaterial))
+                    .shadow(radius: 6)
+                    .padding(.bottom, 18)
+            }
+        }
         .preferredColorScheme(.light)
         .onAppear {
             checkExistingSetup()
+        }
+        
+        .confirmationDialog(
+            "Choose a custodial wallet",
+            isPresented: $showCustodialPicker,
+            titleVisibility: .visible
+        ) {
+            Button("Coinbase") {
+                selectedWalletType = .custodial
+                chosenCustodial = "Coinbase"
+            }
+            Button("Binance") {
+                selectedWalletType = .custodial
+                chosenCustodial = "Binance"
+            }
+            Button("Strike") {
+                selectedWalletType = .custodial
+                chosenCustodial = "Strike"
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog(
+            "Choose a non-custodial wallet",
+            isPresented: $showNonCustodialPicker,
+            titleVisibility: .visible
+        ) {
+            Button("Breez (Embedded)") {
+                selectedWalletType = .embedded
+                chosenNonCustodial = "Breez"
+                step2Complete = true
+            }
+            Button("Lightning (Phoenix/Zeus)") {
+                selectedWalletType = .lightning
+                chosenNonCustodial = "Lightning"
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        
+        .sheet(isPresented: $showQRScanner) {
+            QRPayDestinationScanner(
+                onResult: { dest in
+                    switch dest {
+                    case .onChain(let address, _):
+                        if selectedWalletType == .lightning { lightningAddress = address }
+                        else { custodialUsername = address }
+                    case .lightningInvoice(let invoice):
+                        if selectedWalletType == .lightning { lightningAddress = invoice }
+                        else { custodialUsername = invoice }
+                    case .lnurl(let lnurl):
+                        if selectedWalletType == .lightning { lightningAddress = lnurl }
+                        else { custodialUsername = lnurl }
+                    case .lightningAddress(let addr):
+                        if selectedWalletType == .lightning { lightningAddress = addr }
+                        else { custodialUsername = addr }
+                    }
+                    step2Complete = true
+                    showQRScanner = false
+                },
+                onCancel: { showQRScanner = false }
+            )
+        }
+        
+        .sheet(isPresented: $showIDSheet) {
+            let full = didManager.publicDID ?? "Unavailable"
+            let qr   = makeQRCode(full)
+            
+            VStack(spacing: 16) {
+                Text("Your Signature")
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                
+                if let qr {
+                    Image(uiImage: qr)
+                        .interpolation(.none)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 200, height: 200)
+                        .padding(.bottom, 4)
+                }
+                
+                Text(truncatedDID(full))
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .textSelection(.enabled)
+                    .monospaced()
+                
+                ScrollView {
+                    Text(full)
+                        .font(.footnote)
+                        .textSelection(.enabled)
+                        .monospaced()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 120)
+                
+                HStack(spacing: 12) {
+                    Button {
+                        UIPasteboard.general.string = full
+                    } label: {
+                        Label("Copy ID", systemImage: "doc.on.doc")
+                    }
+                    .buttonStyle(.bordered)
+                    
+                    Button(role: .destructive) {
+                        regenerateKeyPair()
+                        showIDSheet = false
+                    } label: {
+                        Label("Regenerate", systemImage: "arrow.clockwise.circle")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding()
+            .presentationDetents([.medium, .large])
         }
     }
     
@@ -116,51 +253,11 @@ struct ContentView: View {
     private var headerSection: some View {
         VStack(spacing: 16) {
             Text("SignedByMe")
-                .font(.system(size: 36, weight: .bold, design: .rounded))
+                .font(.system(size: 36, weight: .bold))
                 .foregroundStyle(
-                    LinearGradient(
-                        colors: [Color.blue, Color.purple],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
+                    LinearGradient(colors: [.blue, .purple], startPoint: .leading, endPoint: .trailing)
                 )
-            
-            // DID Status
-            if let publicDID = didManager.publicDID {
-                VStack(spacing: 8) {
-                    HStack {
-                        Image(systemName: "checkmark.shield.fill")
-                            .foregroundColor(.green)
-                            .font(.title2)
-                        Text("Identity Active")
-                            .font(.headline)
-                            .fontWeight(.semibold)
-                        Spacer()
-                    }
-                    
-                    Text("Public DID: \(publicDID)")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(16)
-                .background(
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(.ultraThinMaterial)
-                        .shadow(color: .black.opacity(0.05), radius: 10, x: 0, y: 5)
-                )
-            }
-            
-            if isLoading {
-                ProgressView("Working...")
-                    .font(.headline)
-                    .tint(.blue)
-                    .padding(.top, 8)
-            }
         }
-        .padding(.vertical, 20)
     }
     
     // MARK: - Step Card Builder
@@ -229,7 +326,7 @@ struct ContentView: View {
         VStack(spacing: 20) {
             if !step1Complete {
                 VStack(spacing: 16) {
-                    Text("To create a digital signature press the button below.")
+                    Text("To Create a Signature press the button below.")
                         .font(.system(size: 16))
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
@@ -255,250 +352,395 @@ struct ContentView: View {
             } else {
                 completedStepView(
                     title: "Success!",
-                    details: didManager.publicDID ?? "No DID available",
+                    details: "  ",
                     resetAction: {
                         step1Complete = false
                         step2Complete = false
                         step3Complete = false
                     },
-                    resetLabel: "Reset Identity"
+                    resetLabel: "Reset Signature",
+                    showInfo: true
                 )
             }
         }
     }
     
-    // MARK: - Step 2 Content (Connect Wallet)
+    // MARK: - Step 2 Content (Connect Wallet) — Cash App first
     private var step2Content: some View {
         VStack(spacing: 20) {
+            
             if !step2Complete {
                 VStack(spacing: 16) {
-                    Text("Choose your wallet type for Lightning payments.")
-                        .font(.system(size: 16))
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
                     
-                    // Wallet Type Selection (3 options)
-                    VStack(spacing: 12) {
-                        // Lightning Wallet Option
-                        walletTypeButton(
-                            title: "Lightning Wallet",
-                            subtitle: "Direct Lightning Network",
-                            icon: "bolt.fill",
-                            walletType: .lightning,
-                            isSelected: selectedWalletType == .lightning
-                        )
-                        
-                        // Breez Embedded Wallet Option
-                        walletTypeButton(
-                            title: "Breez Wallet",
-                            subtitle: "Embedded Lightning SDK",
-                            icon: "bolt.circle.fill",
-                            walletType: .embedded,
-                            isSelected: selectedWalletType == .embedded
-                        )
-                        
-                        // Custodial Wallet Option
-                        walletTypeButton(
-                            title: "Custodial Wallet",
-                            subtitle: "Coinbase, Cash App, etc.",
-                            icon: "building.2.fill",
-                            walletType: .custodial,
-                            isSelected: selectedWalletType == .custodial
-                        )
+                    Text("Pick an option to Connect")
+                    
+                    HStack {
+                        Spacer()
+                        startOverChip()   // stays green with a circled icon
                     }
                     
-                    // Input field based on wallet type
-                    if let walletType = selectedWalletType {
-                        VStack(spacing: 12) {
-                            switch walletType {
-                            case .lightning:
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    
+                    // Show an error (if you set one) and give a retry
+                    if let err = connectError {
+                        resultCard(title: "Connection failed", content: err)
+                        Button("Try again") { resetConnectStep() }
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    // CASH APP QUICK PATH
+                    VStack(spacing: 12) {
+                        HStack {
+                            Image(systemName: "bolt.badge.a")
+                                .font(.title2)
+                                .foregroundColor(.green)
+                            Text("Cash App")
+                                .font(.title3).fontWeight(.semibold)
+                            levelPill("easy", color: .green)
+                                .scaleEffect(1.15)
+                                .padding(.leading, 6)
+                            Spacer()
+                            
+                        }
+                        
+                        Text("Open Cash App → Bitcoin → Deposit → show QR. Scan it or paste the address.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.leading)
+                        
+                        HStack(spacing: 12) {
+                            Button {
+                                selectedWalletType = .custodial
+                                showQRScanner = true
+                            } label: {
+                                Label("Scan QR", systemImage: "qrcode.viewfinder")
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(Color.blue)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(12)
+                            }
+                            
+                            Button {
+                                selectedWalletType = .custodial
+                                if let clip = UIPasteboard.general.string, !clip.isEmpty {
+                                    custodialUsername = clip
+                                    step2Complete = true
+                                }
+                            } label: {
+                                Label("Paste", systemImage: "doc.on.clipboard")
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(Color.gray.opacity(0.2))
+                                    .foregroundColor(.primary)
+                                    .cornerRadius(12)
+                            }
+                        }
+                        
+                        if !custodialUsername.isEmpty && selectedWalletType == .custodial {
+                            inputField(
+                                title: "Withdraw To (detected)",
+                                placeholder: "bc1… or lnbc1…",
+                                text: $custodialUsername
+                            )
+                        }
+                    }
+                    .padding(16)
+                    .background(RoundedRectangle(cornerRadius: 16).fill(.ultraThinMaterial))
+                    
+                    // TWO EQUAL CTA BUTTONS
+                    VStack(spacing: 12) {
+                        // 1) Custodial button → pick Coinbase/Binance/Strike
+                        bigActionButton(
+                            title: "Custodial Wallet",
+                            pillText: "intermediate",
+                            colors: [.blue, .purple]
+                        ) {
+                            showCustodialPicker = true
+                        }
+                        
+                        if let c = chosenCustodial, selectedWalletType == .custodial {
+                            Text("Selected: \(c)")
+                                .font(.footnote)
+                                .foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        
+                        if selectedWalletType == .custodial {
+                            HStack(spacing: 12) {
+                                Button {
+                                    showQRScanner = true
+                                } label: {
+                                    Label("Scan QR", systemImage: "qrcode.viewfinder")
+                                        .frame(maxWidth: .infinity)
+                                        .padding()
+                                        .background(Color.blue)
+                                        .foregroundColor(.white)
+                                        .cornerRadius(12)
+                                }
+                                Button {
+                                    if let clip = UIPasteboard.general.string, !clip.isEmpty {
+                                        custodialUsername = clip
+                                    }
+                                } label: {
+                                    Label("Paste", systemImage: "doc.on.clipboard")
+                                        .frame(maxWidth: .infinity)
+                                        .padding()
+                                        .background(Color.gray.opacity(0.2))
+                                        .foregroundColor(.primary)
+                                        .cornerRadius(12)
+                                }
+                            }
+                            
+                            if !custodialUsername.isEmpty {
                                 inputField(
-                                    title: "Lightning Address",
-                                    placeholder: "lnbc1... or user@lightning.com",
-                                    text: $lightningAddress
-                                )
-                            case .embedded:
-                                inputField(
-                                    title: "Breez Setup",
-                                    placeholder: "Enter Breez credentials",
-                                    text: $breezSetup
-                                )
-                            case .custodial:
-                                inputField(
-                                    title: "Username or Email",
-                                    placeholder: "username@coinbase.com",
+                                    title: "Withdraw To",
+                                    placeholder: "bc1… or lnbc1…",
                                     text: $custodialUsername
                                 )
                             }
-                            
-                            bigActionButton(
-                                title: "Connect \(getWalletDisplayName(walletType))",
-                                icon: "link",
-                                colors: [.orange, .yellow]
-                            ) {
-                                connectWallet()
+                        }
+                        
+                        // 2) Non-custodial button → pick Breez/LN
+                        bigActionButton(
+                            title: "Non-Custodial Wallet",
+                            pillText: "hard",
+                            colors: [.indigo, .purple]
+                        ) {
+                            showNonCustodialPicker = true
+                        }
+                        
+                        if let nc = chosenNonCustodial {
+                            Text("Selected: \(nc)")
+                                .font(.footnote)
+                                .foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        
+                        if selectedWalletType == .embedded {
+                            Text("Set up Breez on this device. Seed words are generated locally — back them up.")
+                                .font(.footnote)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        
+                        if selectedWalletType == .lightning {
+                            HStack(spacing: 12) {
+                                Button {
+                                    showQRScanner = true
+                                } label: {
+                                    Label("Scan QR", systemImage: "qrcode.viewfinder")
+                                        .frame(maxWidth: .infinity)
+                                        .padding()
+                                        .background(Color.blue)
+                                        .foregroundColor(.white)
+                                        .cornerRadius(12)
+                                }
+                                Button {
+                                    if let clip = UIPasteboard.general.string, !clip.isEmpty {
+                                        lightningAddress = clip
+                                    }
+                                } label: {
+                                    Label("Paste", systemImage: "doc.on.clipboard")
+                                        .frame(maxWidth: .infinity)
+                                        .padding()
+                                        .background(Color.gray.opacity(0.2))
+                                        .foregroundColor(.primary)
+                                        .cornerRadius(12)
+                                }
                             }
-                            .disabled(getInputText(walletType).isEmpty)
+                            
+                            inputField(
+                                title: "Lightning Address / Invoice",
+                                placeholder: "user@domain or lnbc1…",
+                                text: $lightningAddress
+                            )
                         }
                     }
                 }
+                
             } else {
-                completedStepView(
-                    title: "Wallet Connected!",
-                    details: getConnectedWalletDetails(),
-                    resetAction: {
-                        step2Complete = false
-                        step3Complete = false
-                        selectedWalletType = nil
-                        lightningAddress = ""
-                        custodialUsername = ""
-                        breezSetup = ""
-                    },
-                    resetLabel: "Change Wallet"
-                )
+                VStack(spacing: 12) {
+                    HStack {
+                        Spacer()
+                        startOverChip(title: "Start over") { resetConnectStep() } // ✅ shows after connect too
+                    }
+                    
+                    completedStepView(
+                        title: "Wallet Connected!",
+                        details: getConnectedWalletDetails(),
+                        resetAction: {
+                            step2Complete = false
+                            step3Complete = false
+                            selectedWalletType = nil
+                            lightningAddress = ""
+                            custodialUsername = ""
+                            breezSetup = ""
+                        },
+                        resetLabel: "Change Wallet"
+                    )
+                }
             }
+        }
+    }
+    
+    private var connectDisabled: Bool {
+        let w = selectedWalletType ?? .custodial
+        switch w {
+        case .embedded:
+            return false
+        case .custodial:
+            return custodialUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .lightning:
+            return lightningAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
     
     // MARK: - Step 3 Content (Authentication)
     private var step3Content: some View {
-        VStack(spacing: 20) {
-            Text("Complete your authentication process using Lightning payments.")
+        VStack(alignment: .center, spacing: 16) {
+            Text("Press the button below to Prove your Signature and create your Verified Content Claim")
                 .font(.system(size: 16))
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-            
-            VStack(spacing: 12) {
-                bigActionButton(
-                    title: "Verify Identity",
-                    icon: "checkmark.shield.fill",
-                    colors: [.green, .mint]
-                ) {
-                    verifyIdentity()
-                }
-                
-                bigActionButton(
-                    title: "Prove Ownership",
-                    icon: "signature",
-                    colors: [.purple, .pink]
-                ) {
-                    proveOwnership()
-                }
-            }
-            
-            if claimResult != "No claim yet" {
-                resultCard(title: "Authentication Result", content: claimResult)
-            }
-        }
-    }
-    
-    // MARK: - Advanced Features Section
-    private var advancedFeaturesSection: some View {
-        VStack(spacing: 20) {
-            Text("Advanced Features")
-                .font(.system(size: 24, weight: .bold))
-                .frame(maxWidth: .infinity, alignment: .leading)
                 .foregroundColor(.primary)
-            
-            // STWO Zero-Knowledge Proofs
-            featureCard(title: "Zero-Knowledge Proofs") {
+                .kerning(0)
+                .lineSpacing(2)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 4)
+
+            featureCard {
                 VStack(spacing: 16) {
-                    inputField(title: "Input Hash", placeholder: "input_hash", text: $inputHash)
-                    inputField(title: "Output Hash", placeholder: "output_hash", text: $outputHash)
-                    inputField(title: "Circuit", placeholder: "hash_integrity", text: $circuit)
-                    
-                    bigActionButton(
-                        title: "Generate STWO Proof",
-                        icon: "number.square.fill",
-                        colors: [.red, .orange]
-                    ) {
-                        generateSTWOProof()
+
+                    // DEV-ONLY inputs (hidden for users)
+                    if showZKDevControls {
+                        inputField(title: "Input Hash",  placeholder: "input_hash",     text: $inputHash)
+                        inputField(title: "Output Hash", placeholder: "output_hash",    text: $outputHash)
+                        inputField(title: "Circuit",     placeholder: "hash_integrity", text: $circuit)
                     }
-                    
-                    if proofResult != "No proof yet" {
+
+                    // SINGLE atomic action
+                    bigActionButton(
+                        title: "Generate Proof",
+                        colors: [.red, .orange]
+                    ) { proveAndGenerateVCC() }
+
+                    // DEV-ONLY: show proof details
+                    if showZKDevControls, proofResult != "No proof yet" {
                         resultCard(title: "Proof Result", content: proofResult)
                     }
-                }
-            }
-            
-            // DLC Contracts
-            featureCard(title: "DLC Contracts") {
-                VStack(spacing: 16) {
-                    inputField(title: "DLC Outcome", placeholder: "auth_verified", text: $dlcOutcome)
-                    
-                    bigActionButton(
-                        title: "Create DLC Contract",
-                        icon: "doc.text.fill",
-                        colors: [.teal, .cyan]
-                    ) {
-                        createDLCContract()
-                    }
-                    
-                    if dlcResult != "No DLC yet" {
-                        resultCard(title: "DLC Result", content: dlcResult)
-                    }
-                }
-            }
-            
-            // Verified Content Claims
-            featureCard(title: "Content Claims") {
-                VStack(spacing: 16) {
-                    inputField(title: "Content URL", placeholder: "https://example.com/content", text: $vccContentURL)
-                    inputField(title: "LN Address", placeholder: "ln@address.com", text: $vccLnAddress)
-                    
-                    bigActionButton(
-                        title: "Generate VCC",
-                        icon: "doc.badge.plus.fill",
-                        colors: [.indigo, .blue]
-                    ) {
-                        generateVCC()
-                    }
-                    
+
+                    // USER: show VCC (preview = also what gets copied/shared)
                     if vccResult != "No VCC yet" {
-                        resultCard(title: "VCC Result", content: vccResult)
+                        VStack(alignment: .leading, spacing: 12) {
+
+                            // ✅ Header pill — matches "Payment Completed"
+                            statusPill("Verified Content Claim")
+
+                            // PREVIEW (tap to copy the SAME text)
+                            Text(vccShortJSON)
+                                .font(.system(.callout, design: .monospaced))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .padding(12)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .fill(Color(.secondarySystemBackground))
+                                )
+                                .onTapGesture { copyVCCToClipboard() }
+                                .contextMenu {
+                                    Button("Copy full JSON") {
+    #if canImport(UIKit)
+                                        UIPasteboard.general.string = vccResult
+    #endif
+                                    }
+                                }
+
+                            HStack(spacing: 12) {
+                                Button { copyVCCToClipboard() } label: {
+                                    Label("Copy", systemImage: "doc.on.doc")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.bordered)
+
+                                if #available(iOS 16.0, *) {
+                                    ShareLink(item: vccShortJSON) {
+                                        Label("Share", systemImage: "square.and.arrow.up")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                            }
+
+                            // Full JSON (collapsed by default)
+                            DisclosureGroup(showFullVCC ? "Hide full JSON" : "Show full JSON", isExpanded: $showFullVCC) {
+                                ScrollView {
+                                    Text(vccResult)
+                                        .font(.system(.footnote, design: .monospaced))
+                                        .textSelection(.enabled)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .frame(maxHeight: 140)
+                            }
+
+                            // Payment pill + “Show full Payment”
+                            if paymentResult != "No payment yet" {
+                                paymentSummaryCard
+                                paymentDetailsDisclosure
+                            }
+                        }
                     }
                 }
             }
+        }
+        .alert("Complete Step 2", isPresented: $showStep2Alert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Please connect a wallet in Step 2 before proving.")
         }
     }
-    
-    // MARK: - Helper Views
+
+    // MARK: - Helper Views (unchanged from your file)
     private func bigActionButton(
         title: String,
-        icon: String,
+        icon: String? = nil,
+        pillText: String? = nil,
         colors: [Color],
+        minHeight: CGFloat = 56,
         action: @escaping () -> Void
     ) -> some View {
-        print("🟠 Creating button: \(title)")
-        return Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: icon)
-                    .font(.title2)
+        Button(action: action) {
+            HStack(spacing: 10) {
+                if let icon, !icon.isEmpty {
+                    Image(systemName: icon).font(.headline)
+                }
                 Text(title)
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.95)
+                
+                if let pill = pillText {
+                    levelPill(pill, color: .green)
+                }
             }
             .foregroundColor(.white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 18)
-            .background(
-                LinearGradient(
-                    colors: colors,
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .shadow(color: colors.first?.opacity(0.4) ?? .clear, radius: 12, x: 0, y: 6)
+            .frame(maxWidth: .infinity, minHeight: minHeight)
+            .padding(.horizontal, 12)
+            .background(LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .shadow(color: colors.first?.opacity(0.28) ?? .clear, radius: 10, x: 0, y: 5)
         }
-        // .disabled(isLoading)  // Temporarily commented out
     }
     
     private func inputField(title: String, placeholder: String, text: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.system(size: 16, weight: .medium))
-                .foregroundColor(.primary)
-            
+            Text(title).font(.system(size: 16, weight: .medium)).foregroundColor(.primary)
             TextField(placeholder, text: text)
                 .font(.system(size: 16))
                 .padding(16)
@@ -516,50 +758,43 @@ struct ContentView: View {
         title: String,
         details: String,
         resetAction: @escaping () -> Void,
-        resetLabel: String
+        resetLabel: String,
+        showInfo: Bool = false
     ) -> some View {
-        VStack(spacing: 12) {
-            HStack {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
-                    .font(.title2)
-                
-                Text(title)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(.green)
-                
+        // Fallback so the box never looks empty
+        let safeDetails = details.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        ? "Tap (i) to view your Signature"
+        : details
+        
+        return VStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Text(safeDetails)
+                    .font(.system(size: 14, design: .monospaced))
+                    .foregroundColor(.primary)
                 Spacer()
+                if showInfo {
+                    Button { showIDSheet = true } label: {
+                        Image(systemName: "info.circle")
+                            .font(.body)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.blue)
+                }
             }
-            
-            Text(details)
-                .font(.system(size: 14, design: .monospaced))
-                .foregroundColor(.primary)
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(.background.opacity(0.7))
-                        .stroke(.gray.opacity(0.2), lineWidth: 1)
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-            
-            Button(resetLabel) {
-                resetAction()
-            }
-            .font(.system(size: 16))
-            .foregroundColor(.orange)
-            .padding(.top, 8)
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.background.opacity(0.7))
+                    .stroke(.gray.opacity(0.2), lineWidth: 1)
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
     
     private func featureCard<Content: View>(
-        title: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(title)
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundColor(.primary)
-            
             content()
         }
         .padding(20)
@@ -573,20 +808,131 @@ struct ContentView: View {
     private func resultCard(title: String, content: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundColor(.secondary)
-            
+                .font(.headline)
             Text(content)
-                .font(.system(size: 12))
-                .foregroundColor(.primary)
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(.background.opacity(0.7))
-                        .stroke(.gray.opacity(0.2), lineWidth: 1)
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .font(.body)
+                .foregroundColor(.secondary)
         }
+        .padding()
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemBackground)))
+        .shadow(radius: 1)
+    }
+    
+    private func statusPill(_ title: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundColor(.green)
+            Text(title)
+                .font(.headline).fontWeight(.semibold)
+                .foregroundColor(.primary)
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Force identical bright white card in light mode (avoids material tint)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.white)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.black.opacity(0.10), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.06), radius: 4, x: 0, y: 1)
+    }
+
+    private var paymentSummaryCard: some View {
+        statusPill("Payment Completed")
+    }
+
+    private var paymentDetailsDisclosure: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut) { showFullPayment.toggle() }
+            } label: {
+                HStack {
+                    Text(showFullPayment ? "Hide full Payment" : "Show full Payment")
+                        .font(.callout)
+                        .foregroundColor(.blue)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .rotationEffect(.degrees(showFullPayment ? 90 : 0))
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 2)
+            }
+
+            if showFullPayment {
+                ScrollView {
+                    Text(paymentResult)
+                        .font(.system(.footnote, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 6)
+                }
+                .frame(maxHeight: 140)
+            }
+        }
+    }
+
+    private func startOverChip(
+        title: String = "Start over",
+        action: (() -> Void)? = nil
+    ) -> some View {
+        Button(action: action ?? startOver) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.caption.bold())
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(Color.green.opacity(0.12)))
+                    .overlay(Circle().stroke(Color.green.opacity(0.45), lineWidth: 1))
+                Text(title)
+                    .font(.footnote.weight(.semibold))
+            }
+            .foregroundColor(.green)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(Color.green.opacity(0.08)))
+        }
+    }
+    
+    private func levelPill(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.footnote).fontWeight(.semibold)
+            .padding(.vertical, 5)
+            .padding(.horizontal, 10)
+            .background(color.opacity(0.14))
+            .foregroundColor(color)
+            .clipShape(Capsule())
+    }
+    
+    // Reset Step 2 state
+    private func startOver() {
+        selectedWalletType = nil
+        lightningAddress = ""
+        custodialUsername = ""
+        breezSetup = ""
+        step2Complete = false
+    }
+    
+    // Small green chip with a circular icon
+    private func startOverChip(title: String = "Start over") -> some View {
+        Button(action: startOver) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.caption.bold())
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(Color.green.opacity(0.12)))
+                    .overlay(Circle().stroke(Color.green.opacity(0.45), lineWidth: 1))
+                Text(title)
+                    .font(.footnote.weight(.semibold))
+            }
+            .foregroundColor(.green)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(Color.green.opacity(0.10)))
+        }
+        .buttonStyle(.plain)
     }
     
     private func walletTypeButton(
@@ -596,33 +942,21 @@ struct ContentView: View {
         walletType: WalletType,
         isSelected: Bool
     ) -> some View {
-        Button(action: {
-            selectedWalletType = walletType
-        }) {
+        Button(action: { selectedWalletType = walletType }) {
             HStack(spacing: 16) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 12)
                         .fill(isSelected ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
                         .frame(width: 50, height: 50)
-                    
                     Image(systemName: icon)
                         .font(.title2)
                         .foregroundColor(isSelected ? .blue : .gray)
                 }
-                
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                        .font(.headline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.primary)
-                    
-                    Text(subtitle)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                    Text(title).font(.headline).fontWeight(.semibold).foregroundColor(.primary)
+                    Text(subtitle).font(.subheadline).foregroundColor(.secondary)
                 }
-                
                 Spacer()
-                
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.title2)
                     .foregroundColor(isSelected ? .blue : .gray)
@@ -649,39 +983,107 @@ struct ContentView: View {
     }
     
     private func stepShadowColor(isComplete: Bool, isEnabled: Bool) -> Color {
-        if isComplete {
-            return .green.opacity(0.3)
-        } else if isEnabled {
-            return .blue.opacity(0.3)
-        } else {
-            return .clear
+        if isComplete { return .green.opacity(0.3) }
+        else if isEnabled { return .blue.opacity(0.3) }
+        else { return .clear }
+    }
+    
+    private func getWalletDisplayName(_ walletType: WalletType) -> String {
+        switch walletType {
+        case .lightning: return "Lightning Wallet"
+        case .embedded:  return "Breez Wallet"
+        case .custodial: return "Custodial Wallet"
         }
     }
-        
-    private func getWalletDisplayName(_ walletType: WalletType) -> String {
-            switch walletType {
-            case .lightning: return "Lightning Wallet"
-            case .embedded: return "Breez Wallet"
-            case .custodial: return "Custodial Wallet"
-            }
-        }
-
+    
     private func getInputText(_ walletType: WalletType) -> String {
-            switch walletType {
-            case .lightning: return lightningAddress
-            case .embedded: return breezSetup
-            case .custodial: return custodialUsername
-            }
+        switch walletType {
+        case .lightning: return lightningAddress
+        case .embedded:  return breezSetup
+        case .custodial: return custodialUsername
         }
-
+    }
+    
     private func getConnectedWalletDetails() -> String {
-            guard let walletType = selectedWalletType else { return "No wallet selected" }
-            switch walletType {
-            case .lightning: return lightningAddress
-            case .embedded: return breezSetup
-            case .custodial: return custodialUsername
-            }
+        guard let walletType = selectedWalletType else { return "No wallet selected" }
+        switch walletType {
+        case .lightning: return lightningAddress
+        case .embedded:  return breezSetup
+        case .custodial: return custodialUsername
         }
+    }
+    
+    private func resetConnectStep() {
+        selectedWalletType = nil
+        lightningAddress = ""
+        custodialUsername = ""
+        breezSetup = ""
+        showQRScanner = false
+        showCustodialPicker = false
+        showNonCustodialPicker = false
+        chosenCustodial = nil
+        chosenNonCustodial = nil
+        connectError = nil
+        step2Complete = false
+    }
+    
+    private let ciContext = CIContext()
+    private let qrFilter  = CIFilter.qrCodeGenerator()
+    
+    private func makeQRCode(_ string: String) -> UIImage? {
+        let data = Data(string.utf8)
+        qrFilter.setValue(data, forKey: "inputMessage")
+        guard let output = qrFilter.outputImage?
+            .transformed(by: CGAffineTransform(scaleX: 8, y: 8)),
+              let cgimg = ciContext.createCGImage(output, from: output.extent)
+        else { return nil }
+        return UIImage(cgImage: cgimg)
+    }
+    
+    private func truncatedDID(_ did: String) -> String {
+        guard did.count > 14 else { return did }
+        return "\(did.prefix(8))…\(did.suffix(6))"
+    }
+    
+    private func resolvedWithdrawTo() -> String {
+        let dest = getConnectedWalletDetails().trimmingCharacters(in: .whitespacesAndNewlines)
+        return dest.isEmpty ? withdrawTo : dest
+    }
+    
+    private func mockCashAppPayment(to destination: String, sats: Int = 1) async throws -> String {
+        // Simulate network/payment delay
+        try await Task.sleep(nanoseconds: 600_000_000) // 0.6s
+        let txid = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        return """
+        { "wallet": "Cash App (mock)", "to": "\(destination)", "amount_sats": \(sats), "txid": "\(txid.prefix(18))" }
+        """
+    }
+    
+    private struct VCCPayload: Decodable {
+        let content_hash: String?
+        let created_by: String?
+        let ln_address: String?
+    }
+
+    private func ellipsize(_ s: String, head: Int = 12, tail: Int = 6) -> String {
+        guard s.count > head + tail + 1 else { return s }
+        return "\(s.prefix(head))…\(s.suffix(tail))"
+    }
+
+    /// Compact, readable JSON used for BOTH display and copy/share
+    private var vccShortJSON: String {
+        guard vccResult != "No VCC yet",
+              let data = vccResult.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(VCCPayload.self, from: data)
+        else {
+            // fallback: short version of whatever string we have
+            return #"{"vcc":"\#(ellipsize(vccResult, head: 40, tail: 8))"}"#
+        }
+        let hash   = payload.content_hash.map { ellipsize($0) } ?? "—"
+        let issuer = payload.created_by.map { ellipsize($0) } ?? "—"
+        let to     = payload.ln_address.map { ellipsize($0, head: 10, tail: 8) } ?? "—"
+        return #"{"hash":"\#(hash)","issuer":"\#(issuer)","to":"\#(to)"}"#
+    }
     
     // MARK: - Action Functions
     private func checkExistingSetup() {
@@ -702,35 +1104,22 @@ struct ContentView: View {
     }
     
     private func generateKeyPair() {
-        print("🔴 FUNCTION CALLED - This should always print")
-        print("🔵 Generate button tapped!")
         isLoading = true
-        
         Task {
             do {
-                print("🔵 About to call didManager.generateKeyPair()...")
                 let result = try didManager.generateKeyPair()
-                print("🔵 SUCCESS! Generated DID: \(result)")
-                
+                print("Generated DID: \(result)")
                 await MainActor.run {
-                    print("🔵 Setting step1Complete = true")
                     didManager.objectWillChange.send()
                     step1Complete = true
                     isLoading = false
-                    print("🔵 isLoading set to false")
                 }
             } catch {
-                print("🔴 ERROR in Task: \(error)")  // Catch any Task-related errors
-                print("🔴 Error type: \(type(of: error))")
-                print("🔴 Error description: \(error.localizedDescription)")
-                
-                await MainActor.run {
-                    isLoading = false
-                    print("🔴 isLoading set to false due to error")
-                }
+                await MainActor.run { isLoading = false }
             }
         }
     }
+    
     private func regenerateKeyPair() {
         isLoading = true
         Task {
@@ -743,17 +1132,12 @@ struct ContentView: View {
                     isLoading = false
                 }
             } catch {
-                await MainActor.run {
-                    print("Regenerate Error: \(error)")
-                    isLoading = false
-                }
+                await MainActor.run { isLoading = false }
             }
         }
     }
     
-    private func connectWallet() {
-        step2Complete = true
-    }
+    private func connectWallet() { step2Complete = true }
     
     private func verifyIdentity() {
         isLoading = true
@@ -798,16 +1182,17 @@ struct ContentView: View {
         isLoading = true
         Task {
             do {
-                let (proof, signed) = try await didManager.generateComputationProof(input: Data(inputHash.utf8), output: Data(outputHash.utf8), circuit: circuit)
+                let (proof, signed) = try await didManager.generateComputationProof(
+                    input: Data(inputHash.utf8),
+                    output: Data(outputHash.utf8),
+                    circuit: circuit
+                )
                 await MainActor.run {
                     proofResult = "Proof: \(proof.prefix(50))..., Signed: \(signed.prefix(20))..."
                     isLoading = false
                 }
             } catch {
-                await MainActor.run {
-                    proofResult = "Error: \(error)"
-                    isLoading = false
-                }
+                await MainActor.run { isLoading = false }
             }
         }
     }
@@ -822,10 +1207,7 @@ struct ContentView: View {
                     isLoading = false
                 }
             } catch {
-                await MainActor.run {
-                    dlcResult = "Error: \(error)"
-                    isLoading = false
-                }
+                await MainActor.run { isLoading = false }
             }
         }
     }
@@ -840,17 +1222,105 @@ struct ContentView: View {
                     isLoading = false
                 }
             } catch {
+                await MainActor.run { isLoading = false }
+            }
+        }
+    }
+    
+    // Ensure Step 2 is complete (has a withdrawal destination / wallet selection)
+    private func hasStep2Info() -> Bool {
+        step2Complete
+    }
+    
+    // Single atomic action for Step 3
+    private func proveAndGenerateVCC() {
+        guard step2Complete else { showStep2Alert = true; return }
+
+        // Defaults for VCC inputs
+        if vccContentURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            vccContentURL = "https://example.com/content"
+        }
+        if vccLnAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            vccLnAddress = resolvedWithdrawTo()
+        }
+
+        isLoading = true
+        Task {
+            do {
+                let dest = resolvedWithdrawTo()
+
+                // 🔸 MOCK CASH APP PAYMENT if user chose the custodial path (Cash App)
+                if selectedWalletType == .custodial {
+                    let paymentJSON = try await mockCashAppPayment(to: dest, sats: 1) // 1-sat micro
+                    await MainActor.run { paymentResult = paymentJSON }
+                }
+
+                // 🔹 ZK proof
+                let (proof, signed) = try await didManager.generateComputationProof(
+                    input: Data(inputHash.utf8),
+                    output: Data(outputHash.utf8),
+                    circuit: circuit
+                )
                 await MainActor.run {
-                    vccResult = "Error: \(error)"
+                    proofResult = "Proof: \(proof.prefix(50))..., Signed: \(signed.prefix(20))..."
+                }
+
+                // 🔹 VCC
+                let vcc = try await didManager.generateVCC(
+                    contentURL: vccContentURL,
+                    lnAddress: vccLnAddress
+                )
+
+                await MainActor.run {
+                    vccResult = vcc
+                    step3Complete = true
+                    isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    claimResult = "Error: \(error.localizedDescription)"
                     isLoading = false
                 }
             }
         }
     }
-}
 
-struct ContentView_Previews: PreviewProvider {
-    static var previews: some View {
-        ContentView()
+    // Copy to clipboard
+    private func copyVCCToClipboard() {
+    #if canImport(UIKit)
+        UIPasteboard.general.string = vccShortJSON   // copy exactly what users see
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    #endif
+        withAnimation(.spring(response: 0.25)) { showCopiedToast = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            withAnimation(.easeOut(duration: 0.2)) { showCopiedToast = false }
+        }
+    }
+
+    struct ContentView_Previews: PreviewProvider {
+        static var previews: some View { ContentView() }
+    }
+    
+    // TEMP STUB – replace with real implementation later
+    struct QRPayDestinationScanner: View {
+        enum PayDestination {
+            case onChain(address: String, amountBTC: Double?)
+            case lightningInvoice(String)
+            case lnurl(String)
+            case lightningAddress(String)
+        }
+        var onResult: (PayDestination) -> Void
+        var onCancel: () -> Void = {}
+        
+        var body: some View {
+            VStack(spacing: 16) {
+                Text("Scanner placeholder")
+                Button("Mock: Paste bc1…") {
+                    onResult(.onChain(address: "bc1qexample...", amountBTC: nil))
+                }
+                Button("Cancel") { onCancel() }
+            }
+            .padding()
+        }
     }
 }
