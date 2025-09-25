@@ -21,6 +21,7 @@ struct ContentView: View {
     @State private var isLoading: Bool = false
     @State private var showIDSheet = false
     private let showZKDevControls = false
+    @State private var showCopiedToast = false
     
     // States for advanced features
     @State private var inputHash: String = "input_hash"
@@ -32,11 +33,12 @@ struct ContentView: View {
     @State private var vccResult: String = "No VCC yet"
     @State private var dlcOutcome: String = "auth_verified"
     @State private var dlcResult: String = "No DLC yet"
+    @State private var dlcSignatureResult: String = "No DLC signature yet"
     @State private var showStep2Alert = false
     @State private var paymentResult: String = "No payment yet"
     @State private var showFullVCC = false
-    @State private var showCopiedToast = false
     @State private var showFullPayment = false
+    @State private var unlockTokenResult: String = "No unlock token yet"
     
     // Wallet selection states
     @State private var selectedWalletType: WalletType?
@@ -79,7 +81,7 @@ struct ContentView: View {
                     // Header
                     headerSection
                     
-                    // Step 1: Create Identity
+                    // Step 1: Create
                     stepCard(
                         stepNumber: 1,
                         title: "Create",
@@ -90,7 +92,7 @@ struct ContentView: View {
                         step1Content
                     }
                     
-                    // Step 2: Connect Wallet
+                    // Step 2: Connect
                     stepCard(
                         stepNumber: 2,
                         title: "Connect",
@@ -101,13 +103,13 @@ struct ContentView: View {
                         step2Content
                     }
                     
-                    // Step 3: Authenticate
+                    // Step 3: Prove
                     stepCard(
                         stepNumber: 3,
                         title: "Prove",
                         subtitle: "",
                         isComplete: step3Complete,
-                        isEnabled: step1Complete && step2Complete
+                        isEnabled: step1Complete && hasStep2Info()
                     ) {
                         step3Content
                     }
@@ -611,35 +613,35 @@ struct ContentView: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.top, 4)
-
+            
             featureCard {
                 VStack(spacing: 16) {
-
+                    
                     // DEV-ONLY inputs (hidden for users)
                     if showZKDevControls {
                         inputField(title: "Input Hash",  placeholder: "input_hash",     text: $inputHash)
                         inputField(title: "Output Hash", placeholder: "output_hash",    text: $outputHash)
                         inputField(title: "Circuit",     placeholder: "hash_integrity", text: $circuit)
                     }
-
+                    
                     // SINGLE atomic action
                     bigActionButton(
                         title: "Generate Proof",
                         colors: [.red, .orange]
                     ) { proveAndGenerateVCC() }
-
+                    
                     // DEV-ONLY: show proof details
                     if showZKDevControls, proofResult != "No proof yet" {
                         resultCard(title: "Proof Result", content: proofResult)
                     }
-
+                    
                     // USER: show VCC (preview = also what gets copied/shared)
                     if vccResult != "No VCC yet" {
                         VStack(alignment: .leading, spacing: 12) {
-
+                            
                             // ✅ Header pill — matches "Payment Completed"
                             statusPill("Verified Content Claim")
-
+                            
                             // PREVIEW (tap to copy the SAME text)
                             Text(vccShortJSON)
                                 .font(.system(.callout, design: .monospaced))
@@ -655,19 +657,19 @@ struct ContentView: View {
                                 .onTapGesture { copyVCCToClipboard() }
                                 .contextMenu {
                                     Button("Copy full JSON") {
-    #if canImport(UIKit)
+#if canImport(UIKit)
                                         UIPasteboard.general.string = vccResult
-    #endif
+#endif
                                     }
                                 }
-
+                            
                             HStack(spacing: 12) {
                                 Button { copyVCCToClipboard() } label: {
                                     Label("Copy", systemImage: "doc.on.doc")
                                         .frame(maxWidth: .infinity)
                                 }
                                 .buttonStyle(.bordered)
-
+                                
                                 if #available(iOS 16.0, *) {
                                     ShareLink(item: vccShortJSON) {
                                         Label("Share", systemImage: "square.and.arrow.up")
@@ -676,7 +678,7 @@ struct ContentView: View {
                                     .buttonStyle(.bordered)
                                 }
                             }
-
+                            
                             // Full JSON (collapsed by default)
                             DisclosureGroup(showFullVCC ? "Hide full JSON" : "Show full JSON", isExpanded: $showFullVCC) {
                                 ScrollView {
@@ -687,7 +689,7 @@ struct ContentView: View {
                                 }
                                 .frame(maxHeight: 140)
                             }
-
+                            
                             // Payment pill + “Show full Payment”
                             if paymentResult != "No payment yet" {
                                 paymentSummaryCard
@@ -704,7 +706,7 @@ struct ContentView: View {
             Text("Please connect a wallet in Step 2 before proving.")
         }
     }
-
+    
     // MARK: - Helper Views (unchanged from your file)
     private func bigActionButton(
         title: String,
@@ -840,11 +842,11 @@ struct ContentView: View {
         )
         .shadow(color: .black.opacity(0.06), radius: 4, x: 0, y: 1)
     }
-
+    
     private var paymentSummaryCard: some View {
         statusPill("Payment Completed")
     }
-
+    
     private var paymentDetailsDisclosure: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
@@ -852,16 +854,18 @@ struct ContentView: View {
             } label: {
                 HStack {
                     Text(showFullPayment ? "Hide full Payment" : "Show full Payment")
-                        .font(.callout)
+                        .font(.body)
                         .foregroundColor(.blue)
                     Spacer()
                     Image(systemName: "chevron.right")
                         .rotationEffect(.degrees(showFullPayment ? 90 : 0))
-                        .foregroundColor(.secondary)
+                        .font(.subheadline.weight(.semibold)) // between footnote and callout
+                        .imageScale(.medium)                  // same scale as the top one
+                        .foregroundColor(.primary)
                 }
                 .padding(.vertical, 2)
             }
-
+            
             if showFullPayment {
                 ScrollView {
                     Text(paymentResult)
@@ -874,7 +878,7 @@ struct ContentView: View {
             }
         }
     }
-
+    
     private func startOverChip(
         title: String = "Start over",
         action: (() -> Void)? = nil
@@ -1046,17 +1050,34 @@ struct ContentView: View {
     }
     
     private func resolvedWithdrawTo() -> String {
-        let dest = getConnectedWalletDetails().trimmingCharacters(in: .whitespacesAndNewlines)
-        return dest.isEmpty ? withdrawTo : dest
+        if let custodial = chosenCustodial {
+            return "\(custodial.lowercased())@example.com"
+        } else if !lightningAddress.isEmpty {
+            return lightningAddress
+        } else {
+            return "lnbc1q_default_withdraw"
+        }
     }
     
-    private func mockCashAppPayment(to destination: String, sats: Int = 1) async throws -> String {
-        // Simulate network/payment delay
-        try await Task.sleep(nanoseconds: 600_000_000) // 0.6s
-        let txid = UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        return """
-        { "wallet": "Cash App (mock)", "to": "\(destination)", "amount_sats": \(sats), "txid": "\(txid.prefix(18))" }
-        """
+    private func mockCashAppPayment(to: String, sats: Int) async throws -> String {
+        do {
+            try await Task.sleep(nanoseconds: 500_000_000)
+            let preimage = "mock_preimage_\(UUID().uuidString.prefix(8))"
+            let payment: [String: Any] = [
+                "to": to,
+                "amount_sats": sats,
+                "preimage": preimage,
+                "timestamp": Int(Date().timeIntervalSince1970)
+            ]
+            let jsonData = try JSONSerialization.data(withJSONObject: payment, options: .prettyPrinted)
+            if let result = String(data: jsonData, encoding: .utf8) {
+                return result
+            } else {
+                throw NSError(domain: "EncodingError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to encode payment to string"])
+            }
+        } catch {
+            throw NSError(domain: "MockPaymentError", code: -2, userInfo: [NSLocalizedDescriptionKey: "Error during mock payment simulation: \(error.localizedDescription)"])
+        }
     }
     
     private struct VCCPayload: Decodable {
@@ -1064,12 +1085,12 @@ struct ContentView: View {
         let created_by: String?
         let ln_address: String?
     }
-
+    
     private func ellipsize(_ s: String, head: Int = 12, tail: Int = 6) -> String {
         guard s.count > head + tail + 1 else { return s }
         return "\(s.prefix(head))…\(s.suffix(tail))"
     }
-
+    
     /// Compact, readable JSON used for BOTH display and copy/share
     private var vccShortJSON: String {
         guard vccResult != "No VCC yet",
@@ -1083,6 +1104,17 @@ struct ContentView: View {
         let issuer = payload.created_by.map { ellipsize($0) } ?? "—"
         let to     = payload.ln_address.map { ellipsize($0, head: 10, tail: 8) } ?? "—"
         return #"{"hash":"\#(hash)","issuer":"\#(issuer)","to":"\#(to)"}"#
+    }
+    
+    private func copyVCCToClipboard() {
+#if canImport(UIKit)
+        UIPasteboard.general.string = vccResult
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+#endif
+        withAnimation(.spring(response: 0.25)) { showCopiedToast = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            withAnimation(.easeOut(duration: 0.2)) { showCopiedToast = false }
+        }
     }
     
     // MARK: - Action Functions
@@ -1227,16 +1259,19 @@ struct ContentView: View {
         }
     }
     
-    // Ensure Step 2 is complete (has a withdrawal destination / wallet selection)
     private func hasStep2Info() -> Bool {
-        step2Complete
+        // Accept LN invoice, LN address, or a “bc1…” address in your Step-2 destination
+        let dest = getConnectedWalletDetails().trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !dest.isEmpty else { return false }
+        return dest.hasPrefix("lnbc") || dest.contains("@") || dest.hasPrefix("bc1")
     }
     
-    // Single atomic action for Step 3
+    // Step 3 action — generates the VCC and marks payment as completed so the pill shows
     private func proveAndGenerateVCC() {
-        guard step2Complete else { showStep2Alert = true; return }
+        // Same gating you already use
+        guard hasStep2Info() else { showStep2Alert = true; return }
 
-        // Defaults for VCC inputs
+        // Defaults for inputs
         if vccContentURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             vccContentURL = "https://example.com/content"
         }
@@ -1245,27 +1280,14 @@ struct ContentView: View {
         }
 
         isLoading = true
+
         Task {
             do {
+                // Mock a viewer-side payment so the UI shows "Payment Completed"
                 let dest = resolvedWithdrawTo()
+                let unlockPaymentJSON = try await mockCashAppPayment(to: dest, sats: 100)
 
-                // 🔸 MOCK CASH APP PAYMENT if user chose the custodial path (Cash App)
-                if selectedWalletType == .custodial {
-                    let paymentJSON = try await mockCashAppPayment(to: dest, sats: 1) // 1-sat micro
-                    await MainActor.run { paymentResult = paymentJSON }
-                }
-
-                // 🔹 ZK proof
-                let (proof, signed) = try await didManager.generateComputationProof(
-                    input: Data(inputHash.utf8),
-                    output: Data(outputHash.utf8),
-                    circuit: circuit
-                )
-                await MainActor.run {
-                    proofResult = "Proof: \(proof.prefix(50))..., Signed: \(signed.prefix(20))..."
-                }
-
-                // 🔹 VCC
+                // Generate the claim (same as before)
                 let vcc = try await didManager.generateVCC(
                     contentURL: vccContentURL,
                     lnAddress: vccLnAddress
@@ -1273,30 +1295,113 @@ struct ContentView: View {
 
                 await MainActor.run {
                     vccResult = vcc
+                    paymentResult = unlockPaymentJSON      // <<< this flips the pill on
                     step3Complete = true
                     isLoading = false
                 }
             } catch {
                 await MainActor.run {
-                    claimResult = "Error: \(error.localizedDescription)"
+                    vccResult = "Error: \(error.localizedDescription)"
                     isLoading = false
+                    step3Complete = false
                 }
             }
         }
     }
-
-    // Copy to clipboard
-    private func copyVCCToClipboard() {
-    #if canImport(UIKit)
-        UIPasteboard.general.string = vccShortJSON   // copy exactly what users see
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-    #endif
-        withAnimation(.spring(response: 0.25)) { showCopiedToast = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-            withAnimation(.easeOut(duration: 0.2)) { showCopiedToast = false }
+    
+    // Defaults for VCC inputs
+    private func vccDefaultsAndFlow() {
+        if vccContentURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            vccContentURL = "https://example.com/content"
+        }
+        
+        if vccLnAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            vccLnAddress = resolvedWithdrawTo()
+        }
+        
+        isLoading = true
+        Task {
+            do {
+                print("🟡 Task started - generating initial VCC")
+                let initialVCC = try await didManager.generateVCC(contentURL: vccContentURL, lnAddress: vccLnAddress)
+                let dest = resolvedWithdrawTo()
+                
+                // 🔸 MOCK CASH APP PAYMENT for VCC anchoring (if custodial)
+                var paymentJSON: String = ""
+                if selectedWalletType == .custodial {
+                    paymentJSON = try await mockCashAppPayment(to: dest, sats: 1) // 1-sat micro for anchoring
+                    print("🟡 Custodial payment JSON: \(paymentJSON.prefix(50))...")
+                }
+                
+                // 🔸 MOCK VIEWER-SIDE PAYMENT for content unlock
+                let unlockPaymentJSON = try await mockCashAppPayment(to: dest, sats: 100) // Mock 100-sat payment for unlock
+                print("🟡 Unlock payment JSON: \(unlockPaymentJSON.prefix(50))...")
+                guard let paymentData = unlockPaymentJSON.data(using: .utf8) else {
+                    throw NSError(domain: "PaymentError", code: -3, userInfo: [NSLocalizedDescriptionKey: "Failed to encode payment JSON"])
+                }
+                let paymentDict = try JSONSerialization.jsonObject(with: paymentData, options: []) as? [String: Any]
+                let paymentPreimage = paymentDict?["preimage"] as? String ?? "mock_preimage"
+                print("🟡 Payment preimage: \(paymentPreimage.prefix(8))...")
+                
+                // 🔸 MOCK ORACLE SIGNING for paid=true
+                let dlcOutcome = "paid=true"
+                let signature = try didManager.signDLCOutcome(outcome: dlcOutcome)
+                print("🟡 DLC signature: \(signature.prefix(20))...")
+                
+                // 🔸 MOCK UNLOCK TOKEN DELIVERY
+                let claimIdOrHash = "test_hash_\(UUID().uuidString.prefix(8))"
+                let unlockToken = try await didManager.deliverUnlockToken(claimIdOrHash: claimIdOrHash, paymentPreimage: paymentPreimage)
+                print("🟡 Unlock token generated")
+                
+                // 🔸 MOCK VERIFICATION RECEIPT
+                let receipt = try await didManager.generateVerificationReceipt(claimIdOrHash: claimIdOrHash, paymentPreimage: paymentPreimage)
+                print("🟡 Verification receipt generated")
+                
+                // 🔹 ZK PROOF
+                let (proof, signed) = try await didManager.generateComputationProof(
+                    input: Data(inputHash.utf8),
+                    output: Data(outputHash.utf8),
+                    circuit: circuit
+                )
+                print("🟡 ZK proof generated")
+                
+                // 🔹 VCC with splits
+                let mockSplits: [(did: String, percentage: Double)] = [("did:btcr:mock_user2", 0.10)]
+                let vcc = try await didManager.generateVCC(
+                    contentURL: vccContentURL,
+                    lnAddress: vccLnAddress,
+                    originClaim: nil,
+                    splits: mockSplits
+                )
+                print("🟡 Final VCC with splits generated")
+                
+                // Update UI state on MainActor
+                await MainActor.run {
+                    vccResult = vcc
+                    if selectedWalletType == .custodial {
+                        paymentResult = paymentJSON.isEmpty ? unlockPaymentJSON : paymentJSON
+                    } else {
+                        paymentResult = unlockPaymentJSON
+                    }
+                    dlcSignatureResult = "DLC Signature: \(signature.prefix(20))..."
+                    unlockTokenResult = unlockToken
+                    proofResult = "Proof: \(proof.prefix(50))..., Signed: \(signed.prefix(20))..."
+                    print("Verification Receipt: \(receipt)")
+                    step3Complete = true
+                    isLoading = false
+                    print("🟡 All steps complete - UI updated")
+                }
+            } catch {
+                print("🟡 Error in proveAndGenerateVCC: \(error.localizedDescription)") // Console for debugging
+                await MainActor.run {
+                    claimResult = "Error: \(error.localizedDescription)"
+                    isLoading = false
+                    step3Complete = false
+                }
+            }
         }
     }
-
+    
     struct ContentView_Previews: PreviewProvider {
         static var previews: some View { ContentView() }
     }

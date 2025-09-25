@@ -206,17 +206,18 @@ class DIDWalletManager: ObservableObject {
         
         return contract
     }
-    
+        
     func signDLCOutcome(outcome: String) throws -> String {
-        let outcomeCStr = outcome.cString(using: .utf8)
+        guard let outcomeCStr = outcome.cString(using: .utf8) else {
+            throw NSError(domain: "EncodingError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to encode outcome"])
+        }
         
         let signaturePtr = sign_dlc_outcome(outcomeCStr)
         guard let signaturePtr = signaturePtr else {
-            throw NSError(domain: "DLCError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to sign outcome"])
+            throw NSError(domain: "DLCError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to sign DLC outcome"])
         }
-
-        let sigCStr = UnsafePointer(signaturePtr)  // Convert to immutable
-        let signature = String(cString: sigCStr)
+        
+        let signature = String(cString: signaturePtr)
         free_signature(signaturePtr)
         
         return signature
@@ -226,18 +227,39 @@ class DIDWalletManager: ObservableObject {
         ProofPublisher.publish(kind: kind, signedProof: signedProof)
     }
     
-    func generateVCC(contentURL: String, lnAddress: String, metadata: [String: String]? = nil) async throws -> String {
+    /// Generates a Verified Content Claim (VCC) with optional licensing splits and origin claim for derivative content.
+    func generateVCC(contentURL: String, lnAddress: String, originClaim: String? = nil, splits: [(did: String, percentage: Double)]? = nil, metadata: [String: String]? = nil) async throws -> String {
+        // Compute mock content hash (await since it's async)
         let contentHash = try await computeContentHash(from: contentURL)
         
+        // Build VCC payload
         var payload: [String: String] = [
             "created_by": publicDID ?? "",
             "content_hash": contentHash,
             "ln_address": lnAddress
         ]
+        
+        // Add optional licensing metadata
+        if let originClaim = originClaim {
+            payload["origin_claim"] = originClaim
+        }
+        if let splits = splits, !splits.isEmpty {
+            // Validate total percentage
+            let totalPercentage = splits.reduce(0.0) { $0 + $1.percentage }
+            guard abs(1.0 - totalPercentage) < 0.01 else { // Allow small rounding error
+                throw NSError(domain: "LicensingError", code: -6, userInfo: [NSLocalizedDescriptionKey: "Split percentages must sum to 100%"])
+            }
+            // Convert splits to string-keyed dictionary for JSON compatibility
+            let splitDict = splits.map { ("\($0.did)", "\($0.percentage)") }
+            payload["split"] = splitDict.map { "did:\($0.0),pct:\($0.1)" }.joined(separator: ";")
+        }
+        
+        // Merge additional metadata
         if let metadata = metadata {
             payload.merge(metadata) { (_, new) in new }
         }
         
+        // Convert to JSON string
         let jsonData = try JSONSerialization.data(withJSONObject: payload)
         let digest = CryptoKit.SHA256.hash(data: jsonData)
         guard let privateKey = try retrievePrivateKey() else {
@@ -246,14 +268,108 @@ class DIDWalletManager: ObservableObject {
         let signature = try privateKey.signature(for: digest.data)
         let vcc = "\(String(data: jsonData, encoding: .utf8) ?? "")|\(signature.dataRepresentation.hexString)"
         
-        let anchorPreimage = "mock_anchor_preimage"
+        // Mock anchoring preimage (simulating payment settlement)
+        let anchorPreimage = "mock_anchor_preimage_\(UUID().uuidString.prefix(8))"
         print("Anchored with preimage: \(anchorPreimage)")
         
         return vcc
     }
-    
     private func computeContentHash(from url: String) async throws -> String {
         return "sha256_\(url)"
+    }
+    
+    /// Handles a viewer's request to unlock content for a given claim_id or content_hash, returning a mocked PRP with DLC metadata.
+    func requestContentUnlock(claimIdOrHash: String, amountSats: Int = 100) async throws -> String {
+        guard let publicDID = try getPublicDID() else {
+            throw NSError(domain: "DIDError", code: -1, userInfo: [NSLocalizedDescriptionKey: "No public DID available"])
+        }
+        
+        // Mock payment terms for the unlock
+        let payTerms: [String: Any] = [
+            "amount_sats": amountSats,
+            "description": "Unlock content for \(claimIdOrHash)",
+            "expires": Int(Date().timeIntervalSince1970) + 3600 // 1-hour expiry
+        ]
+        
+        // Create DLC for unlock (90/10 split)
+        let dlcOutcome = "paid=true"
+        let payout: [Double] = [0.9, 0.1] // 90% to user, 10% to creator
+        let dlcContract = try createDLC(outcome: dlcOutcome, payout: payout, oraclePubKey: publicDID)
+        
+        // Build PRP JSON with mocked LN invoice and DLC metadata
+        let prp: [String: Any] = [
+            "claim_id_or_hash": claimIdOrHash,
+            "pay_terms": payTerms,
+            "dlc_metadata": dlcContract,
+            "ln_invoice": "mock_invoice_\(UUID().uuidString)", // Mocked LN invoice
+            "timestamp": Int(Date().timeIntervalSince1970)
+        ]
+        
+        let jsonData = try JSONSerialization.data(withJSONObject: prp, options: .prettyPrinted)
+        let prpString = String(data: jsonData, encoding: .utf8) ?? ""
+        
+        print("Generated PRP for unlock: \(prpString)")
+        return prpString
+    }
+    
+    /// Simulates delivering an unlock token or license proof after a mocked payment, enabling content access.
+    func deliverUnlockToken(claimIdOrHash: String, paymentPreimage: String) async throws -> String {
+        guard let publicDID = try getPublicDID() else {
+            throw NSError(domain: "DIDError", code: -1, userInfo: [NSLocalizedDescriptionKey: "No public DID available"])
+        }
+        
+        // Validate the payment preimage (mocked check)
+        guard !paymentPreimage.isEmpty else {
+            throw NSError(domain: "PaymentError", code: -2, userInfo: [NSLocalizedDescriptionKey: "Invalid payment preimage"])
+        }
+        
+        // Mock generation of an unlock token based on claim ID, DID, and payment preimage
+        let tokenPayload: [String: Any] = [
+            "claim_id_or_hash": claimIdOrHash,
+            "did_pubkey": publicDID,
+            "payment_preimage": paymentPreimage,
+            "token_type": "unlock",
+            "expiration": Int(Date().timeIntervalSince1970) + 86400, // 24-hour expiry
+            "content_url": "https://example.com/content/\(claimIdOrHash)" // Mock content URL
+        ]
+        
+        let jsonData = try JSONSerialization.data(withJSONObject: tokenPayload, options: .prettyPrinted)
+        let unlockToken = String(data: jsonData, encoding: .utf8) ?? ""
+        
+        // Simulate content access (e.g., print mock URL or decryption)
+        print("Delivered unlock token for \(claimIdOrHash). Access content at: \(tokenPayload["content_url"] as? String ?? "N/A")")
+        
+        return unlockToken
+    }
+    
+    /// Simulates generating a verification receipt for content access, including claim details and audit references.
+    func generateVerificationReceipt(claimIdOrHash: String, paymentPreimage: String) async throws -> String {
+        guard let publicDID = try getPublicDID() else {
+            throw NSError(domain: "DIDError", code: -1, userInfo: [NSLocalizedDescriptionKey: "No public DID available"])
+        }
+        
+        // Mock data for the receipt
+        let receiptPayload: [String: Any] = [
+            "claim_id_or_hash": claimIdOrHash,
+            "did_pubkey": publicDID,
+            "anchor_references": [
+                "preimage": paymentPreimage,
+                "txid": "mock_txid_\(UUID().uuidString.prefix(8))" // Mock transaction ID
+            ],
+            "proof_hashes": [
+                "content_hash": "sha256_\(claimIdOrHash)", // Mock content hash
+                "proof_hash": "mock_proof_hash_\(UUID().uuidString.prefix(8))" // Mock proof hash
+            ],
+            "timestamp": Int(Date().timeIntervalSince1970), // Current timestamp
+            "status": "verified"
+        ]
+        
+        let jsonData = try JSONSerialization.data(withJSONObject: receiptPayload, options: .prettyPrinted)
+        let receipt = String(data: jsonData, encoding: .utf8) ?? ""
+        
+        print("Generated verification receipt for \(claimIdOrHash): \(receipt)")
+        
+        return receipt
     }
 }
 
