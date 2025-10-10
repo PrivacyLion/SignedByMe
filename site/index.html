@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SignedByMe — Beta</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif;margin:24px;color:#111}
+    h1{font-size:28px;margin:0 0 16px}
+    .row{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
+    .btn{appearance:none;border:1px solid #d1d5db;background:#f8fafc;border-radius:8px;padding:8px 12px;cursor:pointer}
+    .btn:hover{background:#eef2f7}
+    fieldset{max-width:720px;border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin:10px 0}
+    legend{font-weight:600}
+    .alert{background:#f8fafc;border:1px solid #eef2f7;border-radius:6px;padding:8px;margin:6px 0}
+    pre.alert{overflow:auto;white-space:pre-wrap}
+    small.muted{color:#6b7280}
+  </style>
+</head>
+<body>
+  <h1>SignedByMe — Beta</h1>
+
+  <!-- Top toolbar (unchanged) -->
+  <div class="row" id="top-toolbar">
+    <button class="btn" id="btn-verify-payment">Verify payment</button>
+    <button class="btn" id="btn-ea-pay-user">Start EA Login (pay user)</button>
+  </div>
+
+  <!-- Demo card -->
+  <fieldset id="sbm-demo">
+    <legend>SignedByMe Demo</legend>
+    <div class="row">
+      <button class="btn" id="btn-demo-qr">Start EA Login (show QR)</button>
+      <button class="btn" id="btn-demo-real">Start with REAL invoice</button>
+      <button class="btn" id="btn-demo-status">Check Status</button>
+      <button class="btn" id="btn-demo-preimg">Verify with preimage</button>
+    </div>
+    <div id="qr" class="alert"></div>
+    <div id="status-line-1" class="alert"></div>
+    <div id="status-line-2" class="alert"></div>
+    <pre id="login-status-json" class="alert"></pre>
+  </fieldset>
+
+  <div class="row">
+    <button class="btn" id="btn-ping">Ping /health</button>
+    <button class="btn" id="btn-openapi">Get /openapi.json</button>
+    <button class="btn" id="btn-invoice">Get /v1/invoice</button>
+  </div>
+
+  <small class="muted">This page calls the production API at <strong>api.beta.privacy-lion.com</strong>.</small>
+
+  <!-- Scripts -->
+  <script src="/qrcode.min.js"></script>
+  <script src="/qr-addon.js?v=1760020852"></script>
+</body>
+</html>
