@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>SignedByMe — Beta</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 800px; }
+      h1 { margin-bottom: .5rem; }
+      button { padding: .6rem 1rem; font-size: 1rem; border-radius: .5rem; border: 1px solid #ccc; cursor: pointer; }
+      .row { display: flex; gap: .75rem; margin: 1rem 0; flex-wrap: wrap; }
+      pre { background: #f6f8fa; padding: 1rem; border-radius: .5rem; overflow: auto; }
+      .ok { color: #0a0; } .bad { color: #a00; }
+    </style>
+  </head>
+  <body>
+    <h1>SignedByMe — Beta</h1>
+    <p>This page calls the production API at <code>api.beta.privacy-lion.com</code>.</p>
+
+    <div class="row">
+      <button id="btnHealth">Ping /health</button>
+      <button id="btnOpenAPI">Get /openapi.json</button>
+      <button id="btnInvoice">Get /v1/invoice</button>
+   </div>
+
+    <div id="status"></div>
+    <pre id="out"></pre>
+
+    <script>
+      const API = 'https://api.beta.privacy-lion.com';
+      function showStatus(ok, msg) {
+        const el = document.getElementById('status');
+        el.className = ok ? 'ok' : 'bad';
+        el.textContent = msg;
+      }
+      async function go(path){
+        showStatus(true, 'Loading ' + path + ' ...');
+        const out = document.getElementById('out');
+        out.textContent = '';
+        try {
+          const res = await fetch(API + path, { credentials: 'include' });
+          const text = await res.text();
+          showStatus(res.ok, res.status + ' ' + res.statusText + ' — ' + path);
+          out.textContent = text;
+        } catch (e){
+          showStatus(false, 'Request failed: ' + e);
+        }
+      }
+      document.getElementById('btnHealth').onclick = () => go('/health');
+      document.getElementById('btnOpenAPI').onclick = () => go('/openapi.json');
+      document.getElementById('btnInvoice').onclick = () => go('/v1/invoice');
+    </script>
+  </body>
+</html>
