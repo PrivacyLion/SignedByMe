@@ -1,70 +1,112 @@
-(function(){
-  const API = "https://api.beta.privacy-lion.com";
-  function $(s,r=document){return r.querySelector(s)}
-  function ready(f){document.readyState!=="loading"?f():document.addEventListener("DOMContentLoaded",f)}
-  function renderQR(target, text){
-    target.innerHTML="";
-    try{
-      if (window.QRCode && typeof window.QRCode.toCanvas==="function"){
-        window.QRCode.toCanvas(text,{width:256},(e,cv)=>{ if(e){target.textContent=text;} else target.appendChild(cv);}); return;
-      }
-      if (typeof window.QRCode==="function"){ const d=document.createElement("div"); target.appendChild(d); new window.QRCode(d,{text,width:256,height:256}); return; }
-    }catch(_){}
-    const pre=document.createElement("pre"); pre.textContent=text; target.appendChild(pre);
+/* Demo glue wired to this page's IDs:
+   Buttons:  btn-demo-qr, btn-demo-real, btn-demo-status, btn-demo-preimg
+   Outputs:  #qr (QR), #status-line-1/2 (text), #login-status-json (pre)
+*/
+(function () {
+  const api = "https://api.beta.privacy-lion.com";
+  const $ = (sel) => document.querySelector(sel);
+  const byId = (id) => document.getElementById(id);
+
+  let CURRENT = { login_id: null, nonce: null, payment_hash: null };
+
+  function setOutput(obj) {
+    const el = byId("login-status-json");
+    if (!el) return;
+    try { el.textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2); }
+    catch { el.textContent = String(obj); }
   }
-  ready(function(){
-    const qr=$("#qr"), l1=$("#status-line-1"), l2=$("#status-line-2"), pre=$("#login-status-json");
-    const bQR=$("#btn-demo-qr"), bREAL=$("#btn-demo-real"), bSTAT=$("#btn-demo-status"), bPRE=$("#btn-demo-preimg");
-    const bPING=$("#btn-ping"), bOA=$("#btn-openapi"), bINV=$("#btn-invoice");
-    let cid=null, phash=null, poll=null;
+  function setStatusLines() {
+    const ch = CURRENT.login_id || CURRENT.nonce || "";
+    const ph = CURRENT.payment_hash || "";
+    const a = byId("status-line-1"), b = byId("status-line-2");
+    if (a) a.textContent = ch ? `Challenge: ${ch}` : "";
+    if (b) b.textContent = ph ? `Payment hash: ${ph}` : "";
+  }
+  function drawQR(text) {
+    const box = byId("qr");
+    if (!box) return;
+    box.innerHTML = "";
+    if (!text) return;
+    new QRCode(box, { text, width: 256, height: 256 });
+  }
 
-    if(bQR) bQR.onclick = async ()=>{
-      try{
-        const r=await fetch(`${API}/v1/login/start`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({did_pubkey:"npub1abc",amount_sats:21})});
-        const j=await r.json(); cid=j.login_challenge_id||cid; phash=j.payment_hash||phash;
-        l1.textContent=`Challenge: ${cid||""}`; l2.textContent=`Payment hash: ${phash||""}`;
-        renderQR(qr, j.invoice||""); pre.textContent=JSON.stringify(j,null,2); startPoll();
-      }catch(e){ alert("Start failed"); console.error(e); }
-    };
+  async function post(path, body) {
+    const r = await fetch(`${api}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    const j = await r.json();
+    if (!r.ok) throw j;
+    return j;
+  }
+  async function get(path) {
+    const r = await fetch(`${api}${path}`);
+    const j = await r.json();
+    if (!r.ok) throw j;
+    return j;
+  }
 
-    if(bREAL) bREAL.onclick = async ()=>{
-      const inv=prompt("Paste BOLT-11 invoice:"); if(!inv) return;
-      try{
-        const r=await fetch(`${API}/v1/login/start`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({did_pubkey:"npub1abc",amount_sats:21,invoice:inv})});
-        const j=await r.json(); cid=j.login_challenge_id||cid; phash=j.payment_hash||phash;
-        l1.textContent=`Challenge: ${cid||""}`; l2.textContent=`Payment hash: ${phash||""}`;
-        renderQR(qr, j.invoice||inv); pre.textContent=JSON.stringify(j,null,2); startPoll();
-      }catch(e){ alert("Start (REAL) failed"); console.error(e); }
-    };
+  async function startLoginShowQR() {
+    try {
+      const resp = await post("/v1/login/start", { domain: window.location.hostname });
+      setOutput(resp);
 
-    if(bSTAT) bSTAT.onclick = async ()=>{
-      if(!cid){ alert("No challenge yet"); return; }
-      try{ const r=await fetch(`${API}/v1/login/${cid}`); pre.textContent=JSON.stringify(await r.json(),null,2); }catch(e){ alert("Status failed"); console.error(e); }
-    };
+      CURRENT.login_id     = resp.login_id     ?? CURRENT.login_id;
+      CURRENT.nonce        = resp.nonce        ?? CURRENT.nonce;
+      CURRENT.payment_hash = resp.payment_hash ?? CURRENT.payment_hash;
 
-    if(bPRE) bPRE.onclick = async ()=>{
-      if(!phash){ alert("No payment hash yet"); return; }
-      const preimg=prompt("Enter 64-hex preimage:"); if(!preimg) return;
-      try{
-        const r=await fetch(`${API}/v1/login/verify`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({payment_hash:phash,preimage:preimg})});
-        pre.textContent=JSON.stringify(await r.json(),null,2);
-      }catch(e){ alert("Verify failed"); console.error(e); }
-    };
+      setStatusLines();
+      const qrText = resp.invoice || CURRENT.login_id || CURRENT.nonce || "";
+      drawQR(qrText);
+    } catch (e) { console.error(e); setOutput(e); }
+  }
 
-    if(bPING) bPING.onclick = async ()=>{ try{ const r=await fetch(`${API}/healthz`); l1.textContent=`healthz: ${r.status}`; l2.textContent=await r.text(); }catch(e){ l2.textContent=String(e);} };
-    if(bOA)   bOA.onclick   = async ()=>{ try{ const r=await fetch(`${API}/openapi.json`); pre.textContent=JSON.stringify(await r.json(),null,2);}catch(e){pre.textContent=String(e);} };
-    if(bINV)  bINV.onclick  = async ()=>{ try{ const r=await fetch(`${API}/v1/invoice`); pre.textContent=await r.text(); }catch(e){ pre.textContent=String(e);} };
+  async function pollStatus() {
+    try {
+      if (!CURRENT.login_id) throw "No login_id yet. Click Start EA Login first.";
+      const s = await get(`/v1/login/status/${encodeURIComponent(CURRENT.login_id)}`);
+      setOutput(s);
+    } catch (e) { console.error(e); setOutput(e); }
+  }
 
-    function startPoll(){
-      if(poll) clearInterval(poll);
-      if(!cid) return;
-      poll=setInterval(async ()=>{
-        try{
-          const r=await fetch(`${API}/v1/login/${cid}`);
-          const j=await r.json(); pre.textContent=JSON.stringify(j,null,2);
-          if((j.status||"").toLowerCase()==="paid") clearInterval(poll);
-        }catch(_){}
-      },2000);
-    }
+  async function verifyWithPreimage() {
+    try {
+      if (!CURRENT.login_id) throw "No login_id yet. Click Start EA Login first.";
+      const pre = [...crypto.getRandomValues(new Uint8Array(32))]
+        .map(b => b.toString(16).padStart(2,"0")).join("");
+      const url = `/v1/login/settle?login_id=${encodeURIComponent(CURRENT.login_id)}&preimage=${pre}&txid=`;
+      const s = await post(url, {}); // POST with query (API expects this)
+      setOutput(s);
+    } catch (e) { console.error(e); setOutput(e); }
+  }
+
+  async function completeLogin() {
+    try {
+      if (!CURRENT.login_id || !CURRENT.nonce) throw "Need login_id and nonce. Start EA Login first.";
+      const body = {
+        login_id: CURRENT.login_id,
+        did_sig: { did: "did:pl:testuser", pubkey_hex: "deadbeef", message: CURRENT.nonce, signature_hex: "00" },
+        zk_proof: null, dlc: null
+      };
+      const r = await post("/v1/login/complete", body);
+      setOutput(r);
+    } catch (e) { console.error(e); setOutput(e); }
+  }
+
+  // Bind to your current button IDs
+  function bind(id, fn) { const el = byId(id); if (el) el.addEventListener("click", fn); }
+  document.addEventListener("DOMContentLoaded", () => {
+    bind("btn-demo-qr",     startLoginShowQR);
+    bind("btn-demo-status", pollStatus);
+    bind("btn-demo-preimg", verifyWithPreimage);
+    bind("btn-demo-real",   completeLogin);
+    console.log("qr-addon.js wired to btn-demo-* IDs");
   });
+
+  // also expose globally in case inline handlers are added later
+  window.startLoginShowQR = startLoginShowQR;
+  window.pollStatus = pollStatus;
+  window.verifyWithPreimage = verifyWithPreimage;
+  window.completeLogin = completeLogin;
 })();
