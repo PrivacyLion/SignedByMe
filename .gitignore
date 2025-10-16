@@ -1,20 +1,8 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-*.so
-*.egg-info/
-.dist/
-.build/
+# secrets / runtime
+keys/
+var/
+**/*.db
 .venv/
-venv/
-.env
-.env.*
-.pytest_cache/
-.mypy_cache/
-
-# OS/editor noise
-.DS_Store
-.idea/
-.vscode/
+__pycache__/
+*.pyc
+_vm_stage/var/
