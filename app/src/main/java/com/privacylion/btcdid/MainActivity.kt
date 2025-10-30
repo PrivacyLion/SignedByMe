@@ -306,19 +306,3 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    // True if we are using secure hardware (TEE / StrongBox)
-    // and not just the software fallback.
-    private fun isHardwareBacked(): Boolean {
-        return try {
-            // Ask DidWalletManager for keystore info string
-            // and infer from that instead of reimplementing keystore logic here.
-            val info = DidWalletManager(applicationContext).keystoreInfo()
-
-            // If keystoreInfo() said "HW-backed: YES" or "StrongBox: YES"
-            // we call that hardware-backed.
-            info.contains("HW-backed: YES") || info.contains("StrongBox: YES")
-        } catch (_: Throwable) {
-            false
-        }
-    }
-}
