@@ -277,6 +277,18 @@ class MainActivity : ComponentActivity() {
                                         lastSigHex,
                                         style = MaterialTheme.typography.bodySmall
                                     )
+
+                                    Spacer(Modifier.height(8.dp))
+                                    Button(onClick = {
+                                        val exportJson = JSONObject()
+                                            .put("did", did)
+                                            .put("claim", JSONObject(lastClaimJson))
+                                            .put("signature_der_hex", lastSigHex)
+                                            .toString()
+                                        proveStatus = "Copied (stub): $exportJson"
+                                    }) {
+                                        Text("Copy export JSON (stub)")
+                                    }
                                 }
                             }
                         }
@@ -306,3 +318,4 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+}
