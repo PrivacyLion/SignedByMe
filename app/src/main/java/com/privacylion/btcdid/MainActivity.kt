@@ -9,8 +9,41 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.privacylion.btcdid.ui.theme.BTC_DIDTheme
+import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
+
+    // Represents the ownership claim we’ll sign
+    data class OwnershipClaim(
+        val did: String,
+        val walletType: String,
+        val withdrawTo: String,
+        val timestampMs: Long
+    )
+
+    // Build the JSON string we will sign
+    private fun buildOwnershipClaimJson(did: String): String {
+        // TODO: replace these stub values once we have a real wallet
+        val walletTypeStub = "custodial"
+        val withdrawToStub = "lnbc1mockpreimage"
+
+        val claim = OwnershipClaim(
+            did = did,
+            walletType = walletTypeStub,
+            withdrawTo = withdrawToStub,
+            timestampMs = System.currentTimeMillis()
+        )
+
+        // Create stable JSON
+        val json = JSONObject()
+            .put("did", claim.did)
+            .put("wallet_type", claim.walletType)
+            .put("withdraw_to", claim.withdrawTo)
+            .put("timestamp_ms", claim.timestampMs)
+
+        return json.toString()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val mgr = DidWalletManager(applicationContext)
@@ -31,6 +64,10 @@ class MainActivity : ComponentActivity() {
 
                     // After "Prove Ownership", we either show signature or error here:
                     var proveStatus by remember { mutableStateOf("") }
+                    // will hold claim JSON and signature after prove
+                    var lastClaimJson by remember { mutableStateOf("") }
+                    var lastSigHex by remember { mutableStateOf("") }
+
 
                     // Diagnostics for Rust hashing demo:
                     var input by remember { mutableStateOf("test") }
@@ -157,38 +194,89 @@ class MainActivity : ComponentActivity() {
                                 Button(
                                     enabled = stepCreateDone && stepConnectDone,
                                     onClick = {
-                                        // We'll construct a mock claim and try to sign it.
-                                        // Any failure: catch and store error in proveStatus instead of crashing the app.
-                                        val claimJson =
-                                            """{"wallet_type":"mock","paid":true}"""
+                                        val claimJson = buildOwnershipClaimJson(did)
 
                                         val status = try {
+                                            if (did.isEmpty()) {
+                                                proveStatus = "Error: no DID available"
+                                                return@Button
+                                            }
+
                                             val wrapped = mgr.loadWrapped()
                                                 ?: return@Button run {
                                                     proveStatus = "Error: no wrapped key saved"
                                                 }
 
-                                            // Could throw if unwrap fails
                                             val priv = mgr.unwrapPrivateKey(wrapped)
 
-                                            // Could throw if JNI mismatches
                                             val sigHex = NativeBridge.signMessageDerHex(
                                                 priv,
                                                 claimJson
                                             )
 
-                                            // wipe plaintext key asap
                                             java.util.Arrays.fill(priv, 0)
 
-                                            "Signature (DER hex): $sigHex"
+                                            // save for UI
+                                            lastClaimJson = claimJson
+                                            lastSigHex = sigHex
+
+                                            "Success: claim signed"
                                         } catch (t: Throwable) {
                                             "Error during prove: ${t.message}"
                                         }
 
                                         proveStatus = status
                                     }
+
+
                                 ) {
                                     Text("Prove Ownership (stub)")
+                                }
+
+                                Spacer(Modifier.height(12.dp))
+
+                                Button(
+                                    enabled = lastClaimJson.isNotEmpty() && lastSigHex.isNotEmpty(),
+                                    onClick = {
+                                        if (lastClaimJson.isNotEmpty() && lastSigHex.isNotEmpty() && did.isNotEmpty()) {
+                                            // Build export bundle the verifier would receive
+                                            val exportJson = JSONObject()
+                                                .put("did", did)
+                                                .put("claim", JSONObject(lastClaimJson))
+                                                .put("signature_der_hex", lastSigHex)
+                                                .toString()
+
+                                            proveStatus = "Ready to export:\n$exportJson"
+                                        } else {
+                                            proveStatus = "Nothing to export yet"
+                                        }
+                                    }
+                                ) {
+                                    Text("Share proof (stub)")
+                                }
+
+                                Spacer(Modifier.height(12.dp))
+
+                                if (lastClaimJson.isNotEmpty() && lastSigHex.isNotEmpty()) {
+                                    Text(
+                                        "Claim JSON:",
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                    Text(
+                                        lastClaimJson,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+
+                                    Spacer(Modifier.height(8.dp))
+
+                                    Text(
+                                        "Signature (DER hex):",
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                    Text(
+                                        lastSigHex,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
                                 }
                             }
                         }
@@ -216,6 +304,21 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+    // True if we are using secure hardware (TEE / StrongBox)
+    // and not just the software fallback.
+    private fun isHardwareBacked(): Boolean {
+        return try {
+            // Ask DidWalletManager for keystore info string
+            // and infer from that instead of reimplementing keystore logic here.
+            val info = DidWalletManager(applicationContext).keystoreInfo()
+
+            // If keystoreInfo() said "HW-backed: YES" or "StrongBox: YES"
+            // we call that hardware-backed.
+            info.contains("HW-backed: YES") || info.contains("StrongBox: YES")
+        } catch (_: Throwable) {
+            false
         }
     }
 }

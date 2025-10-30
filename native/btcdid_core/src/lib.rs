@@ -163,3 +163,39 @@ fn sign_message_der_hex(priv_bytes: &[u8], msg: &str) -> Result<String> {
     // return DER bytes as lowercase hex
     Ok(hex::encode(der_bytes))
 }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_generateStwoProof(
+    mut env: jni::JNIEnv,
+    _clazz: jni::objects::JClass,
+    circuit: jni::objects::JString,
+    input_hash: jni::objects::JString,
+    output_hash: jni::objects::JString,
+) -> jni::sys::jstring {
+    let _c = env.get_string(&circuit).map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let _i = env.get_string(&input_hash).map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let _o = env.get_string(&output_hash).map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    env.new_string("{\"status\":\"ok\",\"proof\":\"stub\"}").unwrap().into_raw()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_createDlcContract(
+    mut env: jni::JNIEnv,
+    _clazz: jni::objects::JClass,
+    outcome: jni::objects::JString,
+    payouts_json: jni::objects::JString,
+    oracle_json: jni::objects::JString,
+) -> jni::sys::jstring {
+    let _ = (outcome, payouts_json, oracle_json);
+    env.new_string("{\"status\":\"ok\",\"contract_id\":\"stub-contract\"}").unwrap().into_raw()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_signDlcOutcome(
+    mut env: jni::JNIEnv,
+    _clazz: jni::objects::JClass,
+    outcome: jni::objects::JString,
+) -> jni::sys::jstring {
+    let _ = outcome;
+    env.new_string("{\"status\":\"ok\",\"sig\":\"stub-sig\"}").unwrap().into_raw()
+}
