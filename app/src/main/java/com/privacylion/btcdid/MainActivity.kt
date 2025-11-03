@@ -18,7 +18,11 @@ class MainActivity : ComponentActivity() {
         val did: String,
         val walletType: String,
         val withdrawTo: String,
-        val timestampMs: Long
+        val timestampMs: Long,
+        val paid: Boolean? = null,
+        val preimage: String? = null,
+        val nonce: String? = null,
+        val schema: String? = null
     )
 
     // Build the JSON string we will sign
@@ -26,6 +30,9 @@ class MainActivity : ComponentActivity() {
         // TODO: replace these stub values once we have a real wallet
         val walletTypeStub = "custodial"
         val withdrawToStub = "lnbc1mockpreimage"
+
+        val paidStub = true
+        val preimageStub = "mock-preimage-32b"
 
         val claim = OwnershipClaim(
             did = did,
@@ -37,8 +44,16 @@ class MainActivity : ComponentActivity() {
         // Create stable JSON
         val json = JSONObject()
             .put("did", claim.did)
+            .put("schema", "pl.claim.v1")
+            .put("type", "ownership_claim")
+            .put("sig_alg", "ES256K")
+            .put("aud", "beta.privacy-lion.com")
             .put("wallet_type", claim.walletType)
             .put("withdraw_to", claim.withdrawTo)
+            .put("wallet_hint", "android-mock")
+            .put("paid", paidStub)
+            .put("preimage", preimageStub)
+            .put("nonce", "android-${System.currentTimeMillis()}")
             .put("timestamp_ms", claim.timestampMs)
 
         return json.toString()
@@ -209,10 +224,7 @@ class MainActivity : ComponentActivity() {
 
                                             val priv = mgr.unwrapPrivateKey(wrapped)
 
-                                            val sigHex = NativeBridge.signMessageDerHex(
-                                                priv,
-                                                claimJson
-                                            )
+                                            val sigHex = mgr.signClaimWithDid(priv, claimJson)
 
                                             java.util.Arrays.fill(priv, 0)
 
@@ -241,6 +253,10 @@ class MainActivity : ComponentActivity() {
                                         if (lastClaimJson.isNotEmpty() && lastSigHex.isNotEmpty() && did.isNotEmpty()) {
                                             // Build export bundle the verifier would receive
                                             val exportJson = JSONObject()
+                                                .put("schema", "pl.claim.v1")
+                                                .put("sig_alg", "ES256K")
+                                                .put("pubkey_hex", did.removePrefix("did:btcr:"))
+                                                .put("type", "ownership_claim_bundle")
                                                 .put("did", did)
                                                 .put("claim", JSONObject(lastClaimJson))
                                                 .put("signature_der_hex", lastSigHex)
@@ -281,6 +297,10 @@ class MainActivity : ComponentActivity() {
                                     Spacer(Modifier.height(8.dp))
                                     Button(onClick = {
                                         val exportJson = JSONObject()
+                                            .put("schema", "pl.claim.v1")
+                                            .put("sig_alg", "ES256K")
+                                            .put("pubkey_hex", did.removePrefix("did:btcr:"))
+                                            .put("type", "ownership_claim_bundle")
                                             .put("did", did)
                                             .put("claim", JSONObject(lastClaimJson))
                                             .put("signature_der_hex", lastSigHex)

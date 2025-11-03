@@ -95,6 +95,14 @@ class DidWalletManager(private val context: Context) {
         context.openFileOutput(wrappedFile, Context.MODE_PRIVATE).use { it.write(bytes) }
     }
 
+    fun signClaimWithDid(privateKeyBytes: ByteArray, claimJson: String): String {
+        // delegate to Rust/JNI just like before
+        val sigHex = NativeBridge.signMessageDerHex(privateKeyBytes, claimJson)
+        // wipe key material
+        java.util.Arrays.fill(privateKeyBytes, 0)
+        return sigHex
+    }
+
     fun loadWrapped(): ByteArray? {
         return try { context.openFileInput(wrappedFile).use { it.readBytes() } } catch (_: Throwable) { null }
     }
@@ -131,35 +139,36 @@ class DidWalletManager(private val context: Context) {
     /** Debug info: is the Keystore key hardware-backed / StrongBox? */
     fun keystoreInfo(): String {
         return try {
-            // Look up our wrapping key from the AndroidKeyStore
-            val ks = KeyStore.getInstance(androidKeyStore).apply { load(null) }
-            val sk = ks.getKey(ksAlias, null) as? SecretKey
-                ?: return "Keystore key: not found"
+            // if we actually have a wrapped DID key saved, say so first
+            if (loadWrapped() != null) {
+                "Keystore key: OK (wrapped DID present)"
+            } else {
+                // fall back to reporting on the wrapping key itself
+                val ks = KeyStore.getInstance(androidKeyStore).apply { load(null) }
+                val sk = ks.getKey(ksAlias, null) as? SecretKey
+                    ?: return "Keystore key: not found"
 
-            // Ask the system for details about that key
-            val factory = SecretKeyFactory.getInstance(sk.algorithm, androidKeyStore)
-            val keyInfo = factory.getKeySpec(sk, KeyInfo::class.java) as KeyInfo
+                val factory = SecretKeyFactory.getInstance(sk.algorithm, androidKeyStore)
+                val keyInfo = factory.getKeySpec(sk, KeyInfo::class.java) as KeyInfo
 
-            // Is it backed by secure hardware (TEE / StrongBox)?
-            val hw = if (keyInfo.isInsideSecureHardware) "YES" else "NO"
+                val hw = if (keyInfo.isInsideSecureHardware) "YES" else "NO"
 
-            // StrongBox info (only on some devices / API levels)
-            val sb = try {
-                if (Build.VERSION.SDK_INT >= 28) {
-                    val m = KeyInfo::class.java.getMethod("isStrongBoxBacked")
-                    val result = m.invoke(keyInfo) as? Boolean ?: false
-                    if (result) "YES" else "NO"
-                } else {
+                val sb = try {
+                    if (Build.VERSION.SDK_INT >= 28) {
+                        val m = KeyInfo::class.java.getMethod("isStrongBoxBacked")
+                        val result = m.invoke(keyInfo) as? Boolean ?: false
+                        if (result) "YES" else "NO"
+                    } else {
+                        "NO"
+                    }
+                } catch (_: Throwable) {
                     "NO"
                 }
-            } catch (_: Throwable) {
-                "NO"
-            }
 
-            "Keystore key present • HW-backed: $hw • StrongBox: $sb"
-        } catch (_: Throwable) {
-            // If we threw anywhere above, we fell back to the software AES key file
-            "Keystore key: using software fallback"
+                "Keystore key: found (HW=$hw, StrongBox=$sb)"
+            }
+        } catch (t: Throwable) {
+            "Keystore key: error ${t.message}"
         }
     }
 }
