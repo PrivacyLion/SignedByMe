@@ -15,7 +15,8 @@ object NativeBridge {
     @JvmStatic external fun signMessageDerHex(priv: ByteArray, message: String): String // DER-hex signature
 
     // --- STWO / DLC placeholders (Rust side will provide these later) ---
-    external fun generateStwoProof(circuit: String, inputHash: String, outputHash: String): String
+    @JvmStatic external fun generateStwoProof(circuit: String, inputHashHex: String, outputHashHex: String): String
     external fun createDlcContract(outcome: String, payoutsJson: String, oracleJson: String): String
     external fun signDlcOutcome(outcome: String): String
+
 }

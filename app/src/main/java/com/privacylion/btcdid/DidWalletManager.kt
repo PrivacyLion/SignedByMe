@@ -170,5 +170,62 @@ class DidWalletManager(private val context: Context) {
         } catch (t: Throwable) {
             "Keystore key: error ${t.message}"
         }
+
     }
+    fun generateStwoProof(circuit: String, inputHashHex: String, outputHashHex: String): String {
+        return try {
+            NativeBridge.generateStwoProof(circuit, inputHashHex, outputHashHex)
+        } catch (t: Throwable) {
+            """{"status":"stub","fn":"generate_stwo_proof","error":"${t.message ?: "not implemented"}"}"""
+        }
+    }
+
+    fun createDlcContract(outcome: String, payoutsJson: String, oracleJson: String): String {
+        return try {
+            NativeBridge.createDlcContract(outcome, payoutsJson, oracleJson)
+        } catch (t: Throwable) {
+            """{"status":"stub","fn":"create_dlc_contract","error":"${t.message ?: "not implemented"}"}"""
+        }
+    }
+
+    fun signDlcOutcome(outcome: String): String {
+        return try {
+            NativeBridge.signDlcOutcome(outcome)
+        } catch (t: Throwable) {
+            """{"status":"stub","fn":"sign_dlc_outcome","error":"${t.message ?: "not implemented"}"}"""
+        }
+    }
+
+    fun signOwnershipClaim(claimJson: String): String {
+        // Load wrapped DID key from storage
+        val wrapped = loadWrapped() ?: throw IllegalStateException("no wrapped key saved")
+        // Unwrap to raw key (in RAM briefly)
+        val priv = unwrapPrivateKey(wrapped)
+        return try {
+            // Delegate signing to JNI
+            NativeBridge.signMessageDerHex(priv, claimJson)
+        } finally {
+            // Always wipe the secret from memory
+            java.util.Arrays.fill(priv, 0)
+        }
+    }
+
+    fun buildOwnershipClaimJson(did: String, nonce: String, walletType: String, withdrawTo: String): String {
+        val paidStub = true
+        val preimageStub = "mock-preimage-32b"
+        val json = org.json.JSONObject()
+            .put("did", did)
+            .put("schema", "pl.claim.v1")
+            .put("type", "ownership_claim")
+            .put("aud", "beta.privacy-lion.com")
+            .put("wallet_type", walletType)
+            .put("withdraw_to", withdrawTo)
+            .put("wallet_hint", "android-mock")
+            .put("paid", paidStub)
+            .put("preimage", preimageStub)
+            .put("nonce", nonce)
+            .put("timestamp_ms", System.currentTimeMillis())
+        return json.toString()
+    }
+
 }

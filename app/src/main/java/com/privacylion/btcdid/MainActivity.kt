@@ -10,6 +10,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.privacylion.btcdid.ui.theme.BTC_DIDTheme
 import org.json.JSONObject
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 
 class MainActivity : ComponentActivity() {
 
@@ -26,7 +30,7 @@ class MainActivity : ComponentActivity() {
     )
 
     // Build the JSON string we will sign
-    private fun buildOwnershipClaimJson(did: String): String {
+    private fun buildOwnershipClaimJson(did: String, nonce: String): String {
         // TODO: replace these stub values once we have a real wallet
         val walletTypeStub = "custodial"
         val withdrawToStub = "lnbc1mockpreimage"
@@ -46,14 +50,13 @@ class MainActivity : ComponentActivity() {
             .put("did", claim.did)
             .put("schema", "pl.claim.v1")
             .put("type", "ownership_claim")
-            .put("sig_alg", "ES256K")
             .put("aud", "beta.privacy-lion.com")
             .put("wallet_type", claim.walletType)
             .put("withdraw_to", claim.withdrawTo)
             .put("wallet_hint", "android-mock")
             .put("paid", paidStub)
             .put("preimage", preimageStub)
-            .put("nonce", "android-${System.currentTimeMillis()}")
+            .put("nonce", nonce)
             .put("timestamp_ms", claim.timestampMs)
 
         return json.toString()
@@ -73,6 +76,7 @@ class MainActivity : ComponentActivity() {
                     // ---- UI state ----
                     var stepCreateDone by remember { mutableStateOf(false) }
                     var stepConnectDone by remember { mutableStateOf(false) }
+                    val clipboard = LocalClipboardManager.current
 
                     var did by remember { mutableStateOf(mgr.getPublicDID() ?: "") }
                     if (did.isNotEmpty()) stepCreateDone = true
@@ -90,9 +94,9 @@ class MainActivity : ComponentActivity() {
                         mutableStateOf(NativeBridge.sha256Hex("test"))
                     }
 
-                    Column(Modifier.padding(20.dp)) {
+                    Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState())) {
 
-                        // ---- Header ----
+                    // ---- Header ----
                         Text(
                             "BTC_DID Android",
                             style = MaterialTheme.typography.titleLarge
@@ -209,7 +213,12 @@ class MainActivity : ComponentActivity() {
                                 Button(
                                     enabled = stepCreateDone && stepConnectDone,
                                     onClick = {
-                                        val claimJson = buildOwnershipClaimJson(did)
+                                        val claimJson = mgr.buildOwnershipClaimJson(
+                                            did = did,
+                                            nonce = "android-${System.currentTimeMillis()}",
+                                            walletType = "custodial",
+                                            withdrawTo = "lnbc1mockpreimage"
+                                        )
 
                                         val status = try {
                                             if (did.isEmpty()) {
@@ -217,16 +226,7 @@ class MainActivity : ComponentActivity() {
                                                 return@Button
                                             }
 
-                                            val wrapped = mgr.loadWrapped()
-                                                ?: return@Button run {
-                                                    proveStatus = "Error: no wrapped key saved"
-                                                }
-
-                                            val priv = mgr.unwrapPrivateKey(wrapped)
-
-                                            val sigHex = mgr.signClaimWithDid(priv, claimJson)
-
-                                            java.util.Arrays.fill(priv, 0)
+                                            val sigHex = mgr.signOwnershipClaim(claimJson)
 
                                             // save for UI
                                             lastClaimJson = claimJson
@@ -305,7 +305,9 @@ class MainActivity : ComponentActivity() {
                                             .put("claim", JSONObject(lastClaimJson))
                                             .put("signature_der_hex", lastSigHex)
                                             .toString()
-                                        proveStatus = "Copied (stub): $exportJson"
+                                        clipboard.setText(AnnotatedString(exportJson))
+                                        proveStatus = "Copied to clipboard."
+
                                     }) {
                                         Text("Copy export JSON (stub)")
                                     }
@@ -326,13 +328,39 @@ class MainActivity : ComponentActivity() {
                         Spacer(Modifier.height(8.dp))
 
                         Button(onClick = {
-                            output = NativeBridge.sha256Hex(input)
+                            // dummy inputs just to exercise the JNI stub
+                            val resp = mgr.generateStwoProof(
+                                "sha256_eq",
+                                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                            )
+
+                            output = resp
                         }) {
-                            Text("Hash with Rust")
+                            Text("Run STWO proof demo")
                         }
 
                         Spacer(Modifier.height(8.dp))
-                        Text(output)
+
+                        Button(onClick = {
+                            val outcome = "paid=true"
+                            val payoutsJson = """{"user":90,"operator":10}"""
+                            val oracleJson = """{"name":"local_oracle","pubkey":"deadbeef"}"""
+                            val resp = mgr.createDlcContract(outcome, payoutsJson, oracleJson)
+                            output = resp
+                        }) {
+                            Text("Create DLC (demo)")
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+
+                        Button(onClick = {
+                            val outcome = "paid=true"
+                            val resp = mgr.signDlcOutcome(outcome)
+                            output = resp
+                        }) {
+                            Text("Sign DLC (demo)")
+                        }
                     }
                 }
             }
