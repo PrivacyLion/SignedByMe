@@ -65,6 +65,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val mgr = DidWalletManager(applicationContext)
+        val activity = this
 
         setContent {
             BTC_DIDTheme {
@@ -77,6 +78,7 @@ class MainActivity : ComponentActivity() {
                     var stepCreateDone by remember { mutableStateOf(false) }
                     var stepConnectDone by remember { mutableStateOf(false) }
                     val clipboard = LocalClipboardManager.current
+                    var lastNonce by remember { mutableStateOf("") }
 
                     var did by remember { mutableStateOf(mgr.getPublicDID() ?: "") }
                     if (did.isNotEmpty()) stepCreateDone = true
@@ -86,7 +88,8 @@ class MainActivity : ComponentActivity() {
                     // will hold claim JSON and signature after prove
                     var lastClaimJson by remember { mutableStateOf("") }
                     var lastSigHex by remember { mutableStateOf("") }
-
+                    var lastLoginId by remember { mutableStateOf("") }
+                    var lastPreimage by remember { mutableStateOf("") }
 
                     // Diagnostics for Rust hashing demo:
                     var input by remember { mutableStateOf("test") }
@@ -186,6 +189,90 @@ class MainActivity : ComponentActivity() {
                                 ) {
                                     Text("Mark Connected")
                                 }
+
+                                Spacer(Modifier.height(8.dp))
+                                Button(
+                                    onClick = {
+                                        proveStatus = "Fetching nonce..."
+                                        Thread {
+                                            try {
+                                                val res = mgr.startLogin()
+                                                activity.runOnUiThread {
+                                                    lastLoginId = res.loginId
+                                                    lastNonce = res.nonce
+                                                    proveStatus = "Nonce ready."
+                                                }
+                                            } catch (t: Throwable) {
+                                                activity.runOnUiThread {
+                                                    proveStatus = "Nonce error: ${t.message}"
+                                                }
+                                            }
+                                        }.start()
+                                    },
+                                    enabled = stepCreateDone
+                                ) { Text("Fetch Nonce") }
+
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    text = if (lastNonce.isEmpty()) "Nonce: (none)"
+                                    else "Nonce: ${lastNonce}",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = if (lastLoginId.isEmpty()) "Login ID: (none)"
+                                    else "Login ID: ${lastLoginId.take(24)}…",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+
+                                Spacer(Modifier.height(8.dp))
+                                Button(
+                                    onClick = {
+                                        if (lastLoginId.isBlank()) {
+                                            proveStatus = "No login_id yet — tap Fetch Nonce first."
+                                            return@Button
+                                        }
+                                        proveStatus = "Checking status..."
+                                        Thread {
+                                            try {
+                                                val body = mgr.fetchLoginStatus(lastLoginId)
+                                                runOnUiThread { proveStatus = "Status: $body" }
+                                            } catch (t: Throwable) {
+                                                runOnUiThread { proveStatus = "Status error: ${t.message}" }
+                                            }
+                                        }.start()
+                                    },
+                                    enabled = stepCreateDone
+                                ) { Text("Check Status") }
+
+                                Spacer(Modifier.height(8.dp))
+                                Button(
+                                    onClick = {
+                                        if (lastLoginId.isBlank()) {
+                                            proveStatus = "No login_id yet — tap Fetch Nonce first."
+                                            return@Button
+                                        }
+                                        // make a random 32-byte hex preimage
+                                        val bytes = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+                                        val preimage = bytes.joinToString("") { "%02x".format(it) }
+
+                                        proveStatus = "Settling (demo)…"
+                                        Thread {
+                                            try {
+                                                mgr.settleLoginDemo(lastLoginId, preimage)
+                                                runOnUiThread {
+                                                    lastPreimage = preimage
+                                                    proveStatus = "Settled. Preimage saved."
+                                                }
+                                            } catch (t: Throwable) {
+                                                runOnUiThread { proveStatus = "Settle error: ${t.message}" }
+                                            }
+                                        }.start()
+                                    },
+                                    enabled = stepCreateDone
+                                ) { Text("Settle (demo)") }
+
                             }
                         }
 
@@ -215,7 +302,7 @@ class MainActivity : ComponentActivity() {
                                     onClick = {
                                         val claimJson = mgr.buildOwnershipClaimJson(
                                             did = did,
-                                            nonce = "android-${System.currentTimeMillis()}",
+                                            nonce = lastNonce.ifEmpty { "android-${System.currentTimeMillis()}" },
                                             walletType = "custodial",
                                             withdrawTo = "lnbc1mockpreimage"
                                         )

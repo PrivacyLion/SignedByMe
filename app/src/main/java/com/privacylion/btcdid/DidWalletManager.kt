@@ -228,4 +228,138 @@ class DidWalletManager(private val context: Context) {
         return json.toString()
     }
 
+    // Fetch a real nonce from your API (no new deps; blocking call).
+// Call this from a background thread / coroutine (not the main thread).
+    fun fetchNonce(
+        apiBase: String = "https://api.beta.privacy-lion.com",
+        domain: String = "beta.privacy-lion.com",
+        timeoutMs: Int = 8000
+    ): String {
+        val url = java.net.URL("$apiBase/v1/login/start")
+        val payload = org.json.JSONObject()
+            .put("domain", domain)
+            .toString()
+
+        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = timeoutMs
+            readTimeout = timeoutMs
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+
+        conn.outputStream.use { os ->
+            val bytes = payload.toByteArray(Charsets.UTF_8)
+            os.write(bytes)
+            os.flush()
+        }
+
+        val code = conn.responseCode
+        val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+            .bufferedReader(Charsets.UTF_8)
+            .use { it.readText() }
+
+        if (code !in 200..299) {
+            throw java.io.IOException("HTTP $code: $body")
+        }
+
+        val json = org.json.JSONObject(body)
+
+        // Accept either top-level "nonce" or nested "data.nonce"
+        return when {
+            json.has("nonce") -> json.getString("nonce")
+            json.has("data") && json.getJSONObject("data").has("nonce") ->
+                json.getJSONObject("data").getString("nonce")
+            else -> throw java.io.IOException("nonce missing in response: $body")
+        }
+    }
+
+    data class LoginStart(val loginId: String, val nonce: String)
+
+    fun startLogin(
+        apiBase: String = "https://api.beta.privacy-lion.com",
+        domain: String = "beta.privacy-lion.com",
+        timeoutMs: Int = 8000
+    ): LoginStart {
+        val url = java.net.URL("$apiBase/v1/login/start")
+        val payload = org.json.JSONObject().put("domain", domain).toString()
+
+        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = timeoutMs
+            readTimeout = timeoutMs
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+
+        val code = conn.responseCode
+        val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+            .bufferedReader(Charsets.UTF_8).use { it.readText() }
+        if (code !in 200..299) throw java.io.IOException("HTTP $code: $body")
+
+        val json = org.json.JSONObject(body)
+        val loginId = when {
+            json.has("login_id") -> json.getString("login_id")
+            json.optJSONObject("data")?.has("login_id") == true -> json.getJSONObject("data").getString("login_id")
+            else -> throw java.io.IOException("login_id missing in response: $body")
+        }
+        val nonce = when {
+            json.has("nonce") -> json.getString("nonce")
+            json.optJSONObject("data")?.has("nonce") == true -> json.getJSONObject("data").getString("nonce")
+            else -> throw java.io.IOException("nonce missing in response: $body")
+        }
+        return LoginStart(loginId = loginId, nonce = nonce)
+    }
+
+    fun fetchLoginStatus(
+        loginId: String,
+        apiBase: String = "https://api.beta.privacy-lion.com",
+        timeoutMs: Int = 8000
+    ): String {
+        require(loginId.isNotBlank()) { "loginId is empty" }
+        val url = java.net.URL("$apiBase/v1/login/status/$loginId")
+        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = timeoutMs
+            readTimeout = timeoutMs
+            setRequestProperty("Accept", "application/json")
+        }
+        val code = conn.responseCode
+        val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+            .bufferedReader(Charsets.UTF_8).use { it.readText() }
+        if (code !in 200..299) throw java.io.IOException("HTTP $code: $body")
+        return body // caller can parse or display
+    }
+
+    // Demo-only helper to mark a login as settled on the server
+    fun settleLoginDemo(
+        loginId: String,
+        preimageHex: String,
+        apiBase: String = "https://api.beta.privacy-lion.com",
+        timeoutMs: Int = 8000
+    ): String {
+        require(loginId.isNotBlank()) { "loginId is empty" }
+        require(preimageHex.isNotBlank()) { "preimage is empty" }
+
+        val url = java.net.URL(
+            "$apiBase/v1/login/settle?login_id=$loginId&preimage=$preimageHex&txid="
+        )
+        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "POST" // server accepts POST for settle
+            connectTimeout = timeoutMs
+            readTimeout = timeoutMs
+            setRequestProperty("Accept", "application/json")
+        }
+
+        val code = conn.responseCode
+        val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+            .bufferedReader(Charsets.UTF_8).use { it.readText() }
+        if (code !in 200..299) throw java.io.IOException("HTTP $code: $body")
+        return body  // typically {"status":"ok"} or similar
+    }
 }
+
+
