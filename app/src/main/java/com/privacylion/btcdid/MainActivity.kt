@@ -196,6 +196,19 @@ class MainActivity : ComponentActivity() {
                                 Spacer(Modifier.height(8.dp))
                                 Button(
                                     onClick = {
+                                        if (lastLoginId.isEmpty()) {
+                                            proveStatus = "No login_id yet — tap Fetch Nonce first."
+                                            return@Button
+                                        }
+                                        clipboard.setText(AnnotatedString(lastLoginId))
+                                        proveStatus = "Login ID copied."
+                                    },
+                                    enabled = lastLoginId.isNotEmpty()
+                                ) { Text("Copy Login ID") }
+
+                                Spacer(Modifier.height(8.dp))
+                                Button(
+                                    onClick = {
                                         if (lastLoginId.isBlank()) {
                                             proveStatus = "No login_id yet — tap Fetch Nonce first."
                                             return@Button
@@ -352,6 +365,61 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 ) { Text("Share bundle (demo)") }
+
+                                Button(
+                                    enabled = lastLoginId.isNotEmpty() && lastClaimJson.isNotEmpty() && lastSigHex.isNotEmpty(),
+                                    onClick = {
+                                        try {
+                                            // Build the same bundle we copy to clipboard
+                                            val bundle = JSONObject()
+                                                .put("schema", "pl/bundle/1")
+                                                .put("type", "ownership_claim_bundle")
+                                                .put("did", did)
+                                                .put("sig_alg", "ES256K")
+                                                .put("pubkey_hex", did.removePrefix("did:btcr:"))
+                                                .put("claim", JSONObject(lastClaimJson))
+                                                .put("signature_der_hex", lastSigHex)
+                                            if (lastPrpJson.isNotEmpty()) {
+                                                bundle.put("prp", JSONObject(lastPrpJson))
+                                            }
+
+                                            proveStatus = "Sending bundle…"
+                                            Thread {
+                                                try {
+                                                    val url = java.net.URL("https://api.beta.privacy-lion.com/v1/login/complete")
+                                                    val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+                                                        requestMethod = "POST"
+                                                        connectTimeout = 8000
+                                                        readTimeout = 8000
+                                                        doOutput = true
+                                                        setRequestProperty("Content-Type", "application/json")
+                                                        setRequestProperty("Accept", "application/json")
+                                                    }
+
+                                                    // Wrap with login_id for the API
+                                                    val payload = JSONObject()
+                                                        .put("login_id", lastLoginId)
+                                                        .put("bundle", bundle)
+                                                        .toString()
+
+                                                    conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+
+                                                    val code = conn.responseCode
+                                                    val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                                                        .bufferedReader(Charsets.UTF_8).use { it.readText() }
+
+                                                    runOnUiThread {
+                                                        proveStatus = "Complete: HTTP $code\n$body"
+                                                    }
+                                                } catch (t: Throwable) {
+                                                    runOnUiThread { proveStatus = "Complete error: ${t.message}" }
+                                                }
+                                            }.start()
+                                        } catch (t: Throwable) {
+                                            proveStatus = "Bundle build error: ${t.message}"
+                                        }
+                                    }
+                                ) { Text("Send bundle (demo)") }
 
                                 Spacer(Modifier.height(12.dp))
 
