@@ -210,22 +210,55 @@ class DidWalletManager(private val context: Context) {
         }
     }
 
-    fun buildOwnershipClaimJson(did: String, nonce: String, walletType: String, withdrawTo: String): String {
-        val paidStub = true
-        val preimageStub = "mock-preimage-32b"
-        val json = org.json.JSONObject()
-            .put("did", did)
-            .put("schema", "pl.claim.v1")
-            .put("type", "ownership_claim")
-            .put("aud", "beta.privacy-lion.com")
-            .put("wallet_type", walletType)
-            .put("withdraw_to", withdrawTo)
-            .put("wallet_hint", "android-mock")
-            .put("paid", paidStub)
-            .put("preimage", preimageStub)
-            .put("nonce", nonce)
-            .put("timestamp_ms", System.currentTimeMillis())
-        return json.toString()
+    private fun hexToBytes(hex: String): ByteArray =
+        hex.trim().chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+
+    private fun bytesToHex(b: ByteArray): String =
+        b.joinToString("") { "%02x".format(it) }
+
+    fun buildOwnershipClaimJson(
+        did: String,
+        nonce: String,
+        walletType: String,
+        withdrawTo: String,
+        preimage: String? // pass lastPreimage from the UI; null/blank means unpaid
+    ): String {
+        val paid = !preimage.isNullOrBlank()
+
+        val preimageTrim = preimage?.trim()
+        if (paid) {
+            require(preimageTrim!!.length % 2 == 0) { "preimage hex must have even length" }
+            require(preimageTrim.length >= 64) { "preimage must be ≥32 bytes (≥64 hex chars)" }
+            require(preimageTrim.all { it in "0123456789abcdefABCDEF" }) { "preimage must be hex" }
+        }
+
+        val preimageSha256Hex: String? = if (paid) {
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            val hash = md.digest(hexToBytes(preimage!!.trim()))
+            bytesToHex(hash)
+        } else null
+
+        val obj = org.json.JSONObject().apply {
+            put("schema", "pl/ownership-claim/1")
+            put("type", "ownership_claim")
+            put("did", did)
+            put("nonce", nonce)
+            put("wallet_type", walletType)
+            put("withdraw_to", withdrawTo)
+            put("paid", paid)
+            if (paid) {
+                put("preimage", preimage!!.trim())
+                put("preimage_sha256", preimageSha256Hex)
+                // Authentication methods reference; UI/API may read this
+                put("amr", org.json.JSONArray(listOf("did_sig", "ln_preimage")))
+            }
+            put("timestamp_ms", System.currentTimeMillis())
+            // optional hint to distinguish platforms in logs
+            put("wallet_hint", "android")
+            put("aud", "beta.privacy-lion.com")
+        }
+
+        return obj.toString()
     }
 
     // Fetch a real nonce from your API (no new deps; blocking call).
@@ -359,6 +392,50 @@ class DidWalletManager(private val context: Context) {
             .bufferedReader(Charsets.UTF_8).use { it.readText() }
         if (code !in 200..299) throw java.io.IOException("HTTP $code: $body")
         return body  // typically {"status":"ok"} or similar
+    }
+
+    /**
+     * Build a DLC-tagged Payment Request Package (PRP) for Enterprise login.
+     * This is a simple JSON builder we’ll evolve; it references the preimage SHA-256.
+     *
+     * userShare/operatorShare are percentages that must sum to 100.
+     */
+    fun buildPrpJson(
+        loginId: String,
+        did: String,
+        preimageSha256Hex: String,
+        amountSats: Long = 0L,
+        userShare: Int = 90,
+        operatorShare: Int = 10,
+        oracleName: String = "local_oracle",
+        oraclePubkeyHex: String = "deadbeef" // TODO: replace with real oracle pubkey
+    ): String {
+        require(loginId.isNotBlank()) { "loginId required" }
+        require(did.startsWith("did:")) { "did must start with did:" }
+        require(preimageSha256Hex.length == 64) { "preimage_sha256 must be 32 bytes hex" }
+        require(userShare + operatorShare == 100) { "split must sum to 100" }
+
+        val prp = org.json.JSONObject().apply {
+            put("schema", "pl/prp/1")
+            put("type", "payment_request_package")
+            put("login_id", loginId)
+            put("did", did)
+            put("amount_sats", amountSats) // 0 until we wire real amounts
+            put("preimage_sha256", preimageSha256Hex)
+            put("split", org.json.JSONObject().apply {
+                put("user_pct", userShare)
+                put("operator_pct", operatorShare)
+            })
+            put("dlc", org.json.JSONObject().apply {
+                put("oracle", org.json.JSONObject().apply {
+                    put("name", oracleName)
+                    put("pubkey_hex", oraclePubkeyHex)
+                })
+                // outcome string is canonicalized; we’ll use this when we sign the outcome later
+                put("outcome", "paid=true")
+            })
+        }
+        return prp.toString()
     }
 }
 

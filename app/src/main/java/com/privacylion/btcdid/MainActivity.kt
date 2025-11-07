@@ -17,49 +17,13 @@ import androidx.compose.ui.text.AnnotatedString
 
 class MainActivity : ComponentActivity() {
 
-    // Represents the ownership claim we’ll sign
-    data class OwnershipClaim(
-        val did: String,
-        val walletType: String,
-        val withdrawTo: String,
-        val timestampMs: Long,
-        val paid: Boolean? = null,
-        val preimage: String? = null,
-        val nonce: String? = null,
-        val schema: String? = null
-    )
+    private fun hexToBytes(hex: String): ByteArray =
+        hex.trim().chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
-    // Build the JSON string we will sign
-    private fun buildOwnershipClaimJson(did: String, nonce: String): String {
-        // TODO: replace these stub values once we have a real wallet
-        val walletTypeStub = "custodial"
-        val withdrawToStub = "lnbc1mockpreimage"
-
-        val paidStub = true
-        val preimageStub = "mock-preimage-32b"
-
-        val claim = OwnershipClaim(
-            did = did,
-            walletType = walletTypeStub,
-            withdrawTo = withdrawToStub,
-            timestampMs = System.currentTimeMillis()
-        )
-
-        // Create stable JSON
-        val json = JSONObject()
-            .put("did", claim.did)
-            .put("schema", "pl.claim.v1")
-            .put("type", "ownership_claim")
-            .put("aud", "beta.privacy-lion.com")
-            .put("wallet_type", claim.walletType)
-            .put("withdraw_to", claim.withdrawTo)
-            .put("wallet_hint", "android-mock")
-            .put("paid", paidStub)
-            .put("preimage", preimageStub)
-            .put("nonce", nonce)
-            .put("timestamp_ms", claim.timestampMs)
-
-        return json.toString()
+    private fun sha256HexBytes(hex: String): String {
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        val hash = md.digest(hexToBytes(hex))
+        return hash.joinToString("") { "%02x".format(it) }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -91,6 +55,9 @@ class MainActivity : ComponentActivity() {
                     var lastLoginId by remember { mutableStateOf("") }
                     var lastPreimage by remember { mutableStateOf("") }
 
+                    // NEW: built PRP JSON
+                    var lastPrpJson by remember { mutableStateOf("") }
+
                     // Diagnostics for Rust hashing demo:
                     var input by remember { mutableStateOf("test") }
                     var output by remember {
@@ -99,7 +66,7 @@ class MainActivity : ComponentActivity() {
 
                     Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState())) {
 
-                    // ---- Header ----
+                        // ---- Header ----
                         Text(
                             "BTC_DID Android",
                             style = MaterialTheme.typography.titleLarge
@@ -273,6 +240,12 @@ class MainActivity : ComponentActivity() {
                                     enabled = stepCreateDone
                                 ) { Text("Settle (demo)") }
 
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    text = if (lastPreimage.isEmpty()) "Paid: false"
+                                    else "Paid: true",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
                             }
                         }
 
@@ -288,8 +261,9 @@ class MainActivity : ComponentActivity() {
                                 Spacer(Modifier.height(8.dp))
 
                                 val proveMessage = when {
-                                    !stepCreateDone -> "Connect a wallet first"
+                                    !stepCreateDone -> "Create a DID first"
                                     !stepConnectDone -> "Connect a wallet first"
+                                    lastPreimage.isEmpty() -> "Awaiting payment (need preimage)"
                                     proveStatus.isEmpty() -> "Ready to build & sign claim"
                                     else -> proveStatus
                                 }
@@ -298,13 +272,14 @@ class MainActivity : ComponentActivity() {
                                 Spacer(Modifier.height(8.dp))
 
                                 Button(
-                                    enabled = stepCreateDone && stepConnectDone,
+                                    enabled = stepCreateDone && stepConnectDone && lastPreimage.isNotEmpty(),
                                     onClick = {
                                         val claimJson = mgr.buildOwnershipClaimJson(
                                             did = did,
                                             nonce = lastNonce.ifEmpty { "android-${System.currentTimeMillis()}" },
                                             walletType = "custodial",
-                                            withdrawTo = "lnbc1mockpreimage"
+                                            withdrawTo = "lnbc1mockpreimage",
+                                            preimage = lastPreimage
                                         )
 
                                         val status = try {
@@ -326,37 +301,57 @@ class MainActivity : ComponentActivity() {
 
                                         proveStatus = status
                                     }
-
-
                                 ) {
-                                    Text("Prove Ownership (stub)")
+                                    Text("Prove Ownership (requires paid)")
                                 }
+
+                                Spacer(Modifier.height(12.dp))
+
+                                Button(
+                                    enabled = lastLoginId.isNotEmpty() && lastPreimage.isNotEmpty(),
+                                    onClick = {
+                                        try {
+                                            val preimageSha256 = sha256HexBytes(lastPreimage)
+                                            val prp = mgr.buildPrpJson(
+                                                loginId = lastLoginId,
+                                                did = did,
+                                                preimageSha256Hex = preimageSha256,
+                                                amountSats = 0L,          // demo
+                                                userShare = 90,
+                                                operatorShare = 10
+                                            )
+                                            lastPrpJson = prp
+                                            proveStatus = "PRP ready."
+                                        } catch (t: Throwable) {
+                                            proveStatus = "PRP error: ${t.message}"
+                                        }
+                                    }
+                                ) { Text("Build PRP (demo)") }
 
                                 Spacer(Modifier.height(12.dp))
 
                                 Button(
                                     enabled = lastClaimJson.isNotEmpty() && lastSigHex.isNotEmpty(),
                                     onClick = {
-                                        if (lastClaimJson.isNotEmpty() && lastSigHex.isNotEmpty() && did.isNotEmpty()) {
-                                            // Build export bundle the verifier would receive
-                                            val exportJson = JSONObject()
-                                                .put("schema", "pl.claim.v1")
-                                                .put("sig_alg", "ES256K")
-                                                .put("pubkey_hex", did.removePrefix("did:btcr:"))
+                                        try {
+                                            val bundle = JSONObject()
+                                                .put("schema", "pl/bundle/1")
                                                 .put("type", "ownership_claim_bundle")
                                                 .put("did", did)
+                                                .put("sig_alg", "ES256K")
+                                                .put("pubkey_hex", did.removePrefix("did:btcr:"))
                                                 .put("claim", JSONObject(lastClaimJson))
                                                 .put("signature_der_hex", lastSigHex)
-                                                .toString()
-
-                                            proveStatus = "Ready to export:\n$exportJson"
-                                        } else {
-                                            proveStatus = "Nothing to export yet"
+                                            if (lastPrpJson.isNotEmpty()) {
+                                                bundle.put("prp", JSONObject(lastPrpJson))
+                                            }
+                                            clipboard.setText(AnnotatedString(bundle.toString()))
+                                            proveStatus = "Bundle copied."
+                                        } catch (t: Throwable) {
+                                            proveStatus = "Bundle error: ${t.message}"
                                         }
                                     }
-                                ) {
-                                    Text("Share proof (stub)")
-                                }
+                                ) { Text("Share bundle (demo)") }
 
                                 Spacer(Modifier.height(12.dp))
 
@@ -380,23 +375,25 @@ class MainActivity : ComponentActivity() {
                                         lastSigHex,
                                         style = MaterialTheme.typography.bodySmall
                                     )
+                                }
+
+                                if (lastPrpJson.isNotEmpty()) {
+                                    Spacer(Modifier.height(12.dp))
+                                    Text(
+                                        "PRP JSON:",
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                    Text(
+                                        lastPrpJson,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
 
                                     Spacer(Modifier.height(8.dp))
                                     Button(onClick = {
-                                        val exportJson = JSONObject()
-                                            .put("schema", "pl.claim.v1")
-                                            .put("sig_alg", "ES256K")
-                                            .put("pubkey_hex", did.removePrefix("did:btcr:"))
-                                            .put("type", "ownership_claim_bundle")
-                                            .put("did", did)
-                                            .put("claim", JSONObject(lastClaimJson))
-                                            .put("signature_der_hex", lastSigHex)
-                                            .toString()
-                                        clipboard.setText(AnnotatedString(exportJson))
-                                        proveStatus = "Copied to clipboard."
-
+                                        clipboard.setText(AnnotatedString(lastPrpJson))
+                                        proveStatus = "PRP copied."
                                     }) {
-                                        Text("Copy export JSON (stub)")
+                                        Text("Copy PRP JSON")
                                     }
                                 }
                             }
