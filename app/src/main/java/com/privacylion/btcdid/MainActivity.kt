@@ -367,7 +367,8 @@ class MainActivity : ComponentActivity() {
                                 ) { Text("Share bundle (demo)") }
 
                                 Button(
-                                    enabled = lastLoginId.isNotEmpty() && lastClaimJson.isNotEmpty() && lastSigHex.isNotEmpty(),
+                                    enabled = lastLoginId.isNotEmpty() && lastClaimJson.isNotEmpty() && lastSigHex.isNotEmpty() && lastPrpJson.isNotEmpty(),
+
                                     onClick = {
                                         try {
                                             // Build the same bundle we copy to clipboard
@@ -399,6 +400,11 @@ class MainActivity : ComponentActivity() {
                                                     // Wrap with login_id for the API
                                                     val payload = JSONObject()
                                                         .put("login_id", lastLoginId)
+                                                        .put("did_sig", JSONObject()
+                                                            .put("alg", "ES256K")
+                                                            .put("pubkey_hex", did.removePrefix("did:btcr:"))
+                                                            .put("signature_der_hex", lastSigHex)
+                                                        )
                                                         .put("bundle", bundle)
                                                         .toString()
 
@@ -408,9 +414,22 @@ class MainActivity : ComponentActivity() {
                                                     val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
                                                         .bufferedReader(Charsets.UTF_8).use { it.readText() }
 
-                                                    runOnUiThread {
-                                                        proveStatus = "Complete: HTTP $code\n$body"
+                                                    // Immediately fetch status for this login
+                                                    val statusUrl = java.net.URL("https://api.beta.privacy-lion.com/v1/login/status/$lastLoginId")
+                                                    val statusConn = (statusUrl.openConnection() as java.net.HttpURLConnection).apply {
+                                                        requestMethod = "GET"
+                                                        connectTimeout = 8000
+                                                        readTimeout = 8000
+                                                        setRequestProperty("Accept", "application/json")
                                                     }
+                                                    val statusCode = statusConn.responseCode
+                                                    val statusBody = (if (statusCode in 200..299) statusConn.inputStream else statusConn.errorStream)
+                                                        .bufferedReader(Charsets.UTF_8).use { it.readText() }
+
+                                                    runOnUiThread {
+                                                        proveStatus = "Complete: HTTP $code\n$body\n\nStatus: HTTP $statusCode\n$statusBody"
+                                                    }
+
                                                 } catch (t: Throwable) {
                                                     runOnUiThread { proveStatus = "Complete error: ${t.message}" }
                                                 }
@@ -512,6 +531,24 @@ class MainActivity : ComponentActivity() {
                             output = resp
                         }) {
                             Text("Sign DLC (demo)")
+                        }
+
+                        Spacer(Modifier.height(12.dp))
+                        Button(onClick = {
+                            // wipe all transient state so you can start a clean flow
+                            lastNonce = ""
+                            lastLoginId = ""
+                            lastPreimage = ""
+                            lastClaimJson = ""
+                            lastSigHex = ""
+                            lastPrpJson = ""
+                            proveStatus = ""
+                            // keep the DID; if you want to reset DID too, uncomment:
+                            // did = ""
+                            // stepCreateDone = false
+                            stepConnectDone = false
+                        }) {
+                            Text("Reset session")
                         }
                     }
                 }
