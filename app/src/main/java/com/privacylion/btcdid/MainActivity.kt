@@ -189,7 +189,7 @@ class MainActivity : ComponentActivity() {
                                 Spacer(Modifier.height(4.dp))
                                 Text(
                                     text = if (lastLoginId.isEmpty()) "Login ID: (none)"
-                                    else "Login ID: ${lastLoginId.take(24)}…",
+                                    else "Login ID: $lastLoginId",
                                     style = MaterialTheme.typography.bodySmall
                                 )
 
@@ -433,6 +433,7 @@ class MainActivity : ComponentActivity() {
                                                 } catch (t: Throwable) {
                                                     runOnUiThread { proveStatus = "Complete error: ${t.message}" }
                                                 }
+
                                             }.start()
                                         } catch (t: Throwable) {
                                             proveStatus = "Bundle build error: ${t.message}"
