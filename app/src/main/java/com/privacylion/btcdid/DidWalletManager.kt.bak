@@ -408,7 +408,7 @@ class DidWalletManager(private val context: Context) {
         userShare: Int = 90,
         operatorShare: Int = 10,
         oracleName: String = "local_oracle",
-        oraclePubkeyHex: String = NativeBridge.oraclePubkeyHex() // TODO: replace with real oracle pubkey
+        oraclePubkeyHex: String = "deadbeef" // TODO: replace with real oracle pubkey
     ): String {
         require(loginId.isNotBlank()) { "loginId required" }
         require(did.startsWith("did:")) { "did must start with did:" }

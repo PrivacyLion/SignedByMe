@@ -14,9 +14,10 @@ object NativeBridge {
     @JvmStatic external fun derivePublicKeyHex(priv: ByteArray): String // compressed SEC1 hex
     @JvmStatic external fun signMessageDerHex(priv: ByteArray, message: String): String // DER-hex signature
 
-    // --- STWO / DLC placeholders (Rust side will provide these later) ---
+// --- STWO / DLC placeholders (Rust side will provide these later) ---
     @JvmStatic external fun generateStwoProof(circuit: String, inputHashHex: String, outputHashHex: String): String
+    @JvmStatic external fun oraclePubkeyHex(): String
+    @JvmStatic external fun oracleSignOutcome(outcome: String): String
     external fun createDlcContract(outcome: String, payoutsJson: String, oracleJson: String): String
     external fun signDlcOutcome(outcome: String): String
-
 }

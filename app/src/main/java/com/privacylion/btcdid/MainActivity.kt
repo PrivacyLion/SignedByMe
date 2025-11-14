@@ -82,6 +82,10 @@ class MainActivity : ComponentActivity() {
                             style = MaterialTheme.typography.bodySmall
                         )
 
+                        Text("Oracle pubkey: " + NativeBridge.oraclePubkeyHex(), style = MaterialTheme.typography.bodySmall)
+
+                        Text("Oracle sig: " + NativeBridge.oracleSignOutcome("paid=true"), style = MaterialTheme.typography.bodySmall)
+
                         Spacer(Modifier.height(16.dp))
 
                         // ===== Card 1: CREATE =====

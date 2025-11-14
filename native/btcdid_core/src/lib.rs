@@ -9,6 +9,7 @@ use hex;
 use k256::SecretKey;
 use k256::ecdsa::{SigningKey, VerifyingKey, Signature};
 use rand_core::OsRng;
+pub mod dlc_oracle;
 
 /// ===== Simple sanity check (kept) =====
 #[unsafe(no_mangle)]
@@ -199,3 +200,29 @@ pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_signDlcOutcome(
     let _ = outcome;
     env.new_string("{\"status\":\"ok\",\"sig\":\"stub-sig\"}").unwrap().into_raw()
 }
+
+// === JNI bridges for DLC Oracle ===
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_oraclePubkeyHex(
+    mut env: jni::JNIEnv,
+    _clazz: jni::objects::JClass,
+) -> jni::sys::jstring {
+    let pk = dlc_oracle::oracle_pubkey_hex();
+    env.new_string(pk).unwrap().into_raw()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_oracleSignOutcome(
+    mut env: jni::JNIEnv,
+    _clazz: jni::objects::JClass,
+    outcome: jni::objects::JString,
+) -> jni::sys::jstring {
+    let out = env
+        .get_string(&outcome)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    let sig = dlc_oracle::oracle_sign_outcome(&out);
+    env.new_string(sig).unwrap().into_raw()
+}
+
