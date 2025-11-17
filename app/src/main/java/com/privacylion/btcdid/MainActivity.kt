@@ -291,6 +291,7 @@ class MainActivity : ComponentActivity() {
                                 Button(
                                     enabled = stepCreateDone && stepConnectDone && lastPreimage.isNotEmpty(),
                                     onClick = {
+                                        // Build the ownership claim JSON (includes paid=true + preimage fields)
                                         val claimJson = mgr.buildOwnershipClaimJson(
                                             did = did,
                                             nonce = lastNonce.ifEmpty { "android-${System.currentTimeMillis()}" },
@@ -305,13 +306,28 @@ class MainActivity : ComponentActivity() {
                                                 return@Button
                                             }
 
+                                            // Sign the claim
                                             val sigHex = mgr.signOwnershipClaim(claimJson)
 
-                                            // save for UI
+                                            // Derive preimage_sha256 for PRP (from lastPreimage hex)
+                                            val preHex = lastPreimage.trim()
+                                            val preBytes = preHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+                                            val md = java.security.MessageDigest.getInstance("SHA-256")
+                                            val preShaHex = md.digest(preBytes).joinToString("") { "%02x".format(it) }
+
+                                            // Build PRP JSON (use nonce as a fallback loginId if none stored)
+                                            lastPrpJson = mgr.buildPrpJson(
+                                                loginId = lastNonce.ifEmpty { "android-${System.currentTimeMillis()}" },
+                                                did = did,
+                                                preimageSha256Hex = preShaHex
+                                                // amount/user/operator/oracle use defaults for now
+                                            )
+
+                                            // Save for UI
                                             lastClaimJson = claimJson
                                             lastSigHex = sigHex
 
-                                            "Success: claim signed"
+                                            "Success: claim signed + PRP prepared"
                                         } catch (t: Throwable) {
                                             "Error during prove: ${t.message}"
                                         }
@@ -405,9 +421,11 @@ class MainActivity : ComponentActivity() {
                                                     val payload = JSONObject()
                                                         .put("login_id", lastLoginId)
                                                         .put("did_sig", JSONObject()
-                                                            .put("alg", "ES256K")
+                                                            .put("did", did)
                                                             .put("pubkey_hex", did.removePrefix("did:btcr:"))
-                                                            .put("signature_der_hex", lastSigHex)
+                                                            .put("message", lastClaimJson)
+                                                            .put("signature_hex", lastSigHex)
+                                                            .put("alg", "ES256K")
                                                         )
                                                         .put("bundle", bundle)
                                                         .toString()
