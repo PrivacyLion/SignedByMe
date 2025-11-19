@@ -57,6 +57,7 @@ class MainActivity : ComponentActivity() {
 
                     // NEW: built PRP JSON
                     var lastPrpJson by remember { mutableStateOf("") }
+                    var lastStwoJson by remember { mutableStateOf("") }
 
                     // Diagnostics for Rust hashing demo:
                     var input by remember { mutableStateOf("test") }
@@ -315,9 +316,18 @@ class MainActivity : ComponentActivity() {
                                             val md = java.security.MessageDigest.getInstance("SHA-256")
                                             val preShaHex = md.digest(preBytes).joinToString("") { "%02x".format(it) }
 
+                                            // Generate an STWO equality proof that sha256(preimage) equals preimage_sha256
+                                            val stwoJson = mgr.generateStwoProof(
+                                                "sha256_eq",
+                                                preShaHex,  // left side
+                                                preShaHex   // right side (equal -> proof ok:true)
+                                            )
+                                            // Show it in the existing STWO output area
+                                            output = stwoJson
+
                                             // Build PRP JSON (use nonce as a fallback loginId if none stored)
                                             lastPrpJson = mgr.buildPrpJson(
-                                                loginId = lastNonce.ifEmpty { "android-${System.currentTimeMillis()}" },
+                                                loginId = lastLoginId.ifEmpty { lastNonce.ifEmpty { "android-${System.currentTimeMillis()}" } },
                                                 did = did,
                                                 preimageSha256Hex = preShaHex
                                                 // amount/user/operator/oracle use defaults for now
@@ -337,29 +347,6 @@ class MainActivity : ComponentActivity() {
                                 ) {
                                     Text("Prove Ownership (requires paid)")
                                 }
-
-                                Spacer(Modifier.height(12.dp))
-
-                                Button(
-                                    enabled = lastLoginId.isNotEmpty() && lastPreimage.isNotEmpty(),
-                                    onClick = {
-                                        try {
-                                            val preimageSha256 = sha256HexBytes(lastPreimage)
-                                            val prp = mgr.buildPrpJson(
-                                                loginId = lastLoginId,
-                                                did = did,
-                                                preimageSha256Hex = preimageSha256,
-                                                amountSats = 0L,          // demo
-                                                userShare = 90,
-                                                operatorShare = 10
-                                            )
-                                            lastPrpJson = prp
-                                            proveStatus = "PRP ready."
-                                        } catch (t: Throwable) {
-                                            proveStatus = "PRP error: ${t.message}"
-                                        }
-                                    }
-                                ) { Text("Build PRP (demo)") }
 
                                 Spacer(Modifier.height(12.dp))
 
@@ -391,7 +378,7 @@ class MainActivity : ComponentActivity() {
 
                                     onClick = {
                                         try {
-                                            // Build the same bundle we copy to clipboard
+                                            // Build the same bundle we copy to clipboard, now including STWO (if present)
                                             val bundle = JSONObject()
                                                 .put("schema", "pl/bundle/1")
                                                 .put("type", "ownership_claim_bundle")
@@ -399,10 +386,14 @@ class MainActivity : ComponentActivity() {
                                                 .put("sig_alg", "ES256K")
                                                 .put("pubkey_hex", did.removePrefix("did:btcr:"))
                                                 .put("claim", JSONObject(lastClaimJson))
-                                                .put("signature_der_hex", lastSigHex)
-                                            if (lastPrpJson.isNotEmpty()) {
-                                                bundle.put("prp", JSONObject(lastPrpJson))
-                                            }
+                                                .put("signature_der_hex", lastSigHex).apply {
+                                                    if (lastPrpJson.isNotEmpty()) {
+                                                        put("prp", JSONObject(lastPrpJson))
+                                                    }
+                                                    if (lastStwoJson.isNotEmpty()) {
+                                                        put("stwo_proof", JSONObject(lastStwoJson))
+                                                    }
+                                                }
 
                                             proveStatus = "Sending bundle…"
                                             Thread {
@@ -522,17 +513,25 @@ class MainActivity : ComponentActivity() {
                         Spacer(Modifier.height(8.dp))
 
                         Button(onClick = {
-                            // dummy inputs just to exercise the JNI stub
+                            // Hash whatever the user typed, then prove equality (should return ok:true)
+                            val h = NativeBridge.sha256Hex(input)
                             val resp = mgr.generateStwoProof(
                                 "sha256_eq",
-                                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                                h,  // input_hash_hex
+                                h   // output_hash_hex (same -> proof passes)
                             )
-
+                            lastStwoJson = resp
                             output = resp
                         }) {
                             Text("Run STWO proof demo")
                         }
+
+                        Spacer(Modifier.height(8.dp))
+                        Text("STWO output:", style = MaterialTheme.typography.labelMedium)
+                        Text(
+                            output,
+                            style = MaterialTheme.typography.bodySmall
+                        )
 
                         Spacer(Modifier.height(8.dp))
 

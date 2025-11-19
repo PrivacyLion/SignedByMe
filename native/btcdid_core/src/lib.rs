@@ -170,13 +170,61 @@ pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_generateStwoProo
     mut env: jni::JNIEnv,
     _clazz: jni::objects::JClass,
     circuit: jni::objects::JString,
-    input_hash: jni::objects::JString,
-    output_hash: jni::objects::JString,
+    input_hash_hex: jni::objects::JString,
+    output_hash_hex: jni::objects::JString,
 ) -> jni::sys::jstring {
-    let _c = env.get_string(&circuit).map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let _i = env.get_string(&input_hash).map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let _o = env.get_string(&output_hash).map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    env.new_string("{\"status\":\"ok\",\"proof\":\"stub\"}").unwrap().into_raw()
+    // Read inputs
+    let circuit_s = env.get_string(&circuit).map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let in_hex   = env.get_string(&input_hash_hex).map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let out_hex  = env.get_string(&output_hash_hex).map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+
+    // Basic validation helpers
+    fn is_hex64(s: &str) -> bool {
+        s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
+    }
+
+    if circuit_s != "sha256_eq" {
+        let json = format!(r#"{{
+  "status":"error",
+  "kind":"stwo_proof",
+  "error":"unsupported circuit",
+  "circuit":"{}"
+}}"#, circuit_s);
+        return env.new_string(json).unwrap().into_raw();
+    }
+
+    if !is_hex64(&in_hex) || !is_hex64(&out_hex) {
+        let json = format!(r#"{{
+  "status":"error",
+  "kind":"stwo_proof",
+  "error":"input_hash_hex and output_hash_hex must be 32-byte hex (64 chars)",
+  "input_len":{},
+  "output_len":{}
+}}"#, in_hex.len(), out_hex.len());
+        return env.new_string(json).unwrap().into_raw();
+    }
+
+    // Demo “proof”: we check equality and include a minimal, deterministic transcript.
+    let ok = in_hex.eq_ignore_ascii_case(&out_hex);
+
+    let proof_json = format!(r#"{{
+  "status":"ok",
+  "kind":"stwo_proof",
+  "circuit":"sha256_eq",
+  "public": {{
+    "input_hash_hex":"{in_hex}",
+    "output_hash_hex":"{out_hex}"
+  }},
+  "ok": {ok},
+  "proof": {{
+    "scheme":"demo-v1",
+    "transcript":[
+      "assert_eq(input_hash_hex, output_hash_hex)"
+    ]
+  }}
+}}"#);
+
+    env.new_string(proof_json).unwrap().into_raw()
 }
 
 #[unsafe(no_mangle)]
