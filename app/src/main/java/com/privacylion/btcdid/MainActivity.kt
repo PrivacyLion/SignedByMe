@@ -1,577 +1,967 @@
 package com.privacylion.btcdid
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import com.privacylion.btcdid.ui.theme.BTC_DIDTheme
+import kotlinx.coroutines.*
 import org.json.JSONObject
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 
 class MainActivity : ComponentActivity() {
-
-    private fun hexToBytes(hex: String): ByteArray =
-        hex.trim().chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-
-    private fun sha256HexBytes(hex: String): String {
-        val md = java.security.MessageDigest.getInstance("SHA-256")
-        val hash = md.digest(hexToBytes(hex))
-        return hash.joinToString("") { "%02x".format(it) }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val mgr = DidWalletManager(applicationContext)
-        val activity = this
 
         setContent {
             BTC_DIDTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
+                SignedByMeApp(mgr)
+            }
+        }
+    }
+}
 
-                    // ---- UI state ----
-                    var stepCreateDone by remember { mutableStateOf(false) }
-                    var stepConnectDone by remember { mutableStateOf(false) }
-                    val clipboard = LocalClipboardManager.current
-                    var lastNonce by remember { mutableStateOf("") }
+@Composable
+fun SignedByMeApp(mgr: DidWalletManager) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
-                    var did by remember { mutableStateOf(mgr.getPublicDID() ?: "") }
-                    if (did.isNotEmpty()) stepCreateDone = true
+    // ===== State =====
+    var did by remember { mutableStateOf(mgr.getPublicDID() ?: "") }
+    var step1Complete by remember { mutableStateOf(did.isNotEmpty()) }
+    var step2Complete by remember { mutableStateOf(false) }
+    var step3Complete by remember { mutableStateOf(false) }
 
-                    // After "Prove Ownership", we either show signature or error here:
-                    var proveStatus by remember { mutableStateOf("") }
-                    // will hold claim JSON and signature after prove
-                    var lastClaimJson by remember { mutableStateOf("") }
-                    var lastSigHex by remember { mutableStateOf("") }
-                    var lastLoginId by remember { mutableStateOf("") }
-                    var lastPreimage by remember { mutableStateOf("") }
+    // Connect step state
+    var selectedWalletType by remember { mutableStateOf<String?>(null) }
+    var withdrawAddress by remember { mutableStateOf("") }
 
-                    // NEW: built PRP JSON
-                    var lastPrpJson by remember { mutableStateOf("") }
-                    var lastStwoJson by remember { mutableStateOf("") }
+    // Login/API state
+    var lastNonce by remember { mutableStateOf("") }
+    var lastLoginId by remember { mutableStateOf("") }
+    var lastPreimage by remember { mutableStateOf("") }
+    var lastClaimJson by remember { mutableStateOf("") }
+    var lastSigHex by remember { mutableStateOf("") }
+    var lastPrpJson by remember { mutableStateOf("") }
 
-                    // Diagnostics for Rust hashing demo:
-                    var input by remember { mutableStateOf("test") }
-                    var output by remember {
-                        mutableStateOf(NativeBridge.sha256Hex("test"))
-                    }
+    // UI state
+    var statusMessage by remember { mutableStateOf("") }
+    var showIdDialog by remember { mutableStateOf(false) }
+    var showVccResult by remember { mutableStateOf(false) }
+    var vccResult by remember { mutableStateOf("") }
+    var paymentResult by remember { mutableStateOf("") }
+    var isLoading by remember { mutableStateOf(false) }
 
-                    Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState())) {
+    // Background gradient
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(
+                        Color(0xFFF7FAFF),
+                        Color(0xFFF0F5FE),
+                        Color(0xFFE6F0FC)
+                    )
+                )
+            )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(24.dp)
+        ) {
+            // ===== Header =====
+            Text(
+                text = "SignedByMe",
+                fontSize = 36.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
+                style = LocalTextStyle.current.copy(
+                    brush = Brush.linearGradient(
+                        colors = listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6))
+                    )
+                )
+            )
 
-                        // ---- Header ----
-                        Text(
-                            "BTC_DID Android",
-                            style = MaterialTheme.typography.titleLarge
-                        )
-                        Spacer(Modifier.height(12.dp))
-
-                        Text(NativeBridge.helloFromRust())
-                        Spacer(Modifier.height(4.dp))
-
-                        // keystore health line from DidWalletManager
-                        Text(
-                            mgr.keystoreInfo(),
-                            style = MaterialTheme.typography.bodySmall
-                        )
-
-                        Text("Oracle pubkey: " + NativeBridge.oraclePubkeyHex(), style = MaterialTheme.typography.bodySmall)
-
-                        Text("Oracle sig: " + NativeBridge.oracleSignOutcome("paid=true"), style = MaterialTheme.typography.bodySmall)
-
-                        Spacer(Modifier.height(16.dp))
-
-                        // ===== Card 1: CREATE =====
-                        Card(modifier = Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(16.dp)) {
-                                Text(
-                                    "1) Create",
-                                    style = MaterialTheme.typography.titleMedium
-                                )
-                                Spacer(Modifier.height(8.dp))
-
-                                // current DID text
-                                Text(
-                                    if (did.isEmpty()) "(no DID yet)"
-                                    else did
-                                )
-
-                                Spacer(Modifier.height(8.dp))
-
-                                Row {
-                                    Button(onClick = {
-                                        // Create a brand new DID (generate + wrap)
-                                        proveStatus = "" // clear prove status
-                                        did = mgr.createDid()
-                                        stepCreateDone = true
-                                    }) {
-                                        Text("Create DID (hardware-wrapped)")
-                                    }
-
-                                    Spacer(Modifier.width(8.dp))
-
-                                    Button(onClick = {
-                                        // Re-read what's stored
-                                        proveStatus = ""
-                                        did = mgr.getPublicDID() ?: ""
-                                        stepCreateDone = did.isNotEmpty()
-                                    }) {
-                                        Text("Show DID")
-                                    }
-                                }
-                            }
+            // ===== Step 1: Create =====
+            StepCard(
+                stepNumber = 1,
+                title = "Create",
+                isComplete = step1Complete,
+                isEnabled = true
+            ) {
+                if (!step1Complete) {
+                    Text(
+                        "To Create a Signature press the button below.",
+                        color = Color.Gray,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    GradientButton(
+                        text = "Generate",
+                        colors = listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6)),
+                        onClick = {
+                            did = mgr.createDid()
+                            step1Complete = true
                         }
+                    )
+                } else {
+                    CompletedStepContent(
+                        message = "Tap (i) to view your Signature",
+                        onInfoClick = { showIdDialog = true }
+                    )
+                }
+            }
 
-                        Spacer(Modifier.height(12.dp))
+            // ===== Step 2: Connect =====
+            StepCard(
+                stepNumber = 2,
+                title = "Connect",
+                isComplete = step2Complete,
+                isEnabled = step1Complete
+            ) {
+                if (!step2Complete) {
+                    Text(
+                        "Pick an option to Connect",
+                        fontSize = 16.sp,
+                        modifier = Modifier.fillMaxWidth()
+                    )
 
-                        // ===== Card 2: CONNECT =====
-                        Card(modifier = Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(16.dp)) {
-                                Text(
-                                    "2) Connect",
-                                    style = MaterialTheme.typography.titleMedium
-                                )
-                                Spacer(Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                                Text(
-                                    if (!stepCreateDone)
-                                        "Select wallet (stub for now) — finish Create first"
-                                    else
-                                        "Select wallet (stub for now)"
-                                )
-
-                                Spacer(Modifier.height(8.dp))
-
-                                Button(
-                                    onClick = {
-                                        if (stepCreateDone) {
-                                            proveStatus = ""
-                                            stepConnectDone = true
-                                        }
-                                    },
-                                    enabled = stepCreateDone
-                                ) {
-                                    Text("Mark Connected")
-                                }
-
-                                Spacer(Modifier.height(8.dp))
-                                Button(
-                                    onClick = {
-                                        proveStatus = "Fetching nonce..."
-                                        Thread {
-                                            try {
-                                                val res = mgr.startLogin()
-                                                activity.runOnUiThread {
-                                                    lastLoginId = res.loginId
-                                                    lastNonce = res.nonce
-                                                    proveStatus = "Nonce ready."
-                                                }
-                                            } catch (t: Throwable) {
-                                                activity.runOnUiThread {
-                                                    proveStatus = "Nonce error: ${t.message}"
-                                                }
-                                            }
-                                        }.start()
-                                    },
-                                    enabled = stepCreateDone
-                                ) { Text("Fetch Nonce") }
-
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    text = if (lastNonce.isEmpty()) "Nonce: (none)"
-                                    else "Nonce: ${lastNonce}",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    text = if (lastLoginId.isEmpty()) "Login ID: (none)"
-                                    else "Login ID: $lastLoginId",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-
-                                Spacer(Modifier.height(8.dp))
-                                Button(
-                                    onClick = {
-                                        if (lastLoginId.isEmpty()) {
-                                            proveStatus = "No login_id yet — tap Fetch Nonce first."
-                                            return@Button
-                                        }
-                                        clipboard.setText(AnnotatedString(lastLoginId))
-                                        proveStatus = "Login ID copied."
-                                    },
-                                    enabled = lastLoginId.isNotEmpty()
-                                ) { Text("Copy Login ID") }
-
-                                Spacer(Modifier.height(8.dp))
-                                Button(
-                                    onClick = {
-                                        if (lastLoginId.isBlank()) {
-                                            proveStatus = "No login_id yet — tap Fetch Nonce first."
-                                            return@Button
-                                        }
-                                        proveStatus = "Checking status..."
-                                        Thread {
-                                            try {
-                                                val body = mgr.fetchLoginStatus(lastLoginId)
-                                                runOnUiThread { proveStatus = "Status: $body" }
-                                            } catch (t: Throwable) {
-                                                runOnUiThread { proveStatus = "Status error: ${t.message}" }
-                                            }
-                                        }.start()
-                                    },
-                                    enabled = stepCreateDone
-                                ) { Text("Check Status") }
-
-                                Spacer(Modifier.height(8.dp))
-                                Button(
-                                    onClick = {
-                                        if (lastLoginId.isBlank()) {
-                                            proveStatus = "No login_id yet — tap Fetch Nonce first."
-                                            return@Button
-                                        }
-                                        // make a random 32-byte hex preimage
-                                        val bytes = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
-                                        val preimage = bytes.joinToString("") { "%02x".format(it) }
-
-                                        proveStatus = "Settling (demo)…"
-                                        Thread {
-                                            try {
-                                                mgr.settleLoginDemo(lastLoginId, preimage)
-                                                runOnUiThread {
-                                                    lastPreimage = preimage
-                                                    proveStatus = "Settled. Preimage saved."
-                                                }
-                                            } catch (t: Throwable) {
-                                                runOnUiThread { proveStatus = "Settle error: ${t.message}" }
-                                            }
-                                        }.start()
-                                    },
-                                    enabled = stepCreateDone
-                                ) { Text("Settle (demo)") }
-
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    text = if (lastPreimage.isEmpty()) "Paid: false"
-                                    else "Paid: true",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                        }
-
-                        Spacer(Modifier.height(12.dp))
-
-                        // ===== Card 3: PROVE =====
-                        Card(modifier = Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(16.dp)) {
-                                Text(
-                                    "3) Prove",
-                                    style = MaterialTheme.typography.titleMedium
-                                )
-                                Spacer(Modifier.height(8.dp))
-
-                                val proveMessage = when {
-                                    !stepCreateDone -> "Create a DID first"
-                                    !stepConnectDone -> "Connect a wallet first"
-                                    lastPreimage.isEmpty() -> "Awaiting payment (need preimage)"
-                                    proveStatus.isEmpty() -> "Ready to build & sign claim"
-                                    else -> proveStatus
-                                }
-                                Text(proveMessage)
-
-                                Spacer(Modifier.height(8.dp))
-
-                                Button(
-                                    enabled = stepCreateDone && stepConnectDone && lastPreimage.isNotEmpty(),
-                                    onClick = {
-                                        // Build the ownership claim JSON (includes paid=true + preimage fields)
-                                        val claimJson = mgr.buildOwnershipClaimJson(
-                                            did = did,
-                                            nonce = lastNonce.ifEmpty { "android-${System.currentTimeMillis()}" },
-                                            walletType = "custodial",
-                                            withdrawTo = "lnbc1mockpreimage",
-                                            preimage = lastPreimage
-                                        )
-
-                                        val status = try {
-                                            if (did.isEmpty()) {
-                                                proveStatus = "Error: no DID available"
-                                                return@Button
-                                            }
-
-                                            // Sign the claim
-                                            val sigHex = mgr.signOwnershipClaim(claimJson)
-
-                                            // Derive preimage_sha256 for PRP (from lastPreimage hex)
-                                            val preHex = lastPreimage.trim()
-                                            val preBytes = preHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-                                            val md = java.security.MessageDigest.getInstance("SHA-256")
-                                            val preShaHex = md.digest(preBytes).joinToString("") { "%02x".format(it) }
-
-                                            // Generate an STWO equality proof that sha256(preimage) equals preimage_sha256
-                                            val stwoJson = mgr.generateStwoProof(
-                                                "sha256_eq",
-                                                preShaHex,  // left side
-                                                preShaHex   // right side (equal -> proof ok:true)
-                                            )
-                                            // Show it in the existing STWO output area
-                                            output = stwoJson
-
-                                            // Build PRP JSON (use nonce as a fallback loginId if none stored)
-                                            lastPrpJson = mgr.buildPrpJson(
-                                                loginId = lastLoginId.ifEmpty { lastNonce.ifEmpty { "android-${System.currentTimeMillis()}" } },
-                                                did = did,
-                                                preimageSha256Hex = preShaHex
-                                                // amount/user/operator/oracle use defaults for now
-                                            )
-
-                                            // Save for UI
-                                            lastClaimJson = claimJson
-                                            lastSigHex = sigHex
-
-                                            "Success: claim signed + PRP prepared"
-                                        } catch (t: Throwable) {
-                                            "Error during prove: ${t.message}"
-                                        }
-
-                                        proveStatus = status
-                                    }
-                                ) {
-                                    Text("Prove Ownership (requires paid)")
-                                }
-
-                                Spacer(Modifier.height(12.dp))
-
-                                Button(
-                                    enabled = lastClaimJson.isNotEmpty() && lastSigHex.isNotEmpty(),
-                                    onClick = {
-                                        try {
-                                            val bundle = JSONObject()
-                                                .put("schema", "pl/bundle/1")
-                                                .put("type", "ownership_claim_bundle")
-                                                .put("did", did)
-                                                .put("sig_alg", "ES256K")
-                                                .put("pubkey_hex", did.removePrefix("did:btcr:"))
-                                                .put("claim", JSONObject(lastClaimJson))
-                                                .put("signature_der_hex", lastSigHex)
-                                            if (lastPrpJson.isNotEmpty()) {
-                                                bundle.put("prp", JSONObject(lastPrpJson))
-                                            }
-                                            clipboard.setText(AnnotatedString(bundle.toString()))
-                                            proveStatus = "Bundle copied."
-                                        } catch (t: Throwable) {
-                                            proveStatus = "Bundle error: ${t.message}"
-                                        }
-                                    }
-                                ) { Text("Share bundle (demo)") }
-
-                                Button(
-                                    enabled = lastLoginId.isNotEmpty() && lastClaimJson.isNotEmpty() && lastSigHex.isNotEmpty() && lastPrpJson.isNotEmpty(),
-
-                                    onClick = {
-                                        try {
-                                            // Build the same bundle we copy to clipboard, now including STWO (if present)
-                                            val bundle = JSONObject()
-                                                .put("schema", "pl/bundle/1")
-                                                .put("type", "ownership_claim_bundle")
-                                                .put("did", did)
-                                                .put("sig_alg", "ES256K")
-                                                .put("pubkey_hex", did.removePrefix("did:btcr:"))
-                                                .put("claim", JSONObject(lastClaimJson))
-                                                .put("signature_der_hex", lastSigHex).apply {
-                                                    if (lastPrpJson.isNotEmpty()) {
-                                                        put("prp", JSONObject(lastPrpJson))
-                                                    }
-                                                    if (lastStwoJson.isNotEmpty()) {
-                                                        put("stwo_proof", JSONObject(lastStwoJson))
-                                                    }
-                                                }
-
-                                            proveStatus = "Sending bundle…"
-                                            Thread {
-                                                try {
-                                                    val url = java.net.URL("https://api.beta.privacy-lion.com/v1/login/complete")
-                                                    val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
-                                                        requestMethod = "POST"
-                                                        connectTimeout = 8000
-                                                        readTimeout = 8000
-                                                        doOutput = true
-                                                        setRequestProperty("Content-Type", "application/json")
-                                                        setRequestProperty("Accept", "application/json")
-                                                    }
-
-                                                    // Wrap with login_id for the API
-                                                    val payload = JSONObject()
-                                                        .put("login_id", lastLoginId)
-                                                        .put("did_sig", JSONObject()
-                                                            .put("did", did)
-                                                            .put("pubkey_hex", did.removePrefix("did:btcr:"))
-                                                            .put("message", lastClaimJson)
-                                                            .put("signature_hex", lastSigHex)
-                                                            .put("alg", "ES256K")
-                                                        )
-                                                        .put("bundle", bundle)
-                                                        .toString()
-
-                                                    conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
-
-                                                    val code = conn.responseCode
-                                                    val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
-                                                        .bufferedReader(Charsets.UTF_8).use { it.readText() }
-
-                                                    // Immediately fetch status for this login
-                                                    val statusUrl = java.net.URL("https://api.beta.privacy-lion.com/v1/login/status/$lastLoginId")
-                                                    val statusConn = (statusUrl.openConnection() as java.net.HttpURLConnection).apply {
-                                                        requestMethod = "GET"
-                                                        connectTimeout = 8000
-                                                        readTimeout = 8000
-                                                        setRequestProperty("Accept", "application/json")
-                                                    }
-                                                    val statusCode = statusConn.responseCode
-                                                    val statusBody = (if (statusCode in 200..299) statusConn.inputStream else statusConn.errorStream)
-                                                        .bufferedReader(Charsets.UTF_8).use { it.readText() }
-
-                                                    runOnUiThread {
-                                                        proveStatus = "Complete: HTTP $code\n$body\n\nStatus: HTTP $statusCode\n$statusBody"
-                                                    }
-
-                                                } catch (t: Throwable) {
-                                                    runOnUiThread { proveStatus = "Complete error: ${t.message}" }
-                                                }
-
-                                            }.start()
-                                        } catch (t: Throwable) {
-                                            proveStatus = "Bundle build error: ${t.message}"
-                                        }
-                                    }
-                                ) { Text("Send bundle (demo)") }
-
-                                Spacer(Modifier.height(12.dp))
-
-                                if (lastClaimJson.isNotEmpty() && lastSigHex.isNotEmpty()) {
-                                    Text(
-                                        "Claim JSON:",
-                                        style = MaterialTheme.typography.labelMedium
-                                    )
-                                    Text(
-                                        lastClaimJson,
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-
-                                    Spacer(Modifier.height(8.dp))
-
-                                    Text(
-                                        "Signature (DER hex):",
-                                        style = MaterialTheme.typography.labelMedium
-                                    )
-                                    Text(
-                                        lastSigHex,
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                }
-
-                                if (lastPrpJson.isNotEmpty()) {
-                                    Spacer(Modifier.height(12.dp))
-                                    Text(
-                                        "PRP JSON:",
-                                        style = MaterialTheme.typography.labelMedium
-                                    )
-                                    Text(
-                                        lastPrpJson,
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-
-                                    Spacer(Modifier.height(8.dp))
-                                    Button(onClick = {
-                                        clipboard.setText(AnnotatedString(lastPrpJson))
-                                        proveStatus = "PRP copied."
-                                    }) {
-                                        Text("Copy PRP JSON")
-                                    }
-                                }
-                            }
-                        }
-
-                        Spacer(Modifier.height(24.dp))
-
-                        // ===== Rust hashing demo =====
-                        OutlinedTextField(
-                            value = input,
-                            onValueChange = { input = it },
-                            label = { Text("Input to hash") },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-
-                        Spacer(Modifier.height(8.dp))
-
-                        Button(onClick = {
-                            // Hash whatever the user typed, then prove equality (should return ok:true)
-                            val h = NativeBridge.sha256Hex(input)
-                            val resp = mgr.generateStwoProof(
-                                "sha256_eq",
-                                h,  // input_hash_hex
-                                h   // output_hash_hex (same -> proof passes)
-                            )
-                            lastStwoJson = resp
-                            output = resp
-                        }) {
-                            Text("Run STWO proof demo")
-                        }
-
-                        Spacer(Modifier.height(8.dp))
-                        Text("STWO output:", style = MaterialTheme.typography.labelMedium)
-                        Text(
-                            output,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-
-                        Spacer(Modifier.height(8.dp))
-
-                        Button(onClick = {
-                            val outcome = "paid=true"
-                            val payoutsJson = """{"user":90,"operator":10}"""
-                            val oracleJson = """{"name":"local_oracle","pubkey":"deadbeef"}"""
-                            val resp = mgr.createDlcContract(outcome, payoutsJson, oracleJson)
-                            output = resp
-                        }) {
-                            Text("Create DLC (demo)")
-                        }
-
-                        Spacer(Modifier.height(8.dp))
-
-                        Button(onClick = {
-                            val outcome = "paid=true"
-                            val resp = mgr.signDlcOutcome(outcome)
-                            output = resp
-                        }) {
-                            Text("Sign DLC (demo)")
-                        }
-
-                        Spacer(Modifier.height(12.dp))
-                        Button(onClick = {
-                            // wipe all transient state so you can start a clean flow
+                    // Start over chip
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        StartOverChip {
+                            selectedWalletType = null
+                            withdrawAddress = ""
                             lastNonce = ""
                             lastLoginId = ""
                             lastPreimage = ""
-                            lastClaimJson = ""
-                            lastSigHex = ""
-                            lastPrpJson = ""
-                            proveStatus = ""
-                            // keep the DID; if you want to reset DID too, uncomment:
-                            // did = ""
-                            // stepCreateDone = false
-                            stepConnectDone = false
-                        }) {
-                            Text("Reset session")
+                            step2Complete = false
                         }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Cash App option
+                    CashAppCard(
+                        withdrawAddress = withdrawAddress,
+                        onAddressChange = { withdrawAddress = it },
+                        onPaste = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            val clip = clipboard.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
+                            if (clip.isNotEmpty()) {
+                                withdrawAddress = clip
+                                selectedWalletType = "cashapp"
+                            }
+                        },
+                        onScanQR = {
+                            Toast.makeText(context, "QR Scanner coming soon", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Custodial Wallet button
+                    GradientButton(
+                        text = "Custodial Wallet",
+                        pillText = "intermediate",
+                        colors = listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6)),
+                        onClick = {
+                            selectedWalletType = "custodial"
+                            step2Complete = true
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Non-Custodial Wallet button
+                    GradientButton(
+                        text = "Non-Custodial Wallet",
+                        pillText = "hard",
+                        colors = listOf(Color(0xFF6366F1), Color(0xFF8B5CF6)),
+                        onClick = {
+                            selectedWalletType = "non-custodial"
+                            step2Complete = true
+                        }
+                    )
+
+                    // Connect via API button (after selecting wallet type)
+                    if (selectedWalletType != null && withdrawAddress.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        GradientButton(
+                            text = "Connect & Fetch Nonce",
+                            colors = listOf(Color(0xFF10B981), Color(0xFF059669)),
+                            onClick = {
+                                scope.launch(Dispatchers.IO) {
+                                    try {
+                                        val res = mgr.startLogin()
+                                        withContext(Dispatchers.Main) {
+                                            lastLoginId = res.loginId
+                                            lastNonce = res.nonce
+                                            step2Complete = true
+                                            statusMessage = "Connected! Nonce received."
+                                        }
+                                    } catch (e: Exception) {
+                                        withContext(Dispatchers.Main) {
+                                            statusMessage = "Error: ${e.message}"
+                                        }
+                                    }
+                                }
+                            }
+                        )
+                    }
+                } else {
+                    // Connected state
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        StartOverChip {
+                            selectedWalletType = null
+                            withdrawAddress = ""
+                            lastNonce = ""
+                            lastLoginId = ""
+                            lastPreimage = ""
+                            step2Complete = false
+                            step3Complete = false
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    CompletedStepContent(
+                        message = "Wallet: ${selectedWalletType ?: "Connected"}\n${if (withdrawAddress.isNotEmpty()) withdrawAddress.take(20) + "..." else ""}",
+                        onInfoClick = null
+                    )
+
+                    // Show login ID if we have one
+                    if (lastLoginId.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "Login ID: ${lastLoginId.take(16)}...",
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = Color.Gray
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Settle (demo) button
+                        if (lastPreimage.isEmpty()) {
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch(Dispatchers.IO) {
+                                        try {
+                                            val bytes = ByteArray(32)
+                                            java.security.SecureRandom().nextBytes(bytes)
+                                            val preimage = bytes.joinToString("") { "%02x".format(it) }
+                                            mgr.settleLoginDemo(lastLoginId, preimage)
+                                            withContext(Dispatchers.Main) {
+                                                lastPreimage = preimage
+                                                statusMessage = "Payment settled (demo)"
+                                            }
+                                        } catch (e: Exception) {
+                                            withContext(Dispatchers.Main) {
+                                                statusMessage = "Settle error: ${e.message}"
+                                            }
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Settle Payment (demo)")
+                            }
+                        } else {
+                            StatusPill("Payment Settled", Color(0xFF10B981))
+                        }
+                    }
+                }
+            }
+
+            // ===== Step 3: Prove =====
+            StepCard(
+                stepNumber = 3,
+                title = "Prove",
+                isComplete = step3Complete,
+                isEnabled = step1Complete && step2Complete
+            ) {
+                Text(
+                    "Press the button below to Prove your Signature and create your Verified Content Claim",
+                    fontSize = 14.sp,
+                    color = Color.Gray,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                GradientButton(
+                    text = "Generate Proof",
+                    colors = listOf(Color(0xFFEF4444), Color(0xFFF97316)),
+                    enabled = lastPreimage.isNotEmpty() || selectedWalletType != null,
+                    onClick = {
+                        isLoading = true
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                // Generate demo preimage if we don't have one
+                                var preimage = lastPreimage
+                                if (preimage.isEmpty()) {
+                                    val bytes = ByteArray(32)
+                                    java.security.SecureRandom().nextBytes(bytes)
+                                    preimage = bytes.joinToString("") { "%02x".format(it) }
+                                    withContext(Dispatchers.Main) { lastPreimage = preimage }
+                                }
+
+                                // Build ownership claim
+                                val claimJson = mgr.buildOwnershipClaimJson(
+                                    did = did,
+                                    nonce = lastNonce.ifEmpty { "android-${System.currentTimeMillis()}" },
+                                    walletType = selectedWalletType ?: "custodial",
+                                    withdrawTo = withdrawAddress.ifEmpty { "lnbc1demo" },
+                                    preimage = preimage
+                                )
+
+                                // Sign the claim
+                                val sigHex = mgr.signOwnershipClaim(claimJson)
+
+                                // Derive preimage_sha256
+                                val preBytes = preimage.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+                                val md = java.security.MessageDigest.getInstance("SHA-256")
+                                val preShaHex = md.digest(preBytes).joinToString("") { "%02x".format(it) }
+
+                                // Build PRP
+                                val prpJson = mgr.buildPrpJson(
+                                    loginId = lastLoginId.ifEmpty { "android-${System.currentTimeMillis()}" },
+                                    did = did,
+                                    preimageSha256Hex = preShaHex
+                                )
+
+                                // Generate VCC (mock for now)
+                                val vcc = JSONObject().apply {
+                                    put("created_by", did)
+                                    put("content_hash", "sha256_demo_${System.currentTimeMillis()}")
+                                    put("ln_address", withdrawAddress.ifEmpty { "demo@wallet.com" })
+                                    put("timestamp", System.currentTimeMillis())
+                                }.toString()
+
+                                // Mock payment result
+                                val payment = JSONObject().apply {
+                                    put("to", withdrawAddress.ifEmpty { "demo@wallet.com" })
+                                    put("amount_sats", 100)
+                                    put("preimage", preimage.take(16) + "...")
+                                    put("status", "completed")
+                                }.toString()
+
+                                withContext(Dispatchers.Main) {
+                                    lastClaimJson = claimJson
+                                    lastSigHex = sigHex
+                                    lastPrpJson = prpJson
+                                    vccResult = vcc
+                                    paymentResult = payment
+                                    step3Complete = true
+                                    showVccResult = true
+                                    isLoading = false
+                                    statusMessage = "Proof generated!"
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    statusMessage = "Error: ${e.message}"
+                                    isLoading = false
+                                }
+                            }
+                        }
+                    }
+                )
+
+                if (isLoading) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    CircularProgressIndicator(
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    )
+                }
+
+                // Show VCC result
+                if (showVccResult && vccResult.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // VCC Card
+                    StatusPill("Verified Content Claim", Color(0xFF10B981))
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // VCC preview
+                    Text(
+                        text = vccResult.take(60) + "...",
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = Color.Gray,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFFF3F4F6), RoundedCornerShape(8.dp))
+                            .padding(12.dp)
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Copy / Share buttons
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("VCC", vccResult))
+                                Toast.makeText(context, "Copied!", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("📋 Copy")
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                val sendIntent = Intent().apply {
+                                    action = Intent.ACTION_SEND
+                                    putExtra(Intent.EXTRA_TEXT, vccResult)
+                                    type = "text/plain"
+                                }
+                                context.startActivity(Intent.createChooser(sendIntent, "Share VCC"))
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Share")
+                        }
+                    }
+
+                    // Payment status
+                    if (paymentResult.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        StatusPill("Payment Completed", Color(0xFF10B981))
+                    }
+
+                    // Send bundle button
+                    if (lastLoginId.isNotEmpty() && lastClaimJson.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        GradientButton(
+                            text = "Send Bundle to API",
+                            colors = listOf(Color(0xFF10B981), Color(0xFF059669)),
+                            onClick = {
+                                scope.launch(Dispatchers.IO) {
+                                    try {
+                                        val bundle = JSONObject()
+                                            .put("schema", "pl/bundle/1")
+                                            .put("type", "ownership_claim_bundle")
+                                            .put("did", did)
+                                            .put("sig_alg", "ES256K")
+                                            .put("pubkey_hex", did.removePrefix("did:btcr:"))
+                                            .put("claim", JSONObject(lastClaimJson))
+                                            .put("signature_der_hex", lastSigHex)
+                                            .put("prp", JSONObject(lastPrpJson))
+
+                                        val url = java.net.URL("https://api.beta.privacy-lion.com/v1/login/complete")
+                                        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+                                            requestMethod = "POST"
+                                            connectTimeout = 8000
+                                            readTimeout = 8000
+                                            doOutput = true
+                                            setRequestProperty("Content-Type", "application/json")
+                                        }
+
+                                        val payload = JSONObject()
+                                            .put("login_id", lastLoginId)
+                                            .put("did_sig", JSONObject()
+                                                .put("did", did)
+                                                .put("pubkey_hex", did.removePrefix("did:btcr:"))
+                                                .put("message", lastClaimJson)
+                                                .put("signature_hex", lastSigHex)
+                                                .put("alg", "ES256K")
+                                            )
+                                            .put("bundle", bundle)
+                                            .toString()
+
+                                        conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+
+                                        val code = conn.responseCode
+                                        val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                                            .bufferedReader(Charsets.UTF_8).use { it.readText() }
+
+                                        withContext(Dispatchers.Main) {
+                                            statusMessage = "Sent! HTTP $code"
+                                            Toast.makeText(context, "Bundle sent: HTTP $code", Toast.LENGTH_LONG).show()
+                                        }
+                                    } catch (e: Exception) {
+                                        withContext(Dispatchers.Main) {
+                                            statusMessage = "Send error: ${e.message}"
+                                        }
+                                    }
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+
+            // Status message
+            if (statusMessage.isNotEmpty()) {
+                Text(
+                    text = statusMessage,
+                    fontSize = 12.sp,
+                    color = Color.Gray,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center
+                )
+            }
+
+            // Reset button
+            OutlinedButton(
+                onClick = {
+                    lastNonce = ""
+                    lastLoginId = ""
+                    lastPreimage = ""
+                    lastClaimJson = ""
+                    lastSigHex = ""
+                    lastPrpJson = ""
+                    vccResult = ""
+                    paymentResult = ""
+                    statusMessage = ""
+                    step2Complete = false
+                    step3Complete = false
+                    showVccResult = false
+                    selectedWalletType = null
+                    withdrawAddress = ""
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Reset Session")
+            }
+
+            Spacer(modifier = Modifier.height(40.dp))
+        }
+    }
+
+    // ===== DID Info Dialog =====
+    if (showIdDialog) {
+        DIDInfoDialog(
+            did = did,
+            onDismiss = { showIdDialog = false },
+            onRegenerate = {
+                did = mgr.regenerateKeyPair()
+                step1Complete = true
+                step2Complete = false
+                step3Complete = false
+            },
+            onCopy = {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("DID", did))
+                Toast.makeText(context, "Copied!", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+}
+
+// ===== Components =====
+
+@Composable
+fun StepCard(
+    stepNumber: Int,
+    title: String,
+    isComplete: Boolean,
+    isEnabled: Boolean,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val alphaValue = if (isEnabled) 1f else 0.6f
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(alphaValue)
+            .shadow(
+                elevation = if (isEnabled) 12.dp else 4.dp,
+                shape = RoundedCornerShape(24.dp),
+                ambientColor = Color.Black.copy(alpha = 0.08f)
+            ),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.85f))
+    ) {
+        Column(modifier = Modifier.padding(24.dp)) {
+            // Header
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Step badge
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (isComplete) {
+                                Brush.linearGradient(listOf(Color(0xFF10B981), Color(0xFF34D399)))
+                            } else if (isEnabled) {
+                                Brush.linearGradient(listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6)))
+                            } else {
+                                Brush.linearGradient(listOf(Color.Gray, Color.Gray))
+                            }
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isComplete) {
+                        Icon(
+                            Icons.Default.Check,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    } else {
+                        Text(
+                            text = "$stepNumber",
+                            color = Color.White,
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(16.dp))
+
+                Text(
+                    text = title,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isEnabled) Color.Black else Color.Gray
+                )
+            }
+
+            // Content
+            if (isEnabled || isComplete) {
+                Spacer(modifier = Modifier.height(20.dp))
+                content()
+            }
+        }
+    }
+}
+
+@Composable
+fun GradientButton(
+    text: String,
+    colors: List<Color>,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    pillText: String? = null
+) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier
+            .fillMaxWidth()
+            .height(56.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+        contentPadding = PaddingValues(0.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    if (enabled) Brush.linearGradient(colors)
+                    else Brush.linearGradient(listOf(Color.Gray, Color.Gray))
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = text,
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                if (pillText != null) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    LevelPill(pillText, Color(0xFF10B981))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun LevelPill(text: String, color: Color) {
+    Text(
+        text = text,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = color,
+        modifier = Modifier
+            .background(color.copy(alpha = 0.15f), RoundedCornerShape(50))
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+    )
+}
+
+@Composable
+fun StatusPill(text: String, color: Color) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color.White, RoundedCornerShape(12.dp))
+            .border(1.dp, Color.Black.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Default.CheckCircle,
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = text,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 16.sp
+        )
+    }
+}
+
+@Composable
+fun StartOverChip(onClick: () -> Unit) {
+    TextButton(onClick = onClick) {
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(Color(0xFF10B981).copy(alpha = 0.12f))
+                .border(1.dp, Color(0xFF10B981).copy(alpha = 0.45f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Default.Refresh,
+                contentDescription = null,
+                tint = Color(0xFF10B981),
+                modifier = Modifier.size(14.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            "Start over",
+            color = Color(0xFF10B981),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+@Composable
+fun CompletedStepContent(
+    message: String,
+    onInfoClick: (() -> Unit)?
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color.White.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+            .border(1.dp, Color.Gray.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = message,
+            fontSize = 14.sp,
+            fontFamily = FontFamily.Monospace,
+            modifier = Modifier.weight(1f)
+        )
+        if (onInfoClick != null) {
+            IconButton(onClick = onInfoClick) {
+                Icon(
+                    Icons.Default.Info,
+                    contentDescription = "Info",
+                    tint = Color(0xFF3B82F6)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun CashAppCard(
+    withdrawAddress: String,
+    onAddressChange: (String) -> Unit,
+    onPaste: () -> Unit,
+    onScanQR: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.6f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("⚡", fontSize = 24.sp)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Cash App", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.width(8.dp))
+                LevelPill("easy", Color(0xFF10B981))
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                "Open Cash App → Bitcoin → Deposit → show QR. Scan it or paste the address.",
+                fontSize = 12.sp,
+                color = Color.Gray
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(
+                    onClick = onScanQR,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6))
+                ) {
+                    Text("📷 Scan QR")
+                }
+
+                OutlinedButton(
+                    onClick = onPaste,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("📋 Paste")
+                }
+            }
+
+            if (withdrawAddress.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = withdrawAddress,
+                    onValueChange = onAddressChange,
+                    label = { Text("Withdraw To") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun DIDInfoDialog(
+    did: String,
+    onDismiss: () -> Unit,
+    onRegenerate: () -> Unit,
+    onCopy: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            shape = RoundedCornerShape(24.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "Your Signature",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // QR Code placeholder (simple text representation for now)
+                Box(
+                    modifier = Modifier
+                        .size(200.dp)
+                        .background(Color.White, RoundedCornerShape(8.dp))
+                        .border(1.dp, Color.Gray, RoundedCornerShape(8.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    // Simple visual representation
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("📱", fontSize = 48.sp)
+                        Text("QR Code", fontSize = 12.sp, color = Color.Gray)
+                        Text(did.take(8) + "...", fontSize = 10.sp, color = Color.Gray)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Truncated DID
+                Text(
+                    text = "${did.take(12)}...${did.takeLast(6)}",
+                    fontSize = 14.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = Color.Gray
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Full DID (scrollable)
+                Text(
+                    text = did,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 100.dp)
+                        .verticalScroll(rememberScrollState())
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(onClick = onCopy) {
+                        Text("📋 Copy ID")
+                    }
+
+                    Button(
+                        onClick = {
+                            onRegenerate()
+                            onDismiss()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444))
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Regenerate")
                     }
                 }
             }
