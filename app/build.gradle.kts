@@ -9,22 +9,39 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.privacylion.btcdid"
+        applicationId = "com.privacylion.signedby.me"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        
+        // Keep only necessary ABIs
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
+    }
+
+    signingConfigs {
+        create("release") {
+            // TODO: Configure before release build
+            // storeFile = file("keystore.jks")
+            // storePassword = System.getenv("KEYSTORE_PASSWORD")
+            // keyAlias = "signedby"
+            // keyPassword = System.getenv("KEY_PASSWORD")
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {

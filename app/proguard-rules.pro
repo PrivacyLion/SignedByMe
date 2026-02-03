@@ -5,17 +5,28 @@
 # For more details, see
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Keep line numbers for crash reports
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# ===== JNI / Native Bridge =====
+# Keep all native methods and the NativeBridge object
+-keep class com.privacylion.btcdid.NativeBridge { *; }
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# ===== Kotlin Serialization / JSON =====
+-keep class org.json.** { *; }
+
+# ===== DidWalletManager data classes =====
+-keep class com.privacylion.btcdid.DidWalletManager$LoginStart { *; }
+
+# ===== Compose =====
+# Compose handles most things, but keep these for safety
+-keep class androidx.compose.** { *; }
+-dontwarn androidx.compose.**
+
+# ===== Crypto / Keystore =====
+-keep class javax.crypto.** { *; }
+-keep class java.security.** { *; }

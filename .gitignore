@@ -22,6 +22,9 @@ captures/
 /.ksp/
 *.iml
 
-# NDK / JNI build outputs
-/app/src/main/jniLibs/
+# NDK / JNI build outputs (keep jniLibs for pre-built .so files)
+# /app/src/main/jniLibs/
 /app/src/main/obj/
+
+# Screenshots (don't commit to repo)
+/Screenshot*.png
