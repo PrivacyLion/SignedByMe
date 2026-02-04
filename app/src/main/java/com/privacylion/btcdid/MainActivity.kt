@@ -39,6 +39,9 @@ import androidx.compose.ui.res.painterResource
 import com.privacylion.btcdid.ui.theme.BTC_DIDTheme
 import kotlinx.coroutines.*
 import org.json.JSONObject
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
+import com.google.zxing.common.BitMatrix
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -682,6 +685,34 @@ private fun parseBitcoinAddress(raw: String): String {
     }
 }
 
+/**
+ * Generate a QR code bitmap from a string.
+ * @param content The content to encode in the QR code
+ * @param size The width/height of the QR code in pixels
+ * @return A Bitmap containing the QR code, or null if generation fails
+ */
+private fun generateQRCode(content: String, size: Int): Bitmap? {
+    return try {
+        val writer = QRCodeWriter()
+        val bitMatrix: BitMatrix = writer.encode(content, BarcodeFormat.QR_CODE, size, size)
+        
+        val width = bitMatrix.width
+        val height = bitMatrix.height
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565)
+        
+        for (x in 0 until width) {
+            for (y in 0 until height) {
+                bitmap.setPixel(x, y, if (bitMatrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
+            }
+        }
+        
+        bitmap
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
+    }
+}
+
 // ===== Components =====
 
 @Composable
@@ -974,6 +1005,11 @@ fun DIDInfoDialog(
     onRegenerate: () -> Unit,
     onCopy: () -> Unit
 ) {
+    // Generate QR code bitmap
+    val qrBitmap = remember(did) {
+        generateQRCode(did, 400)
+    }
+    
     Dialog(onDismissRequest = onDismiss) {
         Card(
             modifier = Modifier
@@ -993,19 +1029,23 @@ fun DIDInfoDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // QR Code placeholder (simple text representation for now)
+                // QR Code
                 Box(
                     modifier = Modifier
                         .size(200.dp)
                         .background(Color.White, RoundedCornerShape(8.dp))
-                        .border(1.dp, Color.Gray, RoundedCornerShape(8.dp)),
+                        .border(1.dp, Color.Gray, RoundedCornerShape(8.dp))
+                        .padding(8.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    // Simple visual representation
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("📱", fontSize = 48.sp)
-                        Text("QR Code", fontSize = 12.sp, color = Color.Gray)
-                        Text(did.take(8) + "...", fontSize = 10.sp, color = Color.Gray)
+                    if (qrBitmap != null) {
+                        Image(
+                            bitmap = qrBitmap.asImageBitmap(),
+                            contentDescription = "QR Code for DID",
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Text("Error generating QR", color = Color.Gray)
                     }
                 }
 
