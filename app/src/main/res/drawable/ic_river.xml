@@ -1,0 +1,23 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- River logo - Wave pattern in circle (River blue) -->
+    <path
+        android:fillColor="#0052FF"
+        android:pathData="M24,2C11.85,2 2,11.85 2,24s9.85,22 22,22 22,-9.85 22,-22S36.15,2 24,2z"/>
+    <!-- Stylized wave/river -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M10,24c0,0 3,-4 7,-4s4,4 7,4s3,-4 7,-4s4,4 7,4"
+        android:strokeWidth="3"
+        android:strokeColor="#FFFFFF"
+        android:fillColor="#00000000"/>
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M10,30c0,0 3,-4 7,-4s4,4 7,4s3,-4 7,-4s4,4 7,4"
+        android:strokeWidth="3"
+        android:strokeColor="#FFFFFF"
+        android:fillColor="#00000000"/>
+</vector>

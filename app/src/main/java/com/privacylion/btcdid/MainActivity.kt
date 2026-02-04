@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.res.painterResource
 import com.privacylion.btcdid.ui.theme.BTC_DIDTheme
 import kotlinx.coroutines.*
 import org.json.JSONObject
@@ -1265,7 +1266,7 @@ fun CustodialWalletDialog(
                 // Wallet provider buttons
                 WalletProviderButton(
                     name = "Strike",
-                    emoji = "⚡",
+                    iconResId = R.drawable.ic_strike,
                     description = "Lightning-native payments",
                     isSelected = selectedProvider == "Strike",
                     onClick = { selectedProvider = "Strike" }
@@ -1275,7 +1276,7 @@ fun CustodialWalletDialog(
                 
                 WalletProviderButton(
                     name = "River",
-                    emoji = "🌊",
+                    iconResId = R.drawable.ic_river,
                     description = "Bitcoin brokerage with Lightning",
                     isSelected = selectedProvider == "River",
                     onClick = { selectedProvider = "River" }
@@ -1285,7 +1286,7 @@ fun CustodialWalletDialog(
                 
                 WalletProviderButton(
                     name = "Coinbase",
-                    emoji = "🪙",
+                    iconResId = R.drawable.ic_coinbase,
                     description = "Popular crypto exchange",
                     isSelected = selectedProvider == "Coinbase",
                     onClick = { selectedProvider = "Coinbase" }
@@ -1350,7 +1351,7 @@ fun CustodialWalletDialog(
 @Composable
 fun WalletProviderButton(
     name: String,
-    emoji: String,
+    iconResId: Int,
     description: String,
     isSelected: Boolean,
     onClick: () -> Unit
@@ -1376,7 +1377,13 @@ fun WalletProviderButton(
                 .fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(emoji, fontSize = 28.sp)
+            Image(
+                painter = painterResource(id = iconResId),
+                contentDescription = name,
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+            )
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(

@@ -1,0 +1,14 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- Coinbase logo - Blue circle with white C -->
+    <path
+        android:fillColor="#0052FF"
+        android:pathData="M24,2C11.85,2 2,11.85 2,24s9.85,22 22,22 22,-9.85 22,-22S36.15,2 24,2z"/>
+    <!-- Coinbase "C" mark -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M24,14c-5.52,0 -10,4.48 -10,10s4.48,10 10,10c3.51,0 6.58,-1.81 8.37,-4.54l-3.83,-2.22C27.47,28.97 25.85,30 24,30c-3.31,0 -6,-2.69 -6,-6s2.69,-6 6,-6c1.85,0 3.47,1.03 4.54,2.76l3.83,-2.22C30.58,15.81 27.51,14 24,14z"/>
+</vector>
