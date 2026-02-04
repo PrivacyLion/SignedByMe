@@ -235,6 +235,21 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                         }
                     )
 
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Skip for simulator testing
+                    OutlinedButton(
+                        onClick = {
+                            withdrawAddress = "demo@getalby.com"
+                            selectedWalletType = "demo"
+                            step2Complete = true
+                            statusMessage = "Demo mode — skipped wallet connection"
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("🧪 Skip for Testing")
+                    }
+
                     // Connect via API button (after selecting wallet type)
                     if (selectedWalletType != null && withdrawAddress.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(16.dp))
