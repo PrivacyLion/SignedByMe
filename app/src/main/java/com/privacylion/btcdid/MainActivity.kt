@@ -194,26 +194,36 @@ fun SignedByMeApp(mgr: DidWalletManager) {
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Cash App option
-                    CashAppCard(
-                        withdrawAddress = withdrawAddress,
-                        onAddressChange = { withdrawAddress = it },
-                        onPaste = {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            val clip = clipboard.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
-                            if (clip.isNotEmpty()) {
-                                withdrawAddress = clip
+                    // Cash App button
+                    GradientButton(
+                        text = "Cash App",
+                        pillText = "easy",
+                        colors = listOf(Color(0xFF00D632), Color(0xFF00B828)),
+                        onClick = {
+                            // Deep link to Cash App
+                            val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://cash.app"))
+                            try {
+                                context.startActivity(intent)
                                 selectedWalletType = "cashapp"
+                                step2Complete = true
+                                withdrawAddress = "cashapp-user"
+                                statusMessage = "Cash App selected — complete setup in Cash App"
+                            } catch (e: Exception) {
+                                // Fallback to Play Store
+                                val playStoreIntent = Intent(Intent.ACTION_VIEW, 
+                                    android.net.Uri.parse("market://details?id=com.squareup.cash"))
+                                try {
+                                    context.startActivity(playStoreIntent)
+                                } catch (e2: Exception) {
+                                    Toast.makeText(context, "Could not open Cash App", Toast.LENGTH_SHORT).show()
+                                }
                             }
-                        },
-                        onScanQR = {
-                            showQRScanner = true
                         }
                     )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Custodial Wallet button
+                    // Custodial Wallet button (Strike)
                     GradientButton(
                         text = "Custodial Wallet",
                         pillText = "intermediate",
@@ -989,67 +999,7 @@ fun CompletedStepContent(
     }
 }
 
-@Composable
-fun CashAppCard(
-    withdrawAddress: String,
-    onAddressChange: (String) -> Unit,
-    onPaste: () -> Unit,
-    onScanQR: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.6f))
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("⚡", fontSize = 24.sp)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Cash App", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(modifier = Modifier.width(8.dp))
-                LevelPill("easy", Color(0xFF10B981))
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Text(
-                "Open Cash App → Bitcoin → Deposit → show QR. Scan it or paste the address.",
-                fontSize = 12.sp,
-                color = Color.Gray
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(
-                    onClick = onScanQR,
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6))
-                ) {
-                    Text("📷 Scan QR")
-                }
-
-                OutlinedButton(
-                    onClick = onPaste,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("📋 Paste")
-                }
-            }
-
-            if (withdrawAddress.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = withdrawAddress,
-                    onValueChange = onAddressChange,
-                    label = { Text("Withdraw To") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-            }
-        }
-    }
-}
+// CashAppCard removed - using direct deep link button instead
 
 @Composable
 fun DIDInfoDialog(
@@ -1365,7 +1315,7 @@ fun CustodialWalletDialog(
     onDismiss: () -> Unit,
     onSelect: (provider: String, address: String) -> Unit
 ) {
-    var selectedProvider by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
     var lightningAddress by remember { mutableStateOf("") }
     
     Dialog(onDismissRequest = onDismiss) {
@@ -1379,7 +1329,7 @@ fun CustodialWalletDialog(
                 modifier = Modifier.padding(24.dp)
             ) {
                 Text(
-                    "Connect Custodial Wallet",
+                    "Connect Strike",
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.fillMaxWidth(),
@@ -1389,7 +1339,7 @@ fun CustodialWalletDialog(
                 Spacer(modifier = Modifier.height(8.dp))
                 
                 Text(
-                    "Select your wallet provider",
+                    "Get your Lightning Address from Strike",
                     fontSize = 14.sp,
                     color = Color.Gray,
                     modifier = Modifier.fillMaxWidth(),
@@ -1398,56 +1348,57 @@ fun CustodialWalletDialog(
                 
                 Spacer(modifier = Modifier.height(20.dp))
                 
-                // Wallet provider buttons
-                WalletProviderButton(
-                    name = "Strike",
-                    iconResId = R.drawable.ic_strike,
-                    description = "Lightning-native payments",
-                    isSelected = selectedProvider == "Strike",
-                    onClick = { selectedProvider = "Strike" }
-                )
-                
-                Spacer(modifier = Modifier.height(12.dp))
-                
-                WalletProviderButton(
-                    name = "River",
-                    iconResId = R.drawable.ic_river,
-                    description = "Bitcoin brokerage with Lightning",
-                    isSelected = selectedProvider == "River",
-                    onClick = { selectedProvider = "River" }
-                )
-                
-                Spacer(modifier = Modifier.height(12.dp))
-                
-                WalletProviderButton(
-                    name = "Coinbase",
-                    iconResId = R.drawable.ic_coinbase,
-                    description = "Popular crypto exchange",
-                    isSelected = selectedProvider == "Coinbase",
-                    onClick = { selectedProvider = "Coinbase" }
-                )
-                
-                // Lightning address input (shown after provider selection)
-                if (selectedProvider != null) {
-                    Spacer(modifier = Modifier.height(20.dp))
-                    
-                    Text(
-                        "Enter your $selectedProvider Lightning Address",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                    
-                    Spacer(modifier = Modifier.height(8.dp))
-                    
-                    OutlinedTextField(
-                        value = lightningAddress,
-                        onValueChange = { lightningAddress = it },
-                        label = { Text("Lightning Address") },
-                        placeholder = { Text("you@${selectedProvider?.lowercase()}.com") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
+                // Open Strike button
+                Button(
+                    onClick = {
+                        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("strike://"))
+                        try {
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            // Fallback to Play Store
+                            val playStoreIntent = Intent(Intent.ACTION_VIEW, 
+                                android.net.Uri.parse("market://details?id=zapsolutions.strike"))
+                            try {
+                                context.startActivity(playStoreIntent)
+                            } catch (e2: Exception) {
+                                Toast.makeText(context, "Could not open Strike", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF000000))
+                ) {
+                    Text("⚡ Open Strike", color = Color.White)
                 }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // Instructions
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF3F4F6)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text("In Strike:", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                        Text("1. Go to Settings", fontSize = 13.sp, color = Color.Gray)
+                        Text("2. Tap your username", fontSize = 13.sp, color = Color.Gray)
+                        Text("3. Copy your Lightning Address", fontSize = 13.sp, color = Color.Gray)
+                        Text("   (looks like: you@strike.me)", fontSize = 12.sp, color = Color.Gray)
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // Lightning address input
+                OutlinedTextField(
+                    value = lightningAddress,
+                    onValueChange = { lightningAddress = it },
+                    label = { Text("Lightning Address") },
+                    placeholder = { Text("you@strike.me") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
                 
                 Spacer(modifier = Modifier.height(24.dp))
                 
@@ -1465,12 +1416,12 @@ fun CustodialWalletDialog(
                     
                     Button(
                         onClick = {
-                            if (selectedProvider != null && lightningAddress.isNotBlank()) {
-                                onSelect(selectedProvider!!, lightningAddress)
+                            if (lightningAddress.isNotBlank()) {
+                                onSelect("Strike", lightningAddress)
                             }
                         },
                         modifier = Modifier.weight(1f),
-                        enabled = selectedProvider != null && lightningAddress.isNotBlank(),
+                        enabled = lightningAddress.isNotBlank(),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Color(0xFF3B82F6)
                         )
