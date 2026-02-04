@@ -194,20 +194,15 @@ fun SignedByMeApp(mgr: DidWalletManager) {
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Cash App button
-                    GradientButton(
-                        text = "Cash App",
-                        pillText = "easy",
-                        colors = listOf(Color(0xFF00D632), Color(0xFF00B828)),
-                        onClick = {
+                    // Cash App option
+                    CashAppCard(
+                        withdrawAddress = withdrawAddress,
+                        onAddressChange = { withdrawAddress = it },
+                        onOpenCashApp = {
                             // Deep link to Cash App
                             val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://cash.app"))
                             try {
                                 context.startActivity(intent)
-                                selectedWalletType = "cashapp"
-                                step2Complete = true
-                                withdrawAddress = "cashapp-user"
-                                statusMessage = "Cash App selected — complete setup in Cash App"
                             } catch (e: Exception) {
                                 // Fallback to Play Store
                                 val playStoreIntent = Intent(Intent.ACTION_VIEW, 
@@ -217,6 +212,24 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                                 } catch (e2: Exception) {
                                     Toast.makeText(context, "Could not open Cash App", Toast.LENGTH_SHORT).show()
                                 }
+                            }
+                        },
+                        onPaste = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            val clip = clipboard.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
+                            if (clip.isNotEmpty()) {
+                                withdrawAddress = clip
+                                selectedWalletType = "cashapp"
+                            }
+                        },
+                        onScanQR = {
+                            showQRScanner = true
+                        },
+                        onConnect = {
+                            if (withdrawAddress.isNotEmpty()) {
+                                selectedWalletType = "cashapp"
+                                step2Complete = true
+                                statusMessage = "Cash App connected!"
                             }
                         }
                     )
@@ -999,7 +1012,89 @@ fun CompletedStepContent(
     }
 }
 
-// CashAppCard removed - using direct deep link button instead
+@Composable
+fun CashAppCard(
+    withdrawAddress: String,
+    onAddressChange: (String) -> Unit,
+    onOpenCashApp: () -> Unit,
+    onPaste: () -> Unit,
+    onScanQR: () -> Unit,
+    onConnect: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.6f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("⚡", fontSize = 24.sp)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Cash App", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.width(8.dp))
+                LevelPill("easy", Color(0xFF10B981))
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                "Open Cash App → Bitcoin → Deposit → show QR. Scan it or paste the address.",
+                fontSize = 12.sp,
+                color = Color.Gray
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Open Cash App button
+            Button(
+                onClick = onOpenCashApp,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00D632))
+            ) {
+                Text("Open Cash App", color = Color.White)
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(
+                    onClick = onScanQR,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6))
+                ) {
+                    Text("📷 Scan QR")
+                }
+
+                OutlinedButton(
+                    onClick = onPaste,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("📋 Paste")
+                }
+            }
+
+            if (withdrawAddress.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = withdrawAddress,
+                    onValueChange = onAddressChange,
+                    label = { Text("Withdraw To") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = onConnect,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))
+                ) {
+                    Text("Connect", color = Color.White)
+                }
+            }
+        }
+    }
+}
 
 @Composable
 fun DIDInfoDialog(
