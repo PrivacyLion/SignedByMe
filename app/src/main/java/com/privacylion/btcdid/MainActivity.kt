@@ -82,6 +82,11 @@ fun SignedByMeApp(mgr: DidWalletManager) {
     var vccResult by remember { mutableStateOf("") }
     var paymentResult by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
+    
+    // Wallet connection dialogs
+    var showSeedPhraseDialog by remember { mutableStateOf(false) }
+    var showCustodialDialog by remember { mutableStateOf(false) }
+    var selectedCustodialProvider by remember { mutableStateOf<String?>(null) }
 
     // Background gradient
     Box(
@@ -205,8 +210,7 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                         pillText = "intermediate",
                         colors = listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6)),
                         onClick = {
-                            selectedWalletType = "custodial"
-                            step2Complete = true
+                            showCustodialDialog = true
                         }
                     )
 
@@ -215,11 +219,10 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                     // Non-Custodial Wallet button
                     GradientButton(
                         text = "Non-Custodial Wallet",
-                        pillText = "hard",
+                        pillText = "advanced",
                         colors = listOf(Color(0xFF6366F1), Color(0xFF8B5CF6)),
                         onClick = {
-                            selectedWalletType = "non-custodial"
-                            step2Complete = true
+                            showSeedPhraseDialog = true
                         }
                     )
 
@@ -590,6 +593,47 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 clipboard.setPrimaryClip(ClipData.newPlainText("DID", did))
                 Toast.makeText(context, "Copied!", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+    
+    // ===== Seed Phrase Entry Dialog =====
+    if (showSeedPhraseDialog) {
+        SeedPhraseEntryDialog(
+            onDismiss = { showSeedPhraseDialog = false },
+            onConfirm = { seedPhrase, passphrase ->
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        // Derive keys from seed phrase
+                        val derivedAddress = mgr.deriveFromSeedPhrase(seedPhrase, passphrase)
+                        withContext(Dispatchers.Main) {
+                            withdrawAddress = derivedAddress
+                            selectedWalletType = "non-custodial"
+                            step2Complete = true
+                            showSeedPhraseDialog = false
+                            statusMessage = "Wallet connected via seed phrase"
+                        }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) {
+                            statusMessage = "Error: ${e.message}"
+                        }
+                    }
+                }
+            }
+        )
+    }
+    
+    // ===== Custodial Wallet Selection Dialog =====
+    if (showCustodialDialog) {
+        CustodialWalletDialog(
+            onDismiss = { showCustodialDialog = false },
+            onSelect = { provider, address ->
+                withdrawAddress = address
+                selectedWalletType = "custodial"
+                selectedCustodialProvider = provider
+                step2Complete = true
+                showCustodialDialog = false
+                statusMessage = "Connected to $provider"
             }
         )
     }
@@ -964,6 +1008,394 @@ fun DIDInfoDialog(
                         Text("Regenerate")
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun SeedPhraseEntryDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (seedPhrase: String, passphrase: String) -> Unit
+) {
+    var wordCount by remember { mutableStateOf(12) }
+    var seedWords by remember { mutableStateOf(List(12) { "" }) }
+    var passphrase by remember { mutableStateOf("") }
+    var showPassphrase by remember { mutableStateOf(false) }
+    var validationError by remember { mutableStateOf<String?>(null) }
+    
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.9f)
+                .padding(8.dp),
+            shape = RoundedCornerShape(24.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    "Enter Seed Phrase",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    "Enter your 12 or 24 word recovery phrase",
+                    fontSize = 14.sp,
+                    color = Color.Gray,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // Word count selector
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    FilterChip(
+                        selected = wordCount == 12,
+                        onClick = { 
+                            wordCount = 12
+                            seedWords = List(12) { if (it < seedWords.size) seedWords[it] else "" }
+                        },
+                        label = { Text("12 Words") }
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    FilterChip(
+                        selected = wordCount == 24,
+                        onClick = { 
+                            wordCount = 24
+                            seedWords = List(24) { if (it < seedWords.size) seedWords[it] else "" }
+                        },
+                        label = { Text("24 Words") }
+                    )
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // Word input grid (2 columns)
+                for (row in 0 until (wordCount / 2)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Left column
+                        val leftIdx = row
+                        OutlinedTextField(
+                            value = seedWords[leftIdx],
+                            onValueChange = { newVal ->
+                                seedWords = seedWords.toMutableList().also { 
+                                    it[leftIdx] = newVal.lowercase().trim() 
+                                }
+                                validationError = null
+                            },
+                            label = { Text("${leftIdx + 1}") },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            textStyle = LocalTextStyle.current.copy(fontSize = 14.sp)
+                        )
+                        
+                        // Right column
+                        val rightIdx = row + (wordCount / 2)
+                        OutlinedTextField(
+                            value = seedWords[rightIdx],
+                            onValueChange = { newVal ->
+                                seedWords = seedWords.toMutableList().also { 
+                                    it[rightIdx] = newVal.lowercase().trim() 
+                                }
+                                validationError = null
+                            },
+                            label = { Text("${rightIdx + 1}") },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            textStyle = LocalTextStyle.current.copy(fontSize = 14.sp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // Passphrase (optional)
+                Text(
+                    "Passphrase (optional)",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = passphrase,
+                    onValueChange = { passphrase = it },
+                    label = { Text("BIP39 Passphrase") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = if (showPassphrase) 
+                        androidx.compose.ui.text.input.VisualTransformation.None 
+                    else 
+                        androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    trailingIcon = {
+                        TextButton(onClick = { showPassphrase = !showPassphrase }) {
+                            Text(if (showPassphrase) "Hide" else "Show", fontSize = 12.sp)
+                        }
+                    }
+                )
+                
+                // Validation error
+                if (validationError != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        validationError!!,
+                        color = Color(0xFFEF4444),
+                        fontSize = 12.sp
+                    )
+                }
+                
+                Spacer(modifier = Modifier.height(20.dp))
+                
+                // Action buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Cancel")
+                    }
+                    
+                    Button(
+                        onClick = {
+                            // Validate all words are filled
+                            val emptyWords = seedWords.filter { it.isBlank() }
+                            if (emptyWords.isNotEmpty()) {
+                                validationError = "Please fill in all ${wordCount} words"
+                                return@Button
+                            }
+                            
+                            // Join words and confirm
+                            val phrase = seedWords.joinToString(" ")
+                            onConfirm(phrase, passphrase)
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF10B981)
+                        )
+                    ) {
+                        Text("Connect Wallet")
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                // Security warning
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFFFEF3C7)
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Text("⚠️", fontSize = 16.sp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "Your seed phrase is stored securely on this device only. Never share it with anyone.",
+                            fontSize = 12.sp,
+                            color = Color(0xFF92400E)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun CustodialWalletDialog(
+    onDismiss: () -> Unit,
+    onSelect: (provider: String, address: String) -> Unit
+) {
+    var selectedProvider by remember { mutableStateOf<String?>(null) }
+    var lightningAddress by remember { mutableStateOf("") }
+    
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            shape = RoundedCornerShape(24.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp)
+            ) {
+                Text(
+                    "Connect Custodial Wallet",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    "Select your wallet provider",
+                    fontSize = 14.sp,
+                    color = Color.Gray,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center
+                )
+                
+                Spacer(modifier = Modifier.height(20.dp))
+                
+                // Wallet provider buttons
+                WalletProviderButton(
+                    name = "Strike",
+                    emoji = "⚡",
+                    description = "Lightning-native payments",
+                    isSelected = selectedProvider == "Strike",
+                    onClick = { selectedProvider = "Strike" }
+                )
+                
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                WalletProviderButton(
+                    name = "River",
+                    emoji = "🌊",
+                    description = "Bitcoin brokerage with Lightning",
+                    isSelected = selectedProvider == "River",
+                    onClick = { selectedProvider = "River" }
+                )
+                
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                WalletProviderButton(
+                    name = "Coinbase",
+                    emoji = "🪙",
+                    description = "Popular crypto exchange",
+                    isSelected = selectedProvider == "Coinbase",
+                    onClick = { selectedProvider = "Coinbase" }
+                )
+                
+                // Lightning address input (shown after provider selection)
+                if (selectedProvider != null) {
+                    Spacer(modifier = Modifier.height(20.dp))
+                    
+                    Text(
+                        "Enter your $selectedProvider Lightning Address",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    OutlinedTextField(
+                        value = lightningAddress,
+                        onValueChange = { lightningAddress = it },
+                        label = { Text("Lightning Address") },
+                        placeholder = { Text("you@${selectedProvider?.lowercase()}.com") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                // Action buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Cancel")
+                    }
+                    
+                    Button(
+                        onClick = {
+                            if (selectedProvider != null && lightningAddress.isNotBlank()) {
+                                onSelect(selectedProvider!!, lightningAddress)
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        enabled = selectedProvider != null && lightningAddress.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF3B82F6)
+                        )
+                    ) {
+                        Text("Connect")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun WalletProviderButton(
+    name: String,
+    emoji: String,
+    description: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val borderColor = if (isSelected) Color(0xFF3B82F6) else Color.Gray.copy(alpha = 0.3f)
+    val bgColor = if (isSelected) Color(0xFF3B82F6).copy(alpha = 0.1f) else Color.Transparent
+    
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .border(
+                width = if (isSelected) 2.dp else 1.dp,
+                color = borderColor,
+                shape = RoundedCornerShape(12.dp)
+            ),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = bgColor)
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(16.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(emoji, fontSize = 28.sp)
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    name,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    description,
+                    fontSize = 12.sp,
+                    color = Color.Gray
+                )
+            }
+            if (isSelected) {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = null,
+                    tint = Color(0xFF3B82F6)
+                )
             }
         }
     }

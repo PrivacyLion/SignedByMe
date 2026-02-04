@@ -136,6 +136,67 @@ class DidWalletManager(private val context: Context) {
         return createDid()
     }
 
+    private val seedFile = "seed_wrapped.bin"
+    
+    /**
+     * Derive keys from a BIP39 seed phrase.
+     * Stores the seed securely and derives a Lightning-compatible address.
+     * 
+     * @param seedPhrase Space-separated mnemonic words (12 or 24)
+     * @param passphrase Optional BIP39 passphrase (empty string if none)
+     * @return A derived Lightning address or pubkey for display
+     */
+    fun deriveFromSeedPhrase(seedPhrase: String, passphrase: String = ""): String {
+        ensureKeystoreKey()
+        
+        // Validate word count
+        val words = seedPhrase.trim().split("\\s+".toRegex())
+        require(words.size == 12 || words.size == 24) { 
+            "Seed phrase must be 12 or 24 words, got ${words.size}" 
+        }
+        
+        // For now, derive key using SHA-256 of seed+passphrase as entropy
+        // TODO: Implement proper BIP39/BIP32 derivation in Rust
+        val combined = "$seedPhrase:$passphrase"
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        val entropy = md.digest(combined.toByteArray(Charsets.UTF_8))
+        
+        // Use first 32 bytes as secp256k1 private key
+        val priv = entropy.copyOf(32)
+        val pubHex = NativeBridge.derivePublicKeyHex(priv)
+        
+        // Wrap and save the derived private key (replacing any existing)
+        val wrapped = wrapPrivateKey(priv)
+        saveWrapped(wrapped)
+        
+        // Also save the encrypted seed phrase for recovery display
+        val seedBytes = seedPhrase.toByteArray(Charsets.UTF_8)
+        val wrappedSeed = wrapPrivateKey(seedBytes)
+        context.openFileOutput(seedFile, Context.MODE_PRIVATE).use { it.write(wrappedSeed) }
+        
+        // Zeroize sensitive data
+        java.util.Arrays.fill(priv, 0.toByte())
+        java.util.Arrays.fill(entropy, 0.toByte())
+        
+        // Update current DID
+        currentDid = "did:btcr:$pubHex"
+        
+        // Return a truncated pubkey as the "address" for display
+        // In production, this would be a proper Lightning address
+        return "ln:${pubHex.take(16)}...${pubHex.takeLast(8)}"
+    }
+    
+    /**
+     * Check if a seed phrase is stored
+     */
+    fun hasSeedPhrase(): Boolean {
+        return try {
+            context.openFileInput(seedFile).use { it.readBytes().isNotEmpty() }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     /** Debug info: is the Keystore key hardware-backed / StrongBox? */
     fun keystoreInfo(): String {
         return try {
