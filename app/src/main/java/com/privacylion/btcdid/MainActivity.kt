@@ -88,6 +88,7 @@ fun SignedByMeApp(mgr: DidWalletManager) {
     var showSeedPhraseDialog by remember { mutableStateOf(false) }
     var showCustodialDialog by remember { mutableStateOf(false) }
     var selectedCustodialProvider by remember { mutableStateOf<String?>(null) }
+    var showQRScanner by remember { mutableStateOf(false) }
 
     // Background gradient
     Box(
@@ -199,7 +200,7 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                             }
                         },
                         onScanQR = {
-                            Toast.makeText(context, "QR Scanner coming soon", Toast.LENGTH_SHORT).show()
+                            showQRScanner = true
                         }
                     )
 
@@ -637,6 +638,47 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                 statusMessage = "Connected to $provider"
             }
         )
+    }
+    
+    // ===== QR Scanner Dialog =====
+    if (showQRScanner) {
+        QRScannerDialog(
+            onDismiss = { showQRScanner = false },
+            onScanned = { scannedValue ->
+                // Parse Bitcoin/Lightning address from QR
+                val address = parseBitcoinAddress(scannedValue)
+                withdrawAddress = address
+                selectedWalletType = "cashapp"
+                showQRScanner = false
+                Toast.makeText(context, "Address scanned!", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+}
+
+/**
+ * Parse a Bitcoin or Lightning address from a QR code value.
+ * Handles formats like:
+ * - bitcoin:bc1q...
+ * - lightning:lnbc...
+ * - Plain addresses
+ */
+private fun parseBitcoinAddress(raw: String): String {
+    val trimmed = raw.trim()
+    return when {
+        trimmed.startsWith("bitcoin:", ignoreCase = true) -> {
+            // bitcoin:address?amount=...
+            val withoutScheme = trimmed.removePrefix("bitcoin:").removePrefix("BITCOIN:")
+            withoutScheme.split("?").firstOrNull() ?: withoutScheme
+        }
+        trimmed.startsWith("lightning:", ignoreCase = true) -> {
+            trimmed.removePrefix("lightning:").removePrefix("LIGHTNING:")
+        }
+        trimmed.startsWith("lnurl", ignoreCase = true) -> trimmed
+        trimmed.startsWith("lnbc", ignoreCase = true) -> trimmed
+        trimmed.startsWith("bc1", ignoreCase = true) -> trimmed
+        trimmed.startsWith("1") || trimmed.startsWith("3") -> trimmed // Legacy BTC addresses
+        else -> trimmed
     }
 }
 
