@@ -346,7 +346,7 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                 isEnabled = step1Complete && step2Complete
             ) {
                 Text(
-                    "Create your Verified Content Claim (VCC)",
+                    "Generate your Signature",
                     fontSize = 14.sp,
                     color = Color.Gray,
                     textAlign = TextAlign.Center,
@@ -355,21 +355,21 @@ fun SignedByMeApp(mgr: DidWalletManager) {
 
                 Spacer(modifier = Modifier.height(16.dp))
                 
-                // Optional price
+                // Anchoring amount
                 OutlinedTextField(
                     value = priceSats,
                     onValueChange = { priceSats = it.filter { c -> c.isDigit() } },
-                    label = { Text("Price (sats) - optional") },
+                    label = { Text("₿") },
                     placeholder = { Text("1000") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    supportingText = { Text("Leave empty for free / contact for pricing") }
+                    supportingText = { Text("add ₿ to anchor your signature") }
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
 
                 GradientButton(
-                    text = "Generate Proof",
+                    text = "Generate Signature",
                     colors = listOf(Color(0xFFEF4444), Color(0xFFF97316)),
                     enabled = lastPreimage.isNotEmpty() || selectedWalletType != null,
                     onClick = {
@@ -443,7 +443,7 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                                     step3Complete = true
                                     showVccResult = true
                                     isLoading = false
-                                    statusMessage = "Proof generated!"
+                                    statusMessage = "Signature generated!"
                                 }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
@@ -465,6 +465,16 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                 // Show VCC result
                 if (showVccResult && vccResult.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(16.dp))
+                    
+                    Text(
+                        "Use your Verified Content Claim to prove your content is yours",
+                        fontSize = 14.sp,
+                        color = Color.Gray,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
 
                     // VCC Card
                     StatusPill("Verified Content Claim", Color(0xFF10B981))
