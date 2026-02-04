@@ -92,6 +92,11 @@ fun SignedByMeApp(mgr: DidWalletManager) {
     var showCustodialDialog by remember { mutableStateOf(false) }
     var selectedCustodialProvider by remember { mutableStateOf<String?>(null) }
     var showQRScanner by remember { mutableStateOf(false) }
+    
+    // VCC contact & pricing
+    var contactEmail by remember { mutableStateOf("") }
+    var priceSats by remember { mutableStateOf("") }
+    var vccId by remember { mutableStateOf("") }
 
     // Background gradient
     Box(
@@ -327,7 +332,7 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                 isEnabled = step1Complete && step2Complete
             ) {
                 Text(
-                    "Press the button below to Prove your Signature and create your Verified Content Claim",
+                    "Create your Verified Content Claim (VCC)",
                     fontSize = 14.sp,
                     color = Color.Gray,
                     textAlign = TextAlign.Center,
@@ -335,11 +340,37 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
+                
+                // Contact email for purchase requests
+                OutlinedTextField(
+                    value = contactEmail,
+                    onValueChange = { contactEmail = it },
+                    label = { Text("Contact Email") },
+                    placeholder = { Text("you@email.com") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    supportingText = { Text("Buyers will contact you here") }
+                )
+                
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                // Optional price
+                OutlinedTextField(
+                    value = priceSats,
+                    onValueChange = { priceSats = it.filter { c -> c.isDigit() } },
+                    label = { Text("Price (sats) - optional") },
+                    placeholder = { Text("1000") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    supportingText = { Text("Leave empty for free / contact for pricing") }
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
 
                 GradientButton(
                     text = "Generate Proof",
                     colors = listOf(Color(0xFFEF4444), Color(0xFFF97316)),
-                    enabled = lastPreimage.isNotEmpty() || selectedWalletType != null,
+                    enabled = (lastPreimage.isNotEmpty() || selectedWalletType != null) && contactEmail.isNotEmpty(),
                     onClick = {
                         isLoading = true
                         scope.launch(Dispatchers.IO) {
@@ -377,12 +408,21 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                                     preimageSha256Hex = preShaHex
                                 )
 
-                                // Generate VCC (mock for now)
+                                // Generate VCC with proper schema
+                                val generatedVccId = "vcc_${System.currentTimeMillis()}_${did.takeLast(8)}"
                                 val vcc = JSONObject().apply {
-                                    put("created_by", did)
+                                    put("schema", "signedby.me/vcc/1")
+                                    put("id", generatedVccId)
+                                    put("did", did)
                                     put("content_hash", "sha256_demo_${System.currentTimeMillis()}")
-                                    put("ln_address", withdrawAddress.ifEmpty { "demo@wallet.com" })
+                                    put("proof_hash", preShaHex)
+                                    put("withdraw_to", withdrawAddress.ifEmpty { "demo@wallet.com" })
+                                    put("contact", "mailto:$contactEmail")
+                                    if (priceSats.isNotEmpty()) {
+                                        put("price_sats", priceSats.toLongOrNull() ?: 0L)
+                                    }
                                     put("timestamp", System.currentTimeMillis())
+                                    put("signature", sigHex)
                                 }.toString()
 
                                 // Mock payment result
@@ -398,6 +438,7 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                                     lastSigHex = sigHex
                                     lastPrpJson = prpJson
                                     vccResult = vcc
+                                    vccId = generatedVccId
                                     paymentResult = payment
                                     step3Complete = true
                                     showVccResult = true
@@ -476,6 +517,51 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                             Text("Share")
                         }
                     }
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    // Purchase Request button (opens mailto:)
+                    val priceDisplay = if (priceSats.isNotEmpty()) "$priceSats sats" else "Contact for pricing"
+                    GradientButton(
+                        text = "📧 Test Purchase Request",
+                        colors = listOf(Color(0xFF8B5CF6), Color(0xFFEC4899)),
+                        onClick = {
+                            val subject = java.net.URLEncoder.encode("VCC Purchase Request: $vccId", "UTF-8")
+                            val body = java.net.URLEncoder.encode(
+                                """
+Hi,
+
+I would like to purchase/license the content associated with this VCC.
+
+VCC ID: $vccId
+Content Hash: ${try { JSONObject(vccResult).optString("content_hash", "N/A") } catch (e: Exception) { "N/A" }}
+Price: $priceDisplay
+
+My Lightning Address for unlock delivery: [YOUR_LN_ADDRESS]
+
+Thank you!
+                                """.trimIndent(),
+                                "UTF-8"
+                            )
+                            val mailtoUri = android.net.Uri.parse("mailto:$contactEmail?subject=$subject&body=$body")
+                            val mailIntent = Intent(Intent.ACTION_SENDTO, mailtoUri)
+                            try {
+                                context.startActivity(mailIntent)
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "No email app found", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    )
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    Text(
+                        "Buyers click your VCC link → email opens → they pay your Lightning address → you send unlock",
+                        fontSize = 11.sp,
+                        color = Color.Gray,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
 
                     // Payment status
                     if (paymentResult.isNotEmpty()) {
@@ -566,6 +652,7 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                     lastSigHex = ""
                     lastPrpJson = ""
                     vccResult = ""
+                    vccId = ""
                     paymentResult = ""
                     statusMessage = ""
                     step2Complete = false
@@ -573,6 +660,8 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                     showVccResult = false
                     selectedWalletType = null
                     withdrawAddress = ""
+                    contactEmail = ""
+                    priceSats = ""
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
