@@ -1,28 +1,41 @@
+// lib.rs - BTC DID Core Library
+// Implements KeyManager, DLC Builder, STWO Prover, and Lightning payments
+
 use anyhow::{Result, anyhow};
 use jni::objects::{JByteArray, JClass, JString};
-use jni::sys::{jbyteArray, jstring};
+use jni::sys::{jbyteArray, jstring, jlong};
 use jni::JNIEnv;
 
 use sha2::{Digest, Sha256};
-use hex;
 
-use k256::SecretKey;
-use k256::ecdsa::{SigningKey, VerifyingKey, Signature};
-use rand_core::OsRng;
-pub mod dlc_oracle;
+// Module declarations
+pub mod key_manager;
+pub mod dlc_builder;
+pub mod stwo_prover;
+pub mod lightning;
+pub mod dlc_oracle; // Keep for backwards compatibility
 
-/// ===== Simple sanity check (kept) =====
+use key_manager::ManagedKey;
+use dlc_builder::{DlcContract, DlcOutcome, OracleInfo, PayoutSplit, oracle_sign_outcome};
+use stwo_prover::{StwoProver, CircuitType};
+use lightning::{Preimage, PaymentRequestPackage, verify_payment};
+
+// ============================================================================
+// LEGACY JNI FUNCTIONS (for backwards compatibility)
+// ============================================================================
+
+/// Simple sanity check
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_helloFromRust(
     mut env: JNIEnv,
     _clazz: JClass,
 ) -> jstring {
-    hello()
-        .map(|s| env.new_string(s).unwrap().into_raw())
-        .unwrap_or_else(|_| env.new_string("rust error").unwrap().into_raw())
+    env.new_string("Hello from Rust core v2 (zkDLC-Mobile) 👋")
+        .unwrap()
+        .into_raw()
 }
 
-/// ===== SHA-256 helper (kept) =====
+/// SHA-256 helper
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_sha256Hex(
     mut env: JNIEnv,
@@ -33,23 +46,33 @@ pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_sha256Hex(
         Ok(js) => js.to_string_lossy().into_owned(),
         Err(_) => return env.new_string("error").unwrap().into_raw(),
     };
-    let hex = sha256_hex(&s).unwrap_or_else(|_| "error".to_string());
+    let mut hasher = Sha256::new();
+    hasher.update(s.as_bytes());
+    let hex = hex::encode(hasher.finalize());
     env.new_string(hex).unwrap().into_raw()
 }
 
-/// ===== generate 32-byte secp256k1 private key =====
+/// Generate 32-byte secp256k1 private key
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_generateSecp256k1PrivateKey(
     mut env: JNIEnv,
     _clazz: JClass,
 ) -> jbyteArray {
-    // Random secp256k1 secret; OsRng works on Android
-    let sk = SigningKey::random(&mut OsRng);
-    let bytes = sk.to_bytes(); // 32 bytes
-    env.byte_array_from_slice(bytes.as_slice()).unwrap().into_raw()
+    match ManagedKey::generate() {
+        Ok(key) => {
+            let bytes = key.secret_key.secret_bytes();
+            env.byte_array_from_slice(&bytes).unwrap().into_raw()
+        }
+        Err(_) => {
+            // Fallback to random bytes
+            let mut bytes = [0u8; 32];
+            getrandom::getrandom(&mut bytes).unwrap();
+            env.byte_array_from_slice(&bytes).unwrap().into_raw()
+        }
+    }
 }
 
-/// ===== derive compressed public key hex from private key bytes =====
+/// Derive compressed public key hex from private key bytes
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_derivePublicKeyHex(
     mut env: JNIEnv,
@@ -60,15 +83,14 @@ pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_derivePublicKeyH
         Ok(b) => b,
         Err(_) => return env.new_string("error").unwrap().into_raw(),
     };
-    let hexstr = match derive_pub_hex_from_priv(&bytes) {
-        Ok(h) => h,
-        Err(_) => "error".to_string(),
-    };
-    env.new_string(hexstr).unwrap().into_raw()
+    
+    match ManagedKey::from_bytes(&bytes) {
+        Ok(key) => env.new_string(key.pubkey_hex()).unwrap().into_raw(),
+        Err(_) => env.new_string("error").unwrap().into_raw(),
+    }
 }
 
-/// ===== sign message with secp256k1 key (DER sig hex) =====
-/// JNI name must EXACTLY match what Kotlin calls: signMessageDerHex(byte[], String)
+/// Sign message with secp256k1 key (DER sig hex)
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_signMessageDerHex(
     mut env: JNIEnv,
@@ -76,201 +98,331 @@ pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_signMessageDerHe
     priv_bytes: JByteArray,
     msg_jstr: JString,
 ) -> jstring {
-    // 1. get raw 32-byte private key from JVM
     let priv_vec = match env.convert_byte_array(priv_bytes) {
         Ok(v) => v,
-        Err(_) => {
-            return env
-                .new_string("error:no_priv_bytes")
-                .unwrap()
-                .into_raw();
-        }
+        Err(_) => return env.new_string("error:no_priv_bytes").unwrap().into_raw(),
     };
 
-    // 2. get message string from JVM
     let msg_str = match env.get_string(&msg_jstr) {
         Ok(js) => js.to_string_lossy().into_owned(),
-        Err(_) => {
-            return env
-                .new_string("error:no_msg")
-                .unwrap()
-                .into_raw();
-        }
+        Err(_) => return env.new_string("error:no_msg").unwrap().into_raw(),
     };
 
-    // 3. sign it and hex-encode DER output
-    let sig_hex = match sign_message_der_hex(&priv_vec, &msg_str) {
-        Ok(h) => h,
-        Err(e) => format!("error:{}", e),
+    let key = match ManagedKey::from_bytes(&priv_vec) {
+        Ok(k) => k,
+        Err(e) => return env.new_string(format!("error:{}", e)).unwrap().into_raw(),
     };
 
-    // 4. wipe the temp key buffer (best-effort scrub)
-    let mut priv_wipe = priv_vec;
-    for b in &mut priv_wipe {
-        *b = 0;
+    match key.sign_ecdsa(msg_str.as_bytes()) {
+        Ok(sig) => env.new_string(sig).unwrap().into_raw(),
+        Err(e) => env.new_string(format!("error:{}", e)).unwrap().into_raw(),
     }
-
-    env.new_string(sig_hex).unwrap().into_raw()
 }
 
-/// ---- helper: returns "Hello from Rust core 👋" ----
-fn hello() -> Result<String> {
-    Ok("Hello from Rust core 👋".to_string())
-}
+// ============================================================================
+// STWO PROVER JNI FUNCTIONS
+// ============================================================================
 
-/// ---- helper: sha256(string) -> hex ----
-fn sha256_hex(s: &str) -> Result<String> {
-    let mut hasher = Sha256::new();
-    hasher.update(s.as_bytes());
-    Ok(hex::encode(hasher.finalize()))
-}
-
-/// ---- helper: derive compressed pubkey from 32-byte privkey -> hex ----
-fn derive_pub_hex_from_priv(bytes: &[u8]) -> Result<String> {
-    // Parse 32-byte secp256k1 secret
-    let sk = SecretKey::from_slice(bytes).map_err(|_| anyhow!("bad secp256k1 key"))?;
-
-    // Turn SecretKey -> SigningKey
-    let signing: SigningKey = sk.into();
-
-    // Grab public key
-    let vk: VerifyingKey = signing.verifying_key().clone();
-
-    // Compressed SEC1 (33 bytes). We hex that.
-    Ok(hex::encode(vk.to_encoded_point(true).as_bytes()))
-}
-
-/// ---- helper: sign message -> DER sig hex ----
-/// We do: sig = ECDSA_sign( sha256(message) )
-fn sign_message_der_hex(priv_bytes: &[u8], msg: &str) -> Result<String> {
-    // convert priv bytes into k256 SigningKey
-    let sk = SecretKey::from_slice(priv_bytes)
-        .map_err(|_| anyhow!("bad secp256k1 key"))?;
-    let signing_key: SigningKey = sk.into();
-
-    // hash message first (like we will on iOS)
-    let mut hasher = Sha256::new();
-    hasher.update(msg.as_bytes());
-    let digest = hasher.finalize();
-
-    // sign digest → DER ECDSA
-    use k256::ecdsa::signature::Signer; // trait for .sign()
-    let sig: Signature = signing_key.sign(&digest);
-
-    // sig.to_der() gives a DER object that can be seen as bytes with .as_bytes()
-    let der_obj = sig.to_der();
-    let der_bytes = der_obj.as_bytes();
-
-    // return DER bytes as lowercase hex
-    Ok(hex::encode(der_bytes))
-}
-
+/// Generate STWO proof for various circuit types
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_generateStwoProof(
-    mut env: jni::JNIEnv,
-    _clazz: jni::objects::JClass,
-    circuit: jni::objects::JString,
-    input_hash_hex: jni::objects::JString,
-    output_hash_hex: jni::objects::JString,
-) -> jni::sys::jstring {
-    // Read inputs
-    let circuit_s = env.get_string(&circuit).map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let in_hex   = env.get_string(&input_hash_hex).map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let out_hex  = env.get_string(&output_hash_hex).map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-
-    // Basic validation helpers
-    fn is_hex64(s: &str) -> bool {
-        s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
-    }
-
-    if circuit_s != "sha256_eq" {
-        let json = format!(r#"{{
-  "status":"error",
-  "kind":"stwo_proof",
-  "error":"unsupported circuit",
-  "circuit":"{}"
-}}"#, circuit_s);
-        return env.new_string(json).unwrap().into_raw();
-    }
-
-    if !is_hex64(&in_hex) || !is_hex64(&out_hex) {
-        let json = format!(r#"{{
-  "status":"error",
-  "kind":"stwo_proof",
-  "error":"input_hash_hex and output_hash_hex must be 32-byte hex (64 chars)",
-  "input_len":{},
-  "output_len":{}
-}}"#, in_hex.len(), out_hex.len());
-        return env.new_string(json).unwrap().into_raw();
-    }
-
-    // Demo “proof”: we check equality and include a minimal, deterministic transcript.
-    let ok = in_hex.eq_ignore_ascii_case(&out_hex);
-
-    let proof_json = format!(r#"{{
-  "status":"ok",
-  "kind":"stwo_proof",
-  "circuit":"sha256_eq",
-  "public": {{
-    "input_hash_hex":"{in_hex}",
-    "output_hash_hex":"{out_hex}"
-  }},
-  "ok": {ok},
-  "proof": {{
-    "scheme":"demo-v1",
-    "transcript":[
-      "assert_eq(input_hash_hex, output_hash_hex)"
-    ]
-  }}
-}}"#);
-
-    env.new_string(proof_json).unwrap().into_raw()
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_createDlcContract(
-    mut env: jni::JNIEnv,
-    _clazz: jni::objects::JClass,
-    outcome: jni::objects::JString,
-    payouts_json: jni::objects::JString,
-    oracle_json: jni::objects::JString,
-) -> jni::sys::jstring {
-    let _ = (outcome, payouts_json, oracle_json);
-    env.new_string("{\"status\":\"ok\",\"contract_id\":\"stub-contract\"}").unwrap().into_raw()
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_signDlcOutcome(
-    mut env: jni::JNIEnv,
-    _clazz: jni::objects::JClass,
-    outcome: jni::objects::JString,
-) -> jni::sys::jstring {
-    let _ = outcome;
-    env.new_string("{\"status\":\"ok\",\"sig\":\"stub-sig\"}").unwrap().into_raw()
-}
-
-// === JNI bridges for DLC Oracle ===
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_oraclePubkeyHex(
-    mut env: jni::JNIEnv,
-    _clazz: jni::objects::JClass,
-) -> jni::sys::jstring {
-    let pk = dlc_oracle::oracle_pubkey_hex();
-    env.new_string(pk).unwrap().into_raw()
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_oracleSignOutcome(
-    mut env: jni::JNIEnv,
-    _clazz: jni::objects::JClass,
-    outcome: jni::objects::JString,
-) -> jni::sys::jstring {
-    let out = env
-        .get_string(&outcome)
+    mut env: JNIEnv,
+    _clazz: JClass,
+    circuit: JString,
+    input_hash_hex: JString,
+    output_hash_hex: JString,
+) -> jstring {
+    let circuit_s = env.get_string(&circuit)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let in_hex = env.get_string(&input_hash_hex)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let out_hex = env.get_string(&output_hash_hex)
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    let sig = dlc_oracle::oracle_sign_outcome(&out);
-    env.new_string(sig).unwrap().into_raw()
+    let prover = StwoProver::default();
+    
+    let result = match CircuitType::from_str(&circuit_s) {
+        Some(CircuitType::HashIntegrity) => prover.prove_hash_integrity(&in_hex, &out_hex),
+        Some(CircuitType::ContentTransform) => prover.prove_content_transform(&in_hex, "default", &out_hex),
+        Some(CircuitType::LoginProof) => {
+            // For login proof, input_hash is nonce, output_hash is device_hash
+            prover.prove_login(&in_hex, &out_hex, std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(), "")
+        }
+        Some(CircuitType::SignatureValidation) => prover.prove_signature_validation(&in_hex, &out_hex, ""),
+        Some(CircuitType::PaymentTriggerHash) => prover.prove_payment_trigger("", &in_hex, &out_hex),
+        None => Err(anyhow!("Unknown circuit type: {}", circuit_s)),
+    };
+
+    match result {
+        Ok(proof) => {
+            let json = proof.to_json().unwrap_or_else(|_| "{}".to_string());
+            env.new_string(json).unwrap().into_raw()
+        }
+        Err(e) => {
+            let error_json = format!(r#"{{"status":"error","error":"{}"}}"#, e);
+            env.new_string(error_json).unwrap().into_raw()
+        }
+    }
 }
 
+// ============================================================================
+// DLC BUILDER JNI FUNCTIONS
+// ============================================================================
+
+/// Create a DLC contract
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_createDlcContract(
+    mut env: JNIEnv,
+    _clazz: JClass,
+    outcome: JString,
+    payouts_json: JString,
+    oracle_json: JString,
+) -> jstring {
+    let _outcome = env.get_string(&outcome)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let payouts = env.get_string(&payouts_json)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let oracle = env.get_string(&oracle_json)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    // Parse oracle info
+    let oracle_info = match serde_json::from_str::<OracleInfo>(&oracle) {
+        Ok(o) => o,
+        Err(_) => OracleInfo {
+            name: "local_oracle".to_string(),
+            pubkey_hex: "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798".to_string(),
+            x_only_pubkey: None,
+        },
+    };
+
+    // Parse payout split
+    let split = match serde_json::from_str::<PayoutSplit>(&payouts) {
+        Ok(s) => s,
+        Err(_) => PayoutSplit::default(),
+    };
+
+    // Generate a key for the contract (in production, this would come from the user)
+    let user_key = match ManagedKey::generate() {
+        Ok(k) => k,
+        Err(e) => {
+            let error_json = format!(r#"{{"status":"error","error":"{}"}}"#, e);
+            return env.new_string(error_json).unwrap().into_raw();
+        }
+    };
+
+    match DlcContract::new(&user_key, oracle_info, 0, split) {
+        Ok(contract) => {
+            let json = contract.to_json().unwrap_or_else(|_| "{}".to_string());
+            env.new_string(json).unwrap().into_raw()
+        }
+        Err(e) => {
+            let error_json = format!(r#"{{"status":"error","error":"{}"}}"#, e);
+            env.new_string(error_json).unwrap().into_raw()
+        }
+    }
+}
+
+/// Sign a DLC outcome (as oracle)
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_signDlcOutcome(
+    mut env: JNIEnv,
+    _clazz: JClass,
+    outcome: JString,
+) -> jstring {
+    let outcome_str = env.get_string(&outcome)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    // Generate oracle key (in production, this would be stored/loaded)
+    let oracle_key = match ManagedKey::generate() {
+        Ok(k) => k,
+        Err(e) => {
+            let error_json = format!(r#"{{"status":"error","error":"{}"}}"#, e);
+            return env.new_string(error_json).unwrap().into_raw();
+        }
+    };
+
+    let dlc_outcome = if outcome_str == "paid=true" {
+        DlcOutcome::Paid
+    } else if outcome_str == "refund=true" {
+        DlcOutcome::Refund
+    } else {
+        DlcOutcome::Custom(outcome_str)
+    };
+
+    match oracle_sign_outcome(&oracle_key, &dlc_outcome) {
+        Ok(attestation) => {
+            let json = serde_json::to_string_pretty(&attestation)
+                .unwrap_or_else(|_| "{}".to_string());
+            env.new_string(json).unwrap().into_raw()
+        }
+        Err(e) => {
+            let error_json = format!(r#"{{"status":"error","error":"{}"}}"#, e);
+            env.new_string(error_json).unwrap().into_raw()
+        }
+    }
+}
+
+/// Get oracle public key
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_oraclePubkeyHex(
+    mut env: JNIEnv,
+    _clazz: JClass,
+) -> jstring {
+    // Return the standard oracle pubkey (generator point for testing)
+    env.new_string("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+        .unwrap()
+        .into_raw()
+}
+
+/// Oracle sign outcome (backwards compat)
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_oracleSignOutcome(
+    mut env: JNIEnv,
+    _clazz: JClass,
+    outcome: JString,
+) -> jstring {
+    // Delegate to the new function
+    Java_com_privacylion_btcdid_NativeBridge_signDlcOutcome(env, _clazz, outcome)
+}
+
+// ============================================================================
+// LIGHTNING PAYMENT JNI FUNCTIONS
+// ============================================================================
+
+/// Generate a Lightning preimage and payment hash
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_generatePreimage(
+    mut env: JNIEnv,
+    _clazz: JClass,
+) -> jstring {
+    let preimage = Preimage::generate();
+    let json = serde_json::json!({
+        "preimage_hex": preimage.preimage_hex,
+        "payment_hash": preimage.hash.hash_hex,
+    });
+    env.new_string(json.to_string()).unwrap().into_raw()
+}
+
+/// Verify a payment (preimage against payment hash)
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_verifyPayment(
+    mut env: JNIEnv,
+    _clazz: JClass,
+    payment_hash: JString,
+    preimage_hex: JString,
+) -> jstring {
+    let hash = env.get_string(&payment_hash)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let preimage = env.get_string(&preimage_hex)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    let result = verify_payment(&hash, &preimage);
+    let json = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
+    env.new_string(json).unwrap().into_raw()
+}
+
+/// Create a Payment Request Package (PRP)
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_createPrp(
+    mut env: JNIEnv,
+    _clazz: JClass,
+    amount_sats: jlong,
+    description: JString,
+    payee_did: JString,
+    payee_ln_address: JString,
+    expiry_secs: jlong,
+) -> jstring {
+    let desc = env.get_string(&description)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let did = env.get_string(&payee_did)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ln_addr = env.get_string(&payee_ln_address)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    let preimage = Preimage::generate();
+    let prp = PaymentRequestPackage::new(
+        &preimage,
+        amount_sats as u64,
+        &desc,
+        &did,
+        &ln_addr,
+        expiry_secs as u32,
+    );
+
+    match prp.to_json() {
+        Ok(json) => {
+            // Include the preimage in the response (for the payee to verify later)
+            let full_json = serde_json::json!({
+                "prp": serde_json::from_str::<serde_json::Value>(&json).unwrap_or_default(),
+                "preimage_hex": preimage.preimage_hex,
+            });
+            env.new_string(full_json.to_string()).unwrap().into_raw()
+        }
+        Err(e) => {
+            let error_json = format!(r#"{{"status":"error","error":"{}"}}"#, e);
+            env.new_string(error_json).unwrap().into_raw()
+        }
+    }
+}
+
+/// Sign a message with Schnorr (for Taproot/DLC)
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_signSchnorr(
+    mut env: JNIEnv,
+    _clazz: JClass,
+    priv_bytes: JByteArray,
+    msg_jstr: JString,
+) -> jstring {
+    let priv_vec = match env.convert_byte_array(priv_bytes) {
+        Ok(v) => v,
+        Err(_) => return env.new_string("error:no_priv_bytes").unwrap().into_raw(),
+    };
+
+    let msg_str = match env.get_string(&msg_jstr) {
+        Ok(js) => js.to_string_lossy().into_owned(),
+        Err(_) => return env.new_string("error:no_msg").unwrap().into_raw(),
+    };
+
+    let key = match ManagedKey::from_bytes(&priv_vec) {
+        Ok(k) => k,
+        Err(e) => return env.new_string(format!("error:{}", e)).unwrap().into_raw(),
+    };
+
+    match key.sign_schnorr(msg_str.as_bytes()) {
+        Ok(sig) => env.new_string(sig).unwrap().into_raw(),
+        Err(e) => env.new_string(format!("error:{}", e)).unwrap().into_raw(),
+    }
+}
+
+/// Get x-only public key (for Taproot)
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_getXOnlyPubkey(
+    mut env: JNIEnv,
+    _clazz: JClass,
+    priv_bytes: JByteArray,
+) -> jstring {
+    let priv_vec = match env.convert_byte_array(priv_bytes) {
+        Ok(v) => v,
+        Err(_) => return env.new_string("error:no_priv_bytes").unwrap().into_raw(),
+    };
+
+    let key = match ManagedKey::from_bytes(&priv_vec) {
+        Ok(k) => k,
+        Err(e) => return env.new_string(format!("error:{}", e)).unwrap().into_raw(),
+    };
+
+    env.new_string(key.x_only_pubkey_hex()).unwrap().into_raw()
+}
