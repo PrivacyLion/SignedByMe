@@ -332,31 +332,48 @@ class BreezWalletManager(private val context: Context) {
             return it as SecretKey
         }
         
-        // Generate new key
+        // Generate new key - try StrongBox first, fall back to TEE
         val keyGenerator = KeyGenerator.getInstance(
             KeyProperties.KEY_ALGORITHM_AES,
             "AndroidKeyStore"
         )
         
-        val builder = KeyGenParameterSpec.Builder(
+        // Try StrongBox first on Android P+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            try {
+                val strongBoxSpec = KeyGenParameterSpec.Builder(
+                    KEYSTORE_ALIAS,
+                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+                )
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setKeySize(256)
+                    .setUserAuthenticationRequired(false)
+                    .setIsStrongBoxBacked(true)
+                    .build()
+                
+                keyGenerator.init(strongBoxSpec)
+                val key = keyGenerator.generateKey()
+                Log.i(TAG, "Using StrongBox-backed key")
+                return key
+            } catch (e: android.security.keystore.StrongBoxUnavailableException) {
+                Log.w(TAG, "StrongBox not available, falling back to TEE")
+            }
+        }
+        
+        // Fallback to TEE (still hardware-backed on most devices)
+        val teeSpec = KeyGenParameterSpec.Builder(
             KEYSTORE_ALIAS,
             KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
         )
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
             .setKeySize(256)
-            .setUserAuthenticationRequired(false) // Set true for biometric protection
+            .setUserAuthenticationRequired(false)
+            .build()
         
-        // Try to use StrongBox if available (Pixel 3+, Samsung S9+, etc.)
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-            try {
-                builder.setIsStrongBoxBacked(true)
-            } catch (e: Exception) {
-                Log.w(TAG, "StrongBox not available, using TEE")
-            }
-        }
-        
-        keyGenerator.init(builder.build())
+        keyGenerator.init(teeSpec)
+        Log.i(TAG, "Using TEE-backed key")
         return keyGenerator.generateKey()
     }
 }
