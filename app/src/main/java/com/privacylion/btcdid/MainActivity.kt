@@ -173,7 +173,7 @@ fun SignedByMeApp(mgr: DidWalletManager) {
             ) {
                 if (!step2Complete) {
                     Text(
-                        "Pick an option to Connect",
+                        "Choose a wallet for future payouts",
                         fontSize = 16.sp,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -377,19 +377,6 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
-                
-                // Anchoring amount
-                OutlinedTextField(
-                    value = priceSats,
-                    onValueChange = { priceSats = it.filter { c -> c.isDigit() } },
-                    label = { Text("₿") },
-                    placeholder = { Text("1000") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    supportingText = { Text("add ₿ to anchor your signature") }
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
 
                 GradientButton(
                     text = "Generate Signature",
@@ -490,7 +477,7 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                     Spacer(modifier = Modifier.height(16.dp))
                     
                     Text(
-                        "Use your Verified Content Claim to prove your content is yours",
+                        "Use your Verified Content Claim (VCC) to prove your content is yours. Your VCC is cryptographically tied to your signature.",
                         fontSize = 14.sp,
                         color = Color.Gray,
                         textAlign = TextAlign.Center,
