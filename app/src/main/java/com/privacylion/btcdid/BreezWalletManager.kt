@@ -273,22 +273,11 @@ class BreezWalletManager(private val context: Context) {
     }
     
     /**
-     * Generate a BIP39 mnemonic
-     * Note: In production, use a proper BIP39 library
+     * Generate a BIP39 mnemonic using Breez SDK
      */
     private fun generateMnemonic(): String {
-        // TODO: Use proper BIP39 library like bitcoinj or libwallet
-        // This is a placeholder - Breez SDK may provide mnemonic generation
-        val wordList = listOf(
-            "abandon", "ability", "able", "about", "above", "absent",
-            "absorb", "abstract", "absurd", "abuse", "access", "accident"
-            // ... full BIP39 wordlist needed
-        )
-        
-        // For now, generate 12 random words (NOT SECURE - use proper entropy!)
-        // In production: use SecureRandom with 128 bits of entropy
-        val random = java.security.SecureRandom()
-        return (1..12).map { wordList[random.nextInt(wordList.size)] }.joinToString(" ")
+        // Breez SDK provides proper BIP39 mnemonic generation with secure entropy
+        return breez_sdk_spark.generateMnemonic()
     }
     
     /**
