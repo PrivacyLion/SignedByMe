@@ -77,6 +77,8 @@ dependencies {
     implementation(libs.zxing.core)
     // Breez SDK Spark for Lightning wallet
     implementation(libs.breez.sdk.spark)
+    // BIP39 mnemonic generation
+    implementation(libs.bip39)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

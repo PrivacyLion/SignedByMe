@@ -6,6 +6,9 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.util.Log
 import breez_sdk_spark.*
+import cash.z.ecc.android.bip39.Mnemonics
+import cash.z.ecc.android.bip39.toMnemonic
+import java.security.SecureRandom
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -273,11 +276,13 @@ class BreezWalletManager(private val context: Context) {
     }
     
     /**
-     * Generate a BIP39 mnemonic using Breez SDK
+     * Generate a BIP39 mnemonic with 128 bits of entropy (12 words)
      */
     private fun generateMnemonic(): String {
-        // Breez SDK provides proper BIP39 mnemonic generation with secure entropy
-        return breez_sdk_spark.generateMnemonic()
+        // Generate 128 bits (16 bytes) of secure entropy for a 12-word mnemonic
+        val entropy = ByteArray(16)
+        SecureRandom().nextBytes(entropy)
+        return entropy.toMnemonic().joinToString(" ")
     }
     
     /**
