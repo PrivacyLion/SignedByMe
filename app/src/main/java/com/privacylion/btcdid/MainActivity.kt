@@ -64,14 +64,17 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
     // ===== State =====
     var did by remember { mutableStateOf(didMgr.getPublicDID() ?: "") }
     var step1Complete by remember { mutableStateOf(did.isNotEmpty()) }
-    var step2Complete by remember { mutableStateOf(breezMgr.isWalletSetUp()) }
+    val walletState by breezMgr.walletState.collectAsState()
+    var step2Complete by remember { mutableStateOf(walletState is BreezWalletManager.WalletState.Connected) }
     var step3Complete by remember { mutableStateOf(false) }
 
-    // Breez wallet state
-    val walletState by breezMgr.walletState.collectAsState()
-    val balanceSats by breezMgr.balanceSats.collectAsState()
+    // Breez wallet state - derive from WalletState
+    val balanceSats = when (val state = walletState) {
+        is BreezWalletManager.WalletState.Connected -> state.balanceSats.toLong()
+        else -> 0L
+    }
     var isWalletInitializing by remember { mutableStateOf(false) }
-    var walletNodeId by remember { mutableStateOf("") }
+    var walletSparkAddress by remember { mutableStateOf("") }
 
     // Login/API state
     var lastNonce by remember { mutableStateOf("") }
@@ -94,7 +97,7 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
 
     // Auto-initialize wallet if already set up
     LaunchedEffect(step2Complete) {
-        if (step2Complete && walletState is BreezWalletManager.WalletState.Uninitialized) {
+        if (step2Complete && walletState is BreezWalletManager.WalletState.Disconnected) {
             breezMgr.initializeWallet()
         }
     }
@@ -102,8 +105,8 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
     // Update step2Complete when wallet becomes ready
     LaunchedEffect(walletState) {
         when (val state = walletState) {
-            is BreezWalletManager.WalletState.Ready -> {
-                walletNodeId = state.nodeId
+            is BreezWalletManager.WalletState.Connected -> {
+                walletSparkAddress = state.sparkAddress ?: ""
                 step2Complete = true
                 isWalletInitializing = false
             }
@@ -111,7 +114,7 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
                 statusMessage = "Wallet error: ${state.message}"
                 isWalletInitializing = false
             }
-            is BreezWalletManager.WalletState.Initializing -> {
+            is BreezWalletManager.WalletState.Connecting -> {
                 isWalletInitializing = true
             }
             else -> {}
@@ -189,10 +192,10 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
             StepCard(
                 stepNumber = 2,
                 title = "Connect",
-                isComplete = step2Complete && walletState is BreezWalletManager.WalletState.Ready,
+                isComplete = step2Complete && walletState is BreezWalletManager.WalletState.Connected,
                 isEnabled = step1Complete
             ) {
-                if (!step2Complete || walletState !is BreezWalletManager.WalletState.Ready) {
+                if (!step2Complete || walletState !is BreezWalletManager.WalletState.Connected) {
                     // Not connected yet
                     Text(
                         "Set up your Lightning wallet to receive payments",
@@ -372,7 +375,7 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
                 stepNumber = 3,
                 title = "Prove",
                 isComplete = step3Complete,
-                isEnabled = step1Complete && step2Complete && walletState is BreezWalletManager.WalletState.Ready
+                isEnabled = step1Complete && step2Complete && walletState is BreezWalletManager.WalletState.Connected
             ) {
                 Text(
                     "Generate your Signature",
@@ -387,7 +390,7 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
                 GradientButton(
                     text = "Generate Signature",
                     colors = listOf(Color(0xFFEF4444), Color(0xFFF97316)),
-                    enabled = walletState is BreezWalletManager.WalletState.Ready,
+                    enabled = walletState is BreezWalletManager.WalletState.Connected,
                     onClick = {
                         isLoading = true
                         scope.launch(Dispatchers.IO) {
@@ -406,7 +409,7 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
                                     did = did,
                                     nonce = lastNonce.ifEmpty { "android-${System.currentTimeMillis()}" },
                                     walletType = "breez",
-                                    withdrawTo = walletNodeId.ifEmpty { "lightning-wallet" },
+                                    withdrawTo = walletSparkAddress.ifEmpty { "lightning-wallet" },
                                     preimage = preimage
                                 )
 
@@ -654,13 +657,13 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
     // ===== Wallet Info Dialog =====
     if (showWalletInfoDialog) {
         WalletInfoDialog(
-            nodeId = walletNodeId,
+            sparkAddress = walletSparkAddress,
             balanceSats = balanceSats,
             onDismiss = { showWalletInfoDialog = false },
-            onCopyNodeId = {
+            onCopySparkAddress = {
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("Node ID", walletNodeId))
-                Toast.makeText(context, "Node ID copied!", Toast.LENGTH_SHORT).show()
+                clipboard.setPrimaryClip(ClipData.newPlainText("Spark Address", walletSparkAddress))
+                Toast.makeText(context, "Spark Address copied!", Toast.LENGTH_SHORT).show()
             }
         )
     }
@@ -935,10 +938,10 @@ fun DIDInfoDialog(
 
 @Composable
 fun WalletInfoDialog(
-    nodeId: String,
+    sparkAddress: String,
     balanceSats: Long,
     onDismiss: () -> Unit,
-    onCopyNodeId: () -> Unit
+    onCopySparkAddress: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -995,15 +998,15 @@ fun WalletInfoDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Node ID
+                // Spark Address
                 Text(
-                    "Node ID",
+                    "Spark Address",
                     fontSize = 14.sp,
                     color = Color.Gray
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = if (nodeId.length > 20) "${nodeId.take(10)}...${nodeId.takeLast(10)}" else nodeId,
+                    text = if (sparkAddress.length > 20) "${sparkAddress.take(10)}...${sparkAddress.takeLast(10)}" else sparkAddress.ifEmpty { "Not available" },
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace,
                     color = Color.Black
@@ -1016,10 +1019,11 @@ fun WalletInfoDialog(
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     OutlinedButton(
-                        onClick = onCopyNodeId,
-                        modifier = Modifier.weight(1f)
+                        onClick = onCopySparkAddress,
+                        modifier = Modifier.weight(1f),
+                        enabled = sparkAddress.isNotEmpty()
                     ) {
-                        Text("📋 Copy Node ID")
+                        Text("📋 Copy Address")
                     }
                     
                     Button(
