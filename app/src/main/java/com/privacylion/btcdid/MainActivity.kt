@@ -35,7 +35,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.res.painterResource
 import com.privacylion.btcdid.ui.theme.BTC_DIDTheme
 import kotlinx.coroutines.*
 import org.json.JSONObject
@@ -46,30 +45,33 @@ import com.google.zxing.common.BitMatrix
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val mgr = DidWalletManager(applicationContext)
+        val didMgr = DidWalletManager(applicationContext)
+        val breezMgr = BreezWalletManager(applicationContext)
 
         setContent {
             BTC_DIDTheme {
-                SignedByMeApp(mgr)
+                SignedByMeApp(didMgr, breezMgr)
             }
         }
     }
 }
 
 @Composable
-fun SignedByMeApp(mgr: DidWalletManager) {
+fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     // ===== State =====
-    var did by remember { mutableStateOf(mgr.getPublicDID() ?: "") }
+    var did by remember { mutableStateOf(didMgr.getPublicDID() ?: "") }
     var step1Complete by remember { mutableStateOf(did.isNotEmpty()) }
-    var step2Complete by remember { mutableStateOf(false) }
+    var step2Complete by remember { mutableStateOf(breezMgr.isWalletSetUp()) }
     var step3Complete by remember { mutableStateOf(false) }
 
-    // Connect step state
-    var selectedWalletType by remember { mutableStateOf<String?>(null) }
-    var withdrawAddress by remember { mutableStateOf("") }
+    // Breez wallet state
+    val walletState by breezMgr.walletState.collectAsState()
+    val balanceSats by breezMgr.balanceSats.collectAsState()
+    var isWalletInitializing by remember { mutableStateOf(false) }
+    var walletNodeId by remember { mutableStateOf("") }
 
     // Login/API state
     var lastNonce by remember { mutableStateOf("") }
@@ -78,24 +80,43 @@ fun SignedByMeApp(mgr: DidWalletManager) {
     var lastClaimJson by remember { mutableStateOf("") }
     var lastSigHex by remember { mutableStateOf("") }
     var lastPrpJson by remember { mutableStateOf("") }
+    var lastInvoice by remember { mutableStateOf("") }
+    var lastPaymentHash by remember { mutableStateOf("") }
 
     // UI state
     var statusMessage by remember { mutableStateOf("") }
     var showIdDialog by remember { mutableStateOf(false) }
+    var showWalletInfoDialog by remember { mutableStateOf(false) }
     var showVccResult by remember { mutableStateOf(false) }
     var vccResult by remember { mutableStateOf("") }
-    var paymentResult by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
-    
-    // Wallet connection dialogs
-    var showSeedPhraseDialog by remember { mutableStateOf(false) }
-    var showCustodialDialog by remember { mutableStateOf(false) }
-    var selectedCustodialProvider by remember { mutableStateOf<String?>(null) }
-    var showQRScanner by remember { mutableStateOf(false) }
-    
-    // VCC pricing
-    var priceSats by remember { mutableStateOf("") }
     var vccId by remember { mutableStateOf("") }
+
+    // Auto-initialize wallet if already set up
+    LaunchedEffect(step2Complete) {
+        if (step2Complete && walletState is BreezWalletManager.WalletState.Uninitialized) {
+            breezMgr.initializeWallet()
+        }
+    }
+
+    // Update step2Complete when wallet becomes ready
+    LaunchedEffect(walletState) {
+        when (val state = walletState) {
+            is BreezWalletManager.WalletState.Ready -> {
+                walletNodeId = state.nodeId
+                step2Complete = true
+                isWalletInitializing = false
+            }
+            is BreezWalletManager.WalletState.Error -> {
+                statusMessage = "Wallet error: ${state.message}"
+                isWalletInitializing = false
+            }
+            is BreezWalletManager.WalletState.Initializing -> {
+                isWalletInitializing = true
+            }
+            else -> {}
+        }
+    }
 
     // Background gradient
     Box(
@@ -152,7 +173,7 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                         text = "Generate",
                         colors = listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6)),
                         onClick = {
-                            did = mgr.createDid()
+                            did = didMgr.createDid()
                             step1Complete = true
                         }
                     )
@@ -164,162 +185,170 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                 }
             }
 
-            // ===== Step 2: Connect =====
+            // ===== Step 2: Connect (Breez Wallet) =====
             StepCard(
                 stepNumber = 2,
                 title = "Connect",
-                isComplete = step2Complete,
+                isComplete = step2Complete && walletState is BreezWalletManager.WalletState.Ready,
                 isEnabled = step1Complete
             ) {
-                if (!step2Complete) {
+                if (!step2Complete || walletState !is BreezWalletManager.WalletState.Ready) {
+                    // Not connected yet
                     Text(
-                        "Choose a wallet for future payouts",
-                        fontSize = 16.sp,
+                        "Set up your Lightning wallet to receive payments",
+                        color = Color.Gray,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth()
                     )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Start over chip
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        StartOverChip {
-                            selectedWalletType = null
-                            withdrawAddress = ""
-                            lastNonce = ""
-                            lastLoginId = ""
-                            lastPreimage = ""
-                            step2Complete = false
-                        }
-                    }
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Cash App option
-                    CashAppCard(
-                        withdrawAddress = withdrawAddress,
-                        onAddressChange = { withdrawAddress = it },
-                        onOpenCashApp = {
-                            // Deep link to Cash App
-                            val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://cash.app"))
-                            try {
-                                context.startActivity(intent)
-                            } catch (e: Exception) {
-                                // Fallback to Play Store
-                                val playStoreIntent = Intent(Intent.ACTION_VIEW, 
-                                    android.net.Uri.parse("market://details?id=com.squareup.cash"))
-                                try {
-                                    context.startActivity(playStoreIntent)
-                                } catch (e2: Exception) {
-                                    Toast.makeText(context, "Could not open Cash App", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        },
-                        onPaste = {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            val clip = clipboard.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
-                            if (clip.isNotEmpty()) {
-                                withdrawAddress = clip
-                                selectedWalletType = "cashapp"
-                            }
-                        },
-                        onScanQR = {
-                            showQRScanner = true
-                        },
-                        onConnect = {
-                            if (withdrawAddress.isNotEmpty()) {
-                                selectedWalletType = "cashapp"
-                                step2Complete = true
-                                statusMessage = "Cash App connected!"
-                            }
-                        }
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Custodial Wallet button (Strike)
-                    GradientButton(
-                        text = "Custodial Wallet",
-                        pillText = "intermediate",
-                        colors = listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6)),
-                        onClick = {
-                            showCustodialDialog = true
-                        }
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Non-Custodial Wallet button
-                    GradientButton(
-                        text = "Non-Custodial Wallet",
-                        pillText = "advanced",
-                        colors = listOf(Color(0xFF6366F1), Color(0xFF8B5CF6)),
-                        onClick = {
-                            showSeedPhraseDialog = true
-                        }
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Skip for simulator testing
-                    OutlinedButton(
-                        onClick = {
-                            withdrawAddress = "demo@getalby.com"
-                            selectedWalletType = "demo"
-                            step2Complete = true
-                            statusMessage = "Demo mode — skipped wallet connection"
-                        },
-                        modifier = Modifier.fillMaxWidth()
+                    // Lightning bolt icon
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Text("🧪 Skip for Testing")
+                        Text(
+                            text = "⚡",
+                            fontSize = 48.sp
+                        )
                     }
 
-                    // Connect via API button (after selecting wallet type)
-                    if (selectedWalletType != null && withdrawAddress.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        "Your wallet will be created securely on this device. " +
+                        "You'll be able to receive Bitcoin payments instantly.",
+                        color = Color.Gray,
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    if (isWalletInitializing) {
+                        // Loading state
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(40.dp),
+                                color = Color(0xFF3B82F6)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                "Setting up your wallet...",
+                                fontSize = 14.sp,
+                                color = Color.Gray
+                            )
+                        }
+                    } else {
                         GradientButton(
-                            text = "Connect & Fetch Nonce",
-                            colors = listOf(Color(0xFF10B981), Color(0xFF059669)),
+                            text = "Set Up Wallet",
+                            colors = listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6)),
                             onClick = {
-                                scope.launch(Dispatchers.IO) {
-                                    try {
-                                        val res = mgr.startLogin()
-                                        withContext(Dispatchers.Main) {
-                                            lastLoginId = res.loginId
-                                            lastNonce = res.nonce
-                                            step2Complete = true
-                                            statusMessage = "Connected! Nonce received."
-                                        }
-                                    } catch (e: Exception) {
-                                        withContext(Dispatchers.Main) {
-                                            statusMessage = "Error: ${e.message}"
-                                        }
+                                scope.launch {
+                                    isWalletInitializing = true
+                                    statusMessage = ""
+                                    val result = breezMgr.initializeWallet()
+                                    result.onFailure { e ->
+                                        statusMessage = "Error: ${e.message}"
                                     }
                                 }
                             }
                         )
                     }
+
+                    // Error state
+                    if (walletState is BreezWalletManager.WalletState.Error) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            (walletState as BreezWalletManager.WalletState.Error).message,
+                            color = Color(0xFFEF4444),
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 } else {
-                    // Connected state
+                    // Wallet connected
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        StartOverChip {
-                            selectedWalletType = null
-                            withdrawAddress = ""
-                            lastNonce = ""
-                            lastLoginId = ""
-                            lastPreimage = ""
-                            step2Complete = false
-                            step3Complete = false
+                        // Info button
+                        TextButton(onClick = { showWalletInfoDialog = true }) {
+                            Icon(
+                                Icons.Default.Info,
+                                contentDescription = "Wallet Info",
+                                tint = Color(0xFF3B82F6),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                "Wallet Info",
+                                color = Color(0xFF3B82F6),
+                                fontSize = 14.sp
+                            )
                         }
                     }
+
                     Spacer(modifier = Modifier.height(8.dp))
-                    CompletedStepContent(
-                        message = "Wallet: ${selectedWalletType ?: "Connected"}\n${if (withdrawAddress.isNotEmpty()) withdrawAddress.take(20) + "..." else ""}",
-                        onInfoClick = null
-                    )
+
+                    // Wallet status card
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFF10B981).copy(alpha = 0.1f)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Lightning icon
+                            Box(
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF10B981).copy(alpha = 0.2f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("⚡", fontSize = 24.sp)
+                            }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "Lightning Wallet",
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 16.sp
+                                )
+                                Text(
+                                    "Balance: $balanceSats sats",
+                                    fontSize = 14.sp,
+                                    color = Color.Gray
+                                )
+                            }
+
+                            Icon(
+                                Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = Color(0xFF10B981),
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
 
                     // Show login ID if we have one
                     if (lastLoginId.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         Text(
                             "Login ID: ${lastLoginId.take(16)}...",
                             fontSize = 12.sp,
@@ -327,35 +356,12 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                             color = Color.Gray
                         )
 
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // Settle (demo) button
-                        if (lastPreimage.isEmpty()) {
-                            OutlinedButton(
-                                onClick = {
-                                    scope.launch(Dispatchers.IO) {
-                                        try {
-                                            val bytes = ByteArray(32)
-                                            java.security.SecureRandom().nextBytes(bytes)
-                                            val preimage = bytes.joinToString("") { "%02x".format(it) }
-                                            mgr.settleLoginDemo(lastLoginId, preimage)
-                                            withContext(Dispatchers.Main) {
-                                                lastPreimage = preimage
-                                                statusMessage = "Payment settled (demo)"
-                                            }
-                                        } catch (e: Exception) {
-                                            withContext(Dispatchers.Main) {
-                                                statusMessage = "Settle error: ${e.message}"
-                                            }
-                                        }
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Settle Payment (demo)")
-                            }
-                        } else {
-                            StatusPill("Payment Settled", Color(0xFF10B981))
+                        if (lastInvoice.isNotEmpty() && lastPreimage.isEmpty()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            StatusPill("Awaiting Payment", Color(0xFFF59E0B))
+                        } else if (lastPreimage.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            StatusPill("Payment Received", Color(0xFF10B981))
                         }
                     }
                 }
@@ -366,7 +372,7 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                 stepNumber = 3,
                 title = "Prove",
                 isComplete = step3Complete,
-                isEnabled = step1Complete && step2Complete
+                isEnabled = step1Complete && step2Complete && walletState is BreezWalletManager.WalletState.Ready
             ) {
                 Text(
                     "Generate your Signature",
@@ -381,7 +387,7 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                 GradientButton(
                     text = "Generate Signature",
                     colors = listOf(Color(0xFFEF4444), Color(0xFFF97316)),
-                    enabled = lastPreimage.isNotEmpty() || selectedWalletType != null,
+                    enabled = walletState is BreezWalletManager.WalletState.Ready,
                     onClick = {
                         isLoading = true
                         scope.launch(Dispatchers.IO) {
@@ -396,16 +402,16 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                                 }
 
                                 // Build ownership claim
-                                val claimJson = mgr.buildOwnershipClaimJson(
+                                val claimJson = didMgr.buildOwnershipClaimJson(
                                     did = did,
                                     nonce = lastNonce.ifEmpty { "android-${System.currentTimeMillis()}" },
-                                    walletType = selectedWalletType ?: "custodial",
-                                    withdrawTo = withdrawAddress.ifEmpty { "lnbc1demo" },
+                                    walletType = "breez",
+                                    withdrawTo = walletNodeId.ifEmpty { "lightning-wallet" },
                                     preimage = preimage
                                 )
 
                                 // Sign the claim
-                                val sigHex = mgr.signOwnershipClaim(claimJson)
+                                val sigHex = didMgr.signOwnershipClaim(claimJson)
 
                                 // Derive preimage_sha256
                                 val preBytes = preimage.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
@@ -413,7 +419,7 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                                 val preShaHex = md.digest(preBytes).joinToString("") { "%02x".format(it) }
 
                                 // Build PRP
-                                val prpJson = mgr.buildPrpJson(
+                                val prpJson = didMgr.buildPrpJson(
                                     loginId = lastLoginId.ifEmpty { "android-${System.currentTimeMillis()}" },
                                     did = did,
                                     preimageSha256Hex = preShaHex
@@ -427,20 +433,9 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                                     put("did", did)
                                     put("content_hash", "sha256_demo_${System.currentTimeMillis()}")
                                     put("proof_hash", preShaHex)
-                                    put("withdraw_to", withdrawAddress.ifEmpty { "demo@wallet.com" })
-                                    if (priceSats.isNotEmpty()) {
-                                        put("price_sats", priceSats.toLongOrNull() ?: 0L)
-                                    }
+                                    put("wallet_type", "breez")
                                     put("timestamp", System.currentTimeMillis())
                                     put("signature", sigHex)
-                                }.toString()
-
-                                // Mock payment result
-                                val payment = JSONObject().apply {
-                                    put("to", withdrawAddress.ifEmpty { "demo@wallet.com" })
-                                    put("amount_sats", 100)
-                                    put("preimage", preimage.take(16) + "...")
-                                    put("status", "completed")
                                 }.toString()
 
                                 withContext(Dispatchers.Main) {
@@ -449,7 +444,6 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                                     lastPrpJson = prpJson
                                     vccResult = vcc
                                     vccId = generatedVccId
-                                    paymentResult = payment
                                     step3Complete = true
                                     showVccResult = true
                                     isLoading = false
@@ -468,7 +462,8 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                 if (isLoading) {
                     Spacer(modifier = Modifier.height(16.dp))
                     CircularProgressIndicator(
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                        modifier = Modifier.align(Alignment.CenterHorizontally),
+                        color = Color(0xFFEF4444)
                     )
                 }
 
@@ -477,7 +472,8 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                     Spacer(modifier = Modifier.height(16.dp))
                     
                     Text(
-                        "Use your Verified Content Claim (VCC) to prove your content is yours. Your VCC is cryptographically tied to your signature.",
+                        "Use your Verified Content Claim (VCC) to prove your content is yours. " +
+                        "Your VCC is cryptographically tied to your signature.",
                         fontSize = 14.sp,
                         color = Color.Gray,
                         textAlign = TextAlign.Center,
@@ -486,7 +482,6 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                     
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // VCC Card
                     StatusPill("Verified Content Claim", Color(0xFF10B981))
 
                     Spacer(modifier = Modifier.height(8.dp))
@@ -620,16 +615,13 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                     lastClaimJson = ""
                     lastSigHex = ""
                     lastPrpJson = ""
+                    lastInvoice = ""
+                    lastPaymentHash = ""
                     vccResult = ""
                     vccId = ""
-                    paymentResult = ""
                     statusMessage = ""
-                    step2Complete = false
                     step3Complete = false
                     showVccResult = false
-                    selectedWalletType = null
-                    withdrawAddress = ""
-                    priceSats = ""
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -646,7 +638,7 @@ fun SignedByMeApp(mgr: DidWalletManager) {
             did = did,
             onDismiss = { showIdDialog = false },
             onRegenerate = {
-                did = mgr.regenerateKeyPair()
+                did = didMgr.regenerateKeyPair()
                 step1Complete = true
                 step2Complete = false
                 step3Complete = false
@@ -658,115 +650,19 @@ fun SignedByMeApp(mgr: DidWalletManager) {
             }
         )
     }
-    
-    // ===== Seed Phrase Entry Dialog =====
-    if (showSeedPhraseDialog) {
-        SeedPhraseEntryDialog(
-            onDismiss = { showSeedPhraseDialog = false },
-            onConfirm = { seedPhrase, passphrase ->
-                scope.launch(Dispatchers.IO) {
-                    try {
-                        // Derive keys from seed phrase
-                        val derivedAddress = mgr.deriveFromSeedPhrase(seedPhrase, passphrase)
-                        withContext(Dispatchers.Main) {
-                            withdrawAddress = derivedAddress
-                            selectedWalletType = "non-custodial"
-                            step2Complete = true
-                            showSeedPhraseDialog = false
-                            statusMessage = "Wallet connected via seed phrase"
-                        }
-                    } catch (e: Exception) {
-                        withContext(Dispatchers.Main) {
-                            statusMessage = "Error: ${e.message}"
-                        }
-                    }
-                }
-            }
-        )
-    }
-    
-    // ===== Custodial Wallet Selection Dialog =====
-    if (showCustodialDialog) {
-        CustodialWalletDialog(
-            onDismiss = { showCustodialDialog = false },
-            onSelect = { provider, address ->
-                withdrawAddress = address
-                selectedWalletType = "custodial"
-                selectedCustodialProvider = provider
-                step2Complete = true
-                showCustodialDialog = false
-                statusMessage = "Connected to $provider"
-            }
-        )
-    }
-    
-    // ===== QR Scanner Dialog =====
-    if (showQRScanner) {
-        QRScannerDialog(
-            onDismiss = { showQRScanner = false },
-            onScanned = { scannedValue ->
-                // Parse Bitcoin/Lightning address from QR
-                val address = parseBitcoinAddress(scannedValue)
-                withdrawAddress = address
-                selectedWalletType = "cashapp"
-                showQRScanner = false
-                Toast.makeText(context, "Address scanned!", Toast.LENGTH_SHORT).show()
-            }
-        )
-    }
-}
 
-/**
- * Parse a Bitcoin or Lightning address from a QR code value.
- * Handles formats like:
- * - bitcoin:bc1q...
- * - lightning:lnbc...
- * - Plain addresses
- */
-private fun parseBitcoinAddress(raw: String): String {
-    val trimmed = raw.trim()
-    return when {
-        trimmed.startsWith("bitcoin:", ignoreCase = true) -> {
-            // bitcoin:address?amount=...
-            val withoutScheme = trimmed.removePrefix("bitcoin:").removePrefix("BITCOIN:")
-            withoutScheme.split("?").firstOrNull() ?: withoutScheme
-        }
-        trimmed.startsWith("lightning:", ignoreCase = true) -> {
-            trimmed.removePrefix("lightning:").removePrefix("LIGHTNING:")
-        }
-        trimmed.startsWith("lnurl", ignoreCase = true) -> trimmed
-        trimmed.startsWith("lnbc", ignoreCase = true) -> trimmed
-        trimmed.startsWith("bc1", ignoreCase = true) -> trimmed
-        trimmed.startsWith("1") || trimmed.startsWith("3") -> trimmed // Legacy BTC addresses
-        else -> trimmed
-    }
-}
-
-/**
- * Generate a QR code bitmap from a string.
- * @param content The content to encode in the QR code
- * @param size The width/height of the QR code in pixels
- * @return A Bitmap containing the QR code, or null if generation fails
- */
-private fun generateQRCode(content: String, size: Int): Bitmap? {
-    return try {
-        val writer = QRCodeWriter()
-        val bitMatrix: BitMatrix = writer.encode(content, BarcodeFormat.QR_CODE, size, size)
-        
-        val width = bitMatrix.width
-        val height = bitMatrix.height
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565)
-        
-        for (x in 0 until width) {
-            for (y in 0 until height) {
-                bitmap.setPixel(x, y, if (bitMatrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
+    // ===== Wallet Info Dialog =====
+    if (showWalletInfoDialog) {
+        WalletInfoDialog(
+            nodeId = walletNodeId,
+            balanceSats = balanceSats,
+            onDismiss = { showWalletInfoDialog = false },
+            onCopyNodeId = {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Node ID", walletNodeId))
+                Toast.makeText(context, "Node ID copied!", Toast.LENGTH_SHORT).show()
             }
-        }
-        
-        bitmap
-    } catch (e: Exception) {
-        e.printStackTrace()
-        null
+        )
     }
 }
 
@@ -855,8 +751,7 @@ fun GradientButton(
     colors: List<Color>,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    pillText: String? = null
+    enabled: Boolean = true
 ) {
     Button(
         onClick = onClick,
@@ -877,36 +772,14 @@ fun GradientButton(
                 ),
             contentAlignment = Alignment.Center
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Text(
-                    text = text,
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                if (pillText != null) {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    LevelPill(pillText, Color(0xFF10B981))
-                }
-            }
+            Text(
+                text = text,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold
+            )
         }
     }
-}
-
-@Composable
-fun LevelPill(text: String, color: Color) {
-    Text(
-        text = text,
-        fontSize = 12.sp,
-        fontWeight = FontWeight.SemiBold,
-        color = color,
-        modifier = Modifier
-            .background(color.copy(alpha = 0.15f), RoundedCornerShape(50))
-            .padding(horizontal = 10.dp, vertical = 4.dp)
-    )
 }
 
 @Composable
@@ -930,34 +803,6 @@ fun StatusPill(text: String, color: Color) {
             text = text,
             fontWeight = FontWeight.SemiBold,
             fontSize = 16.sp
-        )
-    }
-}
-
-@Composable
-fun StartOverChip(onClick: () -> Unit) {
-    TextButton(onClick = onClick) {
-        Box(
-            modifier = Modifier
-                .size(22.dp)
-                .clip(CircleShape)
-                .background(Color(0xFF10B981).copy(alpha = 0.12f))
-                .border(1.dp, Color(0xFF10B981).copy(alpha = 0.45f), CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                Icons.Default.Refresh,
-                contentDescription = null,
-                tint = Color(0xFF10B981),
-                modifier = Modifier.size(14.dp)
-            )
-        }
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(
-            "Start over",
-            color = Color(0xFF10B981),
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold
         )
     }
 }
@@ -994,100 +839,13 @@ fun CompletedStepContent(
 }
 
 @Composable
-fun CashAppCard(
-    withdrawAddress: String,
-    onAddressChange: (String) -> Unit,
-    onOpenCashApp: () -> Unit,
-    onPaste: () -> Unit,
-    onScanQR: () -> Unit,
-    onConnect: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.6f))
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("⚡", fontSize = 24.sp)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Cash App", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(modifier = Modifier.width(8.dp))
-                LevelPill("easy", Color(0xFF10B981))
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Text(
-                "Open Cash App → Bitcoin → Deposit → show QR. Scan it or paste the address.",
-                fontSize = 12.sp,
-                color = Color.Gray
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Open Cash App button
-            Button(
-                onClick = onOpenCashApp,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00D632))
-            ) {
-                Text("Open Cash App", color = Color.White)
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(
-                    onClick = onScanQR,
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6))
-                ) {
-                    Text("📷 Scan QR")
-                }
-
-                OutlinedButton(
-                    onClick = onPaste,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("📋 Paste")
-                }
-            }
-
-            if (withdrawAddress.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = withdrawAddress,
-                    onValueChange = onAddressChange,
-                    label = { Text("Withdraw To") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                
-                Spacer(modifier = Modifier.height(12.dp))
-                Button(
-                    onClick = onConnect,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))
-                ) {
-                    Text("Connect", color = Color.White)
-                }
-            }
-        }
-    }
-}
-
-@Composable
 fun DIDInfoDialog(
     did: String,
     onDismiss: () -> Unit,
     onRegenerate: () -> Unit,
     onCopy: () -> Unit
 ) {
-    // Generate QR code bitmap
-    val qrBitmap = remember(did) {
-        generateQRCode(did, 400)
-    }
+    val qrBitmap = remember(did) { generateQRCode(did, 400) }
     
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -1176,206 +934,119 @@ fun DIDInfoDialog(
 }
 
 @Composable
-fun SeedPhraseEntryDialog(
+fun WalletInfoDialog(
+    nodeId: String,
+    balanceSats: Long,
     onDismiss: () -> Unit,
-    onConfirm: (seedPhrase: String, passphrase: String) -> Unit
+    onCopyNodeId: () -> Unit
 ) {
-    var wordCount by remember { mutableStateOf(12) }
-    var seedWords by remember { mutableStateOf(List(12) { "" }) }
-    var passphrase by remember { mutableStateOf("") }
-    var showPassphrase by remember { mutableStateOf(false) }
-    var validationError by remember { mutableStateOf<String?>(null) }
-    
     Dialog(onDismissRequest = onDismiss) {
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.9f)
-                .padding(8.dp),
+                .padding(16.dp),
             shape = RoundedCornerShape(24.dp)
         ) {
             Column(
-                modifier = Modifier
-                    .padding(20.dp)
-                    .verticalScroll(rememberScrollState())
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                // Lightning icon
+                Text("⚡", fontSize = 48.sp)
+                
+                Spacer(modifier = Modifier.height(12.dp))
+
                 Text(
-                    "Enter Seed Phrase",
+                    "Lightning Wallet",
                     fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.Center
+                    fontWeight = FontWeight.Bold
                 )
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                Text(
-                    "Enter your 12 or 24 word recovery phrase",
-                    fontSize = 14.sp,
-                    color = Color.Gray,
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Balance card
+                Card(
                     modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.Center
-                )
-                
-                Spacer(modifier = Modifier.height(16.dp))
-                
-                // Word count selector
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFF3B82F6).copy(alpha = 0.1f)
+                    ),
+                    shape = RoundedCornerShape(12.dp)
                 ) {
-                    FilterChip(
-                        selected = wordCount == 12,
-                        onClick = { 
-                            wordCount = 12
-                            seedWords = List(12) { if (it < seedWords.size) seedWords[it] else "" }
-                        },
-                        label = { Text("12 Words") }
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    FilterChip(
-                        selected = wordCount == 24,
-                        onClick = { 
-                            wordCount = 24
-                            seedWords = List(24) { if (it < seedWords.size) seedWords[it] else "" }
-                        },
-                        label = { Text("24 Words") }
-                    )
-                }
-                
-                Spacer(modifier = Modifier.height(16.dp))
-                
-                // Word input grid (2 columns)
-                for (row in 0 until (wordCount / 2)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        // Left column
-                        val leftIdx = row
-                        OutlinedTextField(
-                            value = seedWords[leftIdx],
-                            onValueChange = { newVal ->
-                                seedWords = seedWords.toMutableList().also { 
-                                    it[leftIdx] = newVal.lowercase().trim() 
-                                }
-                                validationError = null
-                            },
-                            label = { Text("${leftIdx + 1}") },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true,
-                            textStyle = LocalTextStyle.current.copy(fontSize = 14.sp)
+                        Text(
+                            "Balance",
+                            fontSize = 14.sp,
+                            color = Color.Gray
                         )
-                        
-                        // Right column
-                        val rightIdx = row + (wordCount / 2)
-                        OutlinedTextField(
-                            value = seedWords[rightIdx],
-                            onValueChange = { newVal ->
-                                seedWords = seedWords.toMutableList().also { 
-                                    it[rightIdx] = newVal.lowercase().trim() 
-                                }
-                                validationError = null
-                            },
-                            label = { Text("${rightIdx + 1}") },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true,
-                            textStyle = LocalTextStyle.current.copy(fontSize = 14.sp)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "$balanceSats sats",
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF3B82F6)
                         )
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
                 }
-                
+
                 Spacer(modifier = Modifier.height(16.dp))
-                
-                // Passphrase (optional)
+
+                // Node ID
                 Text(
-                    "Passphrase (optional)",
+                    "Node ID",
                     fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium
+                    color = Color.Gray
                 )
                 Spacer(modifier = Modifier.height(4.dp))
-                OutlinedTextField(
-                    value = passphrase,
-                    onValueChange = { passphrase = it },
-                    label = { Text("BIP39 Passphrase") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    visualTransformation = if (showPassphrase) 
-                        androidx.compose.ui.text.input.VisualTransformation.None 
-                    else 
-                        androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                    trailingIcon = {
-                        TextButton(onClick = { showPassphrase = !showPassphrase }) {
-                            Text(if (showPassphrase) "Hide" else "Show", fontSize = 12.sp)
-                        }
-                    }
+                Text(
+                    text = if (nodeId.length > 20) "${nodeId.take(10)}...${nodeId.takeLast(10)}" else nodeId,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = Color.Black
                 )
-                
-                // Validation error
-                if (validationError != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        validationError!!,
-                        color = Color(0xFFEF4444),
-                        fontSize = 12.sp
-                    )
-                }
-                
+
                 Spacer(modifier = Modifier.height(20.dp))
-                
-                // Action buttons
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     OutlinedButton(
-                        onClick = onDismiss,
+                        onClick = onCopyNodeId,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Cancel")
+                        Text("📋 Copy Node ID")
                     }
                     
                     Button(
-                        onClick = {
-                            // Validate all words are filled
-                            val emptyWords = seedWords.filter { it.isBlank() }
-                            if (emptyWords.isNotEmpty()) {
-                                validationError = "Please fill in all ${wordCount} words"
-                                return@Button
-                            }
-                            
-                            // Join words and confirm
-                            val phrase = seedWords.joinToString(" ")
-                            onConfirm(phrase, passphrase)
-                        },
+                        onClick = onDismiss,
                         modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF10B981)
-                        )
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6))
                     ) {
-                        Text("Connect Wallet")
+                        Text("Done")
                     }
                 }
-                
+
                 Spacer(modifier = Modifier.height(12.dp))
-                
-                // Security warning
+
+                // Security note
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFFFEF3C7)
-                    ),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF3C7)),
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Row(
                         modifier = Modifier.padding(12.dp),
                         verticalAlignment = Alignment.Top
                     ) {
-                        Text("⚠️", fontSize = 16.sp)
+                        Text("🔒", fontSize = 14.sp)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            "Your seed phrase is stored securely on this device only. Never share it with anyone.",
+                            "Your wallet keys are stored securely on this device using hardware-backed encryption.",
                             fontSize = 12.sp,
                             color = Color(0xFF92400E)
                         )
@@ -1386,186 +1057,27 @@ fun SeedPhraseEntryDialog(
     }
 }
 
-@Composable
-fun CustodialWalletDialog(
-    onDismiss: () -> Unit,
-    onSelect: (provider: String, address: String) -> Unit
-) {
-    val context = LocalContext.current
-    var lightningAddress by remember { mutableStateOf("") }
-    
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            shape = RoundedCornerShape(24.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(24.dp)
-            ) {
-                Text(
-                    "Connect Strike",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.Center
-                )
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                Text(
-                    "Get your Lightning Address from Strike",
-                    fontSize = 14.sp,
-                    color = Color.Gray,
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.Center
-                )
-                
-                Spacer(modifier = Modifier.height(20.dp))
-                
-                // Open Strike button
-                Button(
-                    onClick = {
-                        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("strike://"))
-                        try {
-                            context.startActivity(intent)
-                        } catch (e: Exception) {
-                            // Fallback to Play Store
-                            val playStoreIntent = Intent(Intent.ACTION_VIEW, 
-                                android.net.Uri.parse("market://details?id=zapsolutions.strike"))
-                            try {
-                                context.startActivity(playStoreIntent)
-                            } catch (e2: Exception) {
-                                Toast.makeText(context, "Could not open Strike", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF000000))
-                ) {
-                    Text("⚡ Open Strike", color = Color.White)
-                }
-                
-                Spacer(modifier = Modifier.height(16.dp))
-                
-                // Instructions
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF3F4F6)),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text("In Strike:", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                        Text("1. Go to Settings", fontSize = 13.sp, color = Color.Gray)
-                        Text("2. Tap your username", fontSize = 13.sp, color = Color.Gray)
-                        Text("3. Copy your Lightning Address", fontSize = 13.sp, color = Color.Gray)
-                        Text("   (looks like: you@strike.me)", fontSize = 12.sp, color = Color.Gray)
-                    }
-                }
-                
-                Spacer(modifier = Modifier.height(16.dp))
-                
-                // Lightning address input
-                OutlinedTextField(
-                    value = lightningAddress,
-                    onValueChange = { lightningAddress = it },
-                    label = { Text("Lightning Address") },
-                    placeholder = { Text("you@strike.me") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                
-                Spacer(modifier = Modifier.height(24.dp))
-                
-                // Action buttons
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Cancel")
-                    }
-                    
-                    Button(
-                        onClick = {
-                            if (lightningAddress.isNotBlank()) {
-                                onSelect("Strike", lightningAddress)
-                            }
-                        },
-                        modifier = Modifier.weight(1f),
-                        enabled = lightningAddress.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF3B82F6)
-                        )
-                    ) {
-                        Text("Connect")
-                    }
-                }
+/**
+ * Generate a QR code bitmap from a string.
+ */
+private fun generateQRCode(content: String, size: Int): Bitmap? {
+    return try {
+        val writer = QRCodeWriter()
+        val bitMatrix: BitMatrix = writer.encode(content, BarcodeFormat.QR_CODE, size, size)
+        
+        val width = bitMatrix.width
+        val height = bitMatrix.height
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565)
+        
+        for (x in 0 until width) {
+            for (y in 0 until height) {
+                bitmap.setPixel(x, y, if (bitMatrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
             }
         }
-    }
-}
-
-@Composable
-fun WalletProviderButton(
-    name: String,
-    iconResId: Int,
-    description: String,
-    isSelected: Boolean,
-    onClick: () -> Unit
-) {
-    val borderColor = if (isSelected) Color(0xFF3B82F6) else Color.Gray.copy(alpha = 0.3f)
-    val bgColor = if (isSelected) Color(0xFF3B82F6).copy(alpha = 0.1f) else Color.Transparent
-    
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .border(
-                width = if (isSelected) 2.dp else 1.dp,
-                color = borderColor,
-                shape = RoundedCornerShape(12.dp)
-            ),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = bgColor)
-    ) {
-        Row(
-            modifier = Modifier
-                .padding(16.dp)
-                .fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Image(
-                painter = painterResource(id = iconResId),
-                contentDescription = name,
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    name,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    description,
-                    fontSize = 12.sp,
-                    color = Color.Gray
-                )
-            }
-            if (isSelected) {
-                Icon(
-                    Icons.Default.Check,
-                    contentDescription = null,
-                    tint = Color(0xFF3B82F6)
-                )
-            }
-        }
+        
+        bitmap
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
     }
 }
