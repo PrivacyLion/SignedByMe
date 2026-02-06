@@ -75,8 +75,8 @@ dependencies {
     implementation(libs.mlkit.barcode)
     // ZXing for QR code generation
     implementation(libs.zxing.core)
-    // Breez SDK for Lightning wallet
-    implementation(libs.breez.sdk)
+    // Breez SDK Spark for Lightning wallet
+    implementation(libs.breez.sdk.spark)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
