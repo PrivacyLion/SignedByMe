@@ -537,12 +537,6 @@ fun SignedByMeApp(mgr: DidWalletManager) {
                             Text("Share")
                         }
                     }
-                    
-                    // Payment status
-                    if (paymentResult.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(16.dp))
-                        StatusPill("Payment Completed", Color(0xFF10B981))
-                    }
 
                     // Send bundle button
                     if (lastLoginId.isNotEmpty() && lastClaimJson.isNotEmpty()) {
