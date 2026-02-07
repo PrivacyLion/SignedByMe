@@ -1166,7 +1166,7 @@ fun QrScannerDialog(
                 Spacer(modifier = Modifier.height(8.dp))
                 
                 Text(
-                    "Point your camera at the QR code on your employer's Log In page",
+                    "Point your camera at the QR Code on your computer screen",
                     fontSize = 13.sp,
                     color = Color.Gray,
                     textAlign = TextAlign.Center
