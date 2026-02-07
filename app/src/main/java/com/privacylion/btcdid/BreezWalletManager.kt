@@ -322,8 +322,8 @@ class BreezWalletManager(private val context: Context) {
             // Prepare LNURL payment
             val prepareResponse = breezSdk.prepareLnurlPay(
                 PrepareLnurlPayRequest(
-                    data = lnurlData,
-                    amountMsat = amountSats * 1000UL,
+                    payRequest = lnurlData,
+                    amountSats = amountSats,
                     comment = comment,
                     validateSuccessActionUrl = true
                 )
