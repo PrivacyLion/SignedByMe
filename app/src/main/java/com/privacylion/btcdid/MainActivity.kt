@@ -242,7 +242,7 @@ fun SignedByMeApp(
                         // In real implementation, invoice would be sent to API here
                         // For now, show dialog for demo/testing
                         showInvoiceDialog = true
-                        statusMessage = "Invoice sent to ${loginSession?.employerName ?: "employer"}. Awaiting payment..."
+                        statusMessage = ""
                     }.onFailure { e ->
                         statusMessage = "Failed to create invoice: ${e.message}"
                     }
@@ -946,7 +946,7 @@ fun LoginScreen(
                                 Spacer(modifier = Modifier.height(8.dp))
 
                                 Text(
-                                    "Scan the QR code from your employer's login page",
+                                    "Scan the QR Code on your computer to login",
                                     fontSize = 14.sp,
                                     color = Color.Gray,
                                     textAlign = TextAlign.Center
