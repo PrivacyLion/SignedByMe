@@ -39,9 +39,6 @@ class BreezWalletManager(private val context: Context) {
         private const val PREFS_NAME = "btcdid_wallet_prefs"
         private const val PREF_ENCRYPTED_SEED = "encrypted_seed"
         private const val PREF_SEED_IV = "seed_iv"
-        
-        // TODO: Replace with your Breez API key from https://breez.technology
-        private const val BREEZ_API_KEY = "YOUR_BREEZ_API_KEY"
     }
     
     // Wallet state
@@ -74,7 +71,7 @@ class BreezWalletManager(private val context: Context) {
             
             // Configure SDK
             val config = defaultConfig(Network.MAINNET)
-            config.apiKey = BREEZ_API_KEY
+            config.apiKey = BuildConfig.BREEZ_API_KEY
             
             // Storage directory for SDK data
             val storageDir = context.filesDir.absolutePath + "/breez_data"

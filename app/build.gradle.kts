@@ -4,6 +4,13 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// Load local.properties for API keys
+val localProperties = java.util.Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localProperties.load(localPropertiesFile.inputStream())
+}
+
 android {
     namespace = "com.privacylion.btcdid"
     compileSdk = 36
@@ -21,6 +28,13 @@ android {
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
         }
+        
+        // Breez API key from local.properties
+        buildConfigField(
+            "String",
+            "BREEZ_API_KEY",
+            "\"${localProperties.getProperty("BREEZ_API_KEY", "")}\""
+        )
     }
 
     signingConfigs {
@@ -53,6 +67,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
