@@ -191,7 +191,7 @@ fun SignedByMeApp(
                     paymentReceived = true
                     isPollingPayment = false
                     isLoginActive = false
-                    statusMessage = "✅ Payment received! Login verified."
+                    statusMessage = "✅ Payment received! Log In verified."
                     // Close the invoice dialog
                     showInvoiceDialog = false
                 }
@@ -239,9 +239,8 @@ fun SignedByMeApp(
                         lastPaymentHash = invoice.takeLast(64)
                         isLoginActive = true
                         isPollingPayment = true
-                        // In real implementation, invoice would be sent to API here
-                        // For now, show dialog for demo/testing
-                        showInvoiceDialog = true
+                        // Invoice created - in production, this would be auto-sent to employer via API
+                        // Don't auto-show dialog - cleaner UX
                         statusMessage = ""
                     }.onFailure { e ->
                         statusMessage = "Failed to create invoice: ${e.message}"
@@ -741,7 +740,7 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Ready to Log-In",
+                text = "Ready to Log In",
                 fontSize = 16.sp,
                 color = Color.Gray
             )
@@ -758,8 +757,8 @@ fun LoginScreen(
                 colors = CardDefaults.cardColors(containerColor = Color.White)
             ) {
                 Box(modifier = Modifier.fillMaxWidth()) {
-                    // Employer badge in upper left when session exists
-                    if (loginSession != null) {
+                    // Employer badge in upper left when session exists (hide after login complete)
+                    if (loginSession != null && !paymentReceived) {
                         Row(
                             modifier = Modifier
                                 .align(Alignment.TopStart)
@@ -791,7 +790,7 @@ fun LoginScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(24.dp)
-                            .padding(top = if (loginSession != null) 24.dp else 0.dp),
+                            .padding(top = if (loginSession != null && !paymentReceived) 24.dp else 0.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         if (paymentReceived) {
@@ -814,7 +813,7 @@ fun LoginScreen(
                             Spacer(modifier = Modifier.height(16.dp))
 
                             Text(
-                                "Login Verified!",
+                                "Log In Verified!",
                                 fontSize = 20.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF10B981)
@@ -835,7 +834,7 @@ fun LoginScreen(
                             Spacer(modifier = Modifier.height(16.dp))
 
                             OutlinedButton(onClick = onResetLogin) {
-                                Text("Start New Login")
+                                Text("Start New Log In")
                             }
 
                         } else if (lastInvoice.isNotEmpty()) {
@@ -885,6 +884,19 @@ fun LoginScreen(
                                     )
                                 }
                             }
+                            
+                            // Debug-only: View Invoice button (for testing payments)
+                            if (BuildConfig.DEBUG) {
+                                Spacer(modifier = Modifier.height(16.dp))
+                                OutlinedButton(
+                                    onClick = onShowInvoiceDialog,
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = Color.Gray
+                                    )
+                                ) {
+                                    Text("View Invoice (Debug)", fontSize = 12.sp)
+                                }
+                            }
 
                         } else {
                             // Ready to start login
@@ -906,7 +918,7 @@ fun LoginScreen(
                                 Spacer(modifier = Modifier.height(8.dp))
 
                                 Text(
-                                    "Press button below to start your log-in with your Signature",
+                                    "Press button below to start your Log In with your Signature",
                                     fontSize = 14.sp,
                                     color = Color.Gray,
                                     textAlign = TextAlign.Center
@@ -923,7 +935,7 @@ fun LoginScreen(
                                     Text("Creating invoice...", fontSize = 13.sp, color = Color.Gray)
                                 } else {
                                     GradientButton(
-                                        text = "Start Login",
+                                        text = "Start Log In",
                                         colors = listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6)),
                                         onClick = onStartLogin
                                     )
@@ -938,7 +950,7 @@ fun LoginScreen(
                                 Spacer(modifier = Modifier.height(12.dp))
 
                                 Text(
-                                    "Scan Login QR Code",
+                                    "Scan Log In QR Code",
                                     fontSize = 18.sp,
                                     fontWeight = FontWeight.SemiBold
                                 )
@@ -946,7 +958,7 @@ fun LoginScreen(
                                 Spacer(modifier = Modifier.height(8.dp))
 
                                 Text(
-                                    "Scan the QR Code on your computer to login",
+                                    "Scan the QR Code on your computer to Log In",
                                     fontSize = 14.sp,
                                     color = Color.Gray,
                                     textAlign = TextAlign.Center
@@ -972,7 +984,7 @@ fun LoginScreen(
                                         ))
                                     }
                                 ) {
-                                    Text("Demo: Acme Corp Login", fontSize = 13.sp)
+                                    Text("Demo: Acme Corp Log In", fontSize = 13.sp)
                                 }
                             }
                         }
@@ -1144,7 +1156,7 @@ fun QrScannerDialog(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    "Scan Login QR Code",
+                    "Scan Log In QR Code",
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -1152,7 +1164,7 @@ fun QrScannerDialog(
                 Spacer(modifier = Modifier.height(8.dp))
                 
                 Text(
-                    "Point your camera at the QR code on your employer's login page",
+                    "Point your camera at the QR code on your employer's Log In page",
                     fontSize = 13.sp,
                     color = Color.Gray,
                     textAlign = TextAlign.Center
