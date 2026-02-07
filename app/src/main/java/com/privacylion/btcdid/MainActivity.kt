@@ -86,6 +86,14 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
     var lastInvoice by remember { mutableStateOf("") }
     var lastPaymentHash by remember { mutableStateOf("") }
 
+    // Enterprise login state
+    var isEnterpriseLoginActive by remember { mutableStateOf(false) }
+    var isCreatingInvoice by remember { mutableStateOf(false) }
+    var isPollingPayment by remember { mutableStateOf(false) }
+    var paymentReceived by remember { mutableStateOf(false) }
+    var showInvoiceDialog by remember { mutableStateOf(false) }
+    var invoiceAmountSats by remember { mutableStateOf(100UL) } // Default 100 sats for demo
+
     // UI state
     var statusMessage by remember { mutableStateOf("") }
     var showIdDialog by remember { mutableStateOf(false) }
@@ -118,6 +126,24 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
                 isWalletInitializing = true
             }
             else -> {}
+        }
+    }
+
+    // Poll for payment when invoice is active
+    LaunchedEffect(isPollingPayment, lastPaymentHash) {
+        if (isPollingPayment && lastPaymentHash.isNotEmpty()) {
+            while (isPollingPayment && !paymentReceived) {
+                val received = breezMgr.isPaymentReceived(lastPaymentHash)
+                if (received) {
+                    paymentReceived = true
+                    isPollingPayment = false
+                    isEnterpriseLoginActive = false
+                    statusMessage = "✅ Payment received! Enterprise login verified."
+                    // Close the invoice dialog
+                    showInvoiceDialog = false
+                }
+                delay(3000) // Poll every 3 seconds
+            }
         }
     }
 
@@ -349,22 +375,156 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
                         }
                     }
 
-                    // Show login ID if we have one
-                    if (lastLoginId.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(12.dp))
+                    // Enterprise Login Section
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    HorizontalDivider(color = Color.Gray.copy(alpha = 0.2f))
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    Text(
+                        "Enterprise Login",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 16.sp
+                    )
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    Text(
+                        "Generate a Lightning invoice for your employer to pay. " +
+                        "Once paid, your identity is verified.",
+                        color = Color.Gray,
+                        fontSize = 13.sp
+                    )
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    if (paymentReceived) {
+                        // Payment confirmed state
+                        StatusPill("✅ Payment Verified", Color(0xFF10B981))
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
                         Text(
-                            "Login ID: ${lastLoginId.take(16)}...",
-                            fontSize = 12.sp,
+                            "Enterprise login complete! Proceed to Step 3.",
+                            color = Color(0xFF10B981),
+                            fontSize = 13.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    } else if (lastInvoice.isNotEmpty()) {
+                        // Invoice created, awaiting payment
+                        StatusPill("⏳ Awaiting Payment", Color(0xFFF59E0B))
+                        
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        // Show invoice preview
+                        Text(
+                            text = "Invoice: ${lastInvoice.take(30)}...",
+                            fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace,
                             color = Color.Gray
                         )
-
-                        if (lastInvoice.isNotEmpty() && lastPreimage.isEmpty()) {
+                        
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { showInvoiceDialog = true },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Show QR")
+                            }
+                            
+                            OutlinedButton(
+                                onClick = {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    clipboard.setPrimaryClip(ClipData.newPlainText("Invoice", lastInvoice))
+                                    Toast.makeText(context, "Invoice copied!", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("📋 Copy")
+                            }
+                        }
+                        
+                        if (isPollingPayment) {
                             Spacer(modifier = Modifier.height(8.dp))
-                            StatusPill("Awaiting Payment", Color(0xFFF59E0B))
-                        } else if (lastPreimage.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            StatusPill("Payment Received", Color(0xFF10B981))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = Color(0xFFF59E0B)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    "Checking for payment...",
+                                    fontSize = 12.sp,
+                                    color = Color.Gray
+                                )
+                            }
+                        }
+                    } else {
+                        // No invoice yet - show create button
+                        if (isCreatingInvoice) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(32.dp),
+                                    color = Color(0xFF3B82F6)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    "Creating invoice...",
+                                    fontSize = 13.sp,
+                                    color = Color.Gray
+                                )
+                            }
+                        } else {
+                            GradientButton(
+                                text = "Start Enterprise Login",
+                                colors = listOf(Color(0xFFF59E0B), Color(0xFFEF4444)),
+                                onClick = {
+                                    scope.launch {
+                                        isCreatingInvoice = true
+                                        statusMessage = ""
+                                        
+                                        // Generate login ID
+                                        val loginId = "login_${System.currentTimeMillis()}_${did.takeLast(8)}"
+                                        lastLoginId = loginId
+                                        
+                                        // Create invoice using Breez SDK
+                                        val result = breezMgr.createInvoice(
+                                            amountSats = invoiceAmountSats,
+                                            description = "SignedByMe Enterprise Login: $loginId"
+                                        )
+                                        
+                                        result.onSuccess { invoice ->
+                                            lastInvoice = invoice
+                                            // Extract payment hash from invoice (it's the SHA256 of the preimage)
+                                            // For now, use a simple identifier - we'll improve this
+                                            lastPaymentHash = invoice.takeLast(64) // Placeholder
+                                            isEnterpriseLoginActive = true
+                                            isPollingPayment = true
+                                            showInvoiceDialog = true
+                                            statusMessage = "Invoice created! Share with your employer."
+                                        }.onFailure { e ->
+                                            statusMessage = "Failed to create invoice: ${e.message}"
+                                        }
+                                        
+                                        isCreatingInvoice = false
+                                    }
+                                }
+                            )
                         }
                     }
                 }
@@ -625,6 +785,12 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
                     statusMessage = ""
                     step3Complete = false
                     showVccResult = false
+                    // Reset enterprise login state
+                    isEnterpriseLoginActive = false
+                    isCreatingInvoice = false
+                    isPollingPayment = false
+                    paymentReceived = false
+                    showInvoiceDialog = false
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -664,6 +830,29 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 clipboard.setPrimaryClip(ClipData.newPlainText("Spark Address", walletSparkAddress))
                 Toast.makeText(context, "Spark Address copied!", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
+    // ===== Invoice Dialog =====
+    if (showInvoiceDialog && lastInvoice.isNotEmpty()) {
+        InvoiceDialog(
+            invoice = lastInvoice,
+            amountSats = invoiceAmountSats.toLong(),
+            isPolling = isPollingPayment,
+            onDismiss = { showInvoiceDialog = false },
+            onCopy = {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Lightning Invoice", lastInvoice))
+                Toast.makeText(context, "Invoice copied!", Toast.LENGTH_SHORT).show()
+            },
+            onShare = {
+                val sendIntent = Intent().apply {
+                    action = Intent.ACTION_SEND
+                    putExtra(Intent.EXTRA_TEXT, lastInvoice)
+                    type = "text/plain"
+                }
+                context.startActivity(Intent.createChooser(sendIntent, "Share Invoice"))
             }
         )
     }
@@ -1083,5 +1272,161 @@ private fun generateQRCode(content: String, size: Int): Bitmap? {
     } catch (e: Exception) {
         e.printStackTrace()
         null
+    }
+}
+
+@Composable
+fun InvoiceDialog(
+    invoice: String,
+    amountSats: Long,
+    isPolling: Boolean,
+    onDismiss: () -> Unit,
+    onCopy: () -> Unit,
+    onShare: () -> Unit
+) {
+    val qrBitmap = remember(invoice) { generateQRCode(invoice, 400) }
+    
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            shape = RoundedCornerShape(24.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Header
+                Text("⚡", fontSize = 40.sp)
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    "Lightning Invoice",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                
+                Spacer(modifier = Modifier.height(4.dp))
+                
+                Text(
+                    "$amountSats sats",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFFF59E0B)
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // QR Code
+                Box(
+                    modifier = Modifier
+                        .size(220.dp)
+                        .background(Color.White, RoundedCornerShape(12.dp))
+                        .border(2.dp, Color(0xFFF59E0B), RoundedCornerShape(12.dp))
+                        .padding(12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (qrBitmap != null) {
+                        Image(
+                            bitmap = qrBitmap.asImageBitmap(),
+                            contentDescription = "QR Code for Lightning Invoice",
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Text("Error generating QR", color = Color.Gray)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Invoice preview (truncated)
+                Text(
+                    text = "${invoice.take(25)}...${invoice.takeLast(10)}",
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = Color.Gray
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Polling status
+                if (isPolling) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFFFEF3C7)
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = Color(0xFFF59E0B)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                "Waiting for payment...",
+                                fontSize = 14.sp,
+                                color = Color(0xFF92400E)
+                            )
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+
+                // Action buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onCopy,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("📋 Copy")
+                    }
+                    
+                    OutlinedButton(
+                        onClick = onShare,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Share")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Done button
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6))
+                ) {
+                    Text("Done")
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Instructions
+                Text(
+                    "Share this invoice with your employer.\nThey will pay it to verify your identity.",
+                    fontSize = 12.sp,
+                    color = Color.Gray,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
     }
 }
