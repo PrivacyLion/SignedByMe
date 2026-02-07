@@ -1844,8 +1844,9 @@ fun TransactionRow(
     onClick: () -> Unit
 ) {
     val isReceived = payment.paymentType == PaymentType.RECEIVE
-    val amountSats = payment.amountSats.toLong()
-    val timestamp = payment.timestamp
+    // amountMsat is in millisatoshis, convert to sats
+    val amountSats = (payment.amountMsat / 1000u).toLong()
+    val timestamp = payment.createdAt
     
     // Get description from payment details
     val description = when (val details = payment.details) {
@@ -1946,6 +1947,25 @@ fun formatTimestamp(timestamp: UInt): String {
         diff < 86400_000 -> "${diff / 3600_000} hours ago"
         diff < 172800_000 -> "Yesterday"
         else -> SimpleDateFormat("MMM d", Locale.US).format(date)
+    }
+}
+
+// Generate QR code bitmap for invoice
+fun generateQrCodeBitmap(content: String, size: Int = 512): Bitmap? {
+    return try {
+        val writer = QRCodeWriter()
+        val bitMatrix: BitMatrix = writer.encode(content, BarcodeFormat.QR_CODE, size, size)
+        val width = bitMatrix.width
+        val height = bitMatrix.height
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565)
+        for (x in 0 until width) {
+            for (y in 0 until height) {
+                bitmap.setPixel(x, y, if (bitMatrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
+            }
+        }
+        bitmap
+    } catch (e: Exception) {
+        null
     }
 }
 
@@ -2068,7 +2088,7 @@ fun ReceiveDialog(
                     Spacer(modifier = Modifier.height(16.dp))
                     
                     // QR Code
-                    val qrBitmap = remember(invoice) { generateQrCode(invoice) }
+                    val qrBitmap = remember(invoice) { generateQrCodeBitmap(invoice) }
                     qrBitmap?.let {
                         Image(
                             bitmap = it.asImageBitmap(),
@@ -2300,8 +2320,9 @@ fun TransactionDetailDialog(
     onDismiss: () -> Unit
 ) {
     val isReceived = payment.paymentType == PaymentType.RECEIVE
-    val amountSats = payment.amountSats.toLong()
-    val timestamp = payment.timestamp
+    // amountMsat is in millisatoshis, convert to sats
+    val amountSats = (payment.amountMsat / 1000u).toLong()
+    val timestamp = payment.createdAt
     val status = payment.status
     
     // Extract details
