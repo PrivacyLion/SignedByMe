@@ -62,6 +62,10 @@ import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.activity.result.contract.ActivityResultContracts
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.common.api.ApiException
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 
 class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -264,6 +268,36 @@ fun SignedByMeApp(
     var isSendingPayment by remember { mutableStateOf(false) }
     var sendError by remember { mutableStateOf("") }
     var walletSyncStatus by remember { mutableStateOf("Connected") }
+    
+    // Google Drive Backup State
+    val googleDriveManager = remember { GoogleDriveBackupManager(context) }
+    var showBackupPasswordDialog by remember { mutableStateOf(false) }
+    var backupPassword by remember { mutableStateOf("") }
+    var backupPasswordConfirm by remember { mutableStateOf("") }
+    var isBackingUp by remember { mutableStateOf(false) }
+    var backupError by remember { mutableStateOf("") }
+    var isGoogleSignedIn by remember { mutableStateOf(googleDriveManager.isSignedIn()) }
+    
+    // Google Sign-In launcher
+    val googleSignInLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+        try {
+            val account = task.getResult(ApiException::class.java)
+            scope.launch {
+                val success = googleDriveManager.handleSignInResult(account)
+                if (success) {
+                    isGoogleSignedIn = true
+                    showBackupPasswordDialog = true
+                } else {
+                    Toast.makeText(context, "Failed to connect to Google Drive", Toast.LENGTH_SHORT).show()
+                }
+            }
+        } catch (e: ApiException) {
+            Toast.makeText(context, "Google Sign-In failed: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     // Check if onboarding is complete (with delayed transition)
     val onboardingComplete = step1Complete && step2Complete && step3Complete
@@ -594,10 +628,57 @@ fun SignedByMeApp(
                 Toast.makeText(context, "Seed words copied!", Toast.LENGTH_SHORT).show()
             },
             onBackupToCloud = {
-                // TODO: Implement Google Drive backup
-                Toast.makeText(context, "Cloud backup coming soon!", Toast.LENGTH_SHORT).show()
+                if (isGoogleSignedIn) {
+                    // Already signed in, show password dialog
+                    backupPassword = ""
+                    backupPasswordConfirm = ""
+                    backupError = ""
+                    showBackupPasswordDialog = true
+                } else {
+                    // Need to sign in first
+                    googleSignInLauncher.launch(googleDriveManager.getSignInIntent())
+                }
             }
         )
+        
+        // Google Drive Backup Password Dialog
+        if (showBackupPasswordDialog) {
+            BackupPasswordDialog(
+                password = backupPassword,
+                passwordConfirm = backupPasswordConfirm,
+                error = backupError,
+                isBackingUp = isBackingUp,
+                onPasswordChange = { backupPassword = it },
+                onPasswordConfirmChange = { backupPasswordConfirm = it },
+                onBackup = {
+                    if (backupPassword.length < 8) {
+                        backupError = "Password must be at least 8 characters"
+                    } else if (backupPassword != backupPasswordConfirm) {
+                        backupError = "Passwords don't match"
+                    } else {
+                        val mnemonic = breezMgr.getMnemonic()
+                        if (mnemonic != null) {
+                            isBackingUp = true
+                            backupError = ""
+                            scope.launch {
+                                val result = googleDriveManager.backupMnemonic(mnemonic, backupPassword)
+                                result.onSuccess {
+                                    Toast.makeText(context, "Wallet backed up to Google Drive!", Toast.LENGTH_LONG).show()
+                                    showBackupPasswordDialog = false
+                                    showSeedWordsDialog = false
+                                }.onFailure { e ->
+                                    backupError = e.message ?: "Backup failed"
+                                }
+                                isBackingUp = false
+                            }
+                        } else {
+                            backupError = "Could not access wallet seed"
+                        }
+                    }
+                },
+                onDismiss = { showBackupPasswordDialog = false }
+            )
+        }
     } else {
         // Show Onboarding Screen
         OnboardingScreen(
@@ -3321,6 +3402,119 @@ fun InvoiceDialog(
                     color = Color.Gray,
                     textAlign = TextAlign.Center
                 )
+            }
+        }
+    }
+}
+
+@Composable
+fun BackupPasswordDialog(
+    password: String,
+    passwordConfirm: String,
+    error: String,
+    isBackingUp: Boolean,
+    onPasswordChange: (String) -> Unit,
+    onPasswordConfirmChange: (String) -> Unit,
+    onBackup: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Backup to Google Drive",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Text("✕", fontSize = 18.sp, color = Color.Gray)
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    "Create a password to encrypt your backup. You'll need this password to restore your wallet.",
+                    fontSize = 14.sp,
+                    color = Color.Gray,
+                    textAlign = TextAlign.Center
+                )
+                
+                Spacer(modifier = Modifier.height(20.dp))
+                
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = onPasswordChange,
+                    label = { Text("Password") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    enabled = !isBackingUp
+                )
+                
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                OutlinedTextField(
+                    value = passwordConfirm,
+                    onValueChange = onPasswordConfirmChange,
+                    label = { Text("Confirm Password") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    enabled = !isBackingUp
+                )
+                
+                if (error.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        error,
+                        color = Color(0xFFEF4444),
+                        fontSize = 12.sp
+                    )
+                }
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    "⚠️ Keep this password safe! Without it, you cannot restore your wallet from this backup.",
+                    fontSize = 12.sp,
+                    color = Color(0xFFF59E0B),
+                    textAlign = TextAlign.Center
+                )
+                
+                Spacer(modifier = Modifier.height(20.dp))
+                
+                Button(
+                    onClick = onBackup,
+                    enabled = !isBackingUp && password.isNotEmpty() && passwordConfirm.isNotEmpty(),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    if (isBackingUp) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Backing up...")
+                    } else {
+                        Text("☁️ Backup Now")
+                    }
+                }
             }
         }
     }
