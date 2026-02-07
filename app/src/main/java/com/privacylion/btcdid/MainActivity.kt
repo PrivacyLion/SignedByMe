@@ -8,8 +8,10 @@ import android.graphics.Bitmap
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.*
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -47,17 +49,53 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val didMgr = DidWalletManager(applicationContext)
         val breezMgr = BreezWalletManager(applicationContext)
+        
+        // Parse deep link from intent
+        val initialLoginSession = parseLoginIntent(intent)
 
         setContent {
             BTC_DIDTheme {
-                SignedByMeApp(didMgr, breezMgr)
+                SignedByMeApp(didMgr, breezMgr, initialLoginSession)
             }
         }
     }
+    
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        // Re-parse when app receives new intent while running
+        // Note: For full implementation, use a ViewModel or state holder
+    }
+    
+    private fun parseLoginIntent(intent: Intent?): LoginSession? {
+        val uri = intent?.data ?: return null
+        
+        // Handle both signedby.me:// and https://signedby.me/login
+        if (uri.scheme == "signedby.me" || 
+            (uri.scheme == "https" && uri.host == "signedby.me")) {
+            val sessionId = uri.getQueryParameter("session")
+            val employer = uri.getQueryParameter("employer")
+            
+            if (sessionId != null && employer != null) {
+                return LoginSession(sessionId, employer)
+            }
+        }
+        return null
+    }
 }
 
+// Data class for login session from deep link / QR
+data class LoginSession(
+    val sessionId: String,
+    val employerName: String
+)
+
 @Composable
-fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
+fun SignedByMeApp(
+    didMgr: DidWalletManager, 
+    breezMgr: BreezWalletManager,
+    initialLoginSession: LoginSession? = null
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -67,6 +105,9 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
     val walletState by breezMgr.walletState.collectAsState()
     var step2Complete by remember { mutableStateOf(walletState is BreezWalletManager.WalletState.Connected) }
     var step3Complete by remember { mutableStateOf(false) }
+    
+    // Login session state (from deep link, QR scan, or demo)
+    var loginSession by remember { mutableStateOf(initialLoginSession) }
 
     // Breez wallet state - derive from WalletState
     val balanceSats = when (val state = walletState) {
@@ -174,19 +215,23 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
             showInvoiceDialog = showInvoiceDialog,
             invoiceAmountSats = invoiceAmountSats,
             statusMessage = statusMessage,
+            loginSession = loginSession,
+            onLoginSessionReceived = { session ->
+                loginSession = session
+            },
             onStartLogin = {
                 scope.launch {
                     isCreatingInvoice = true
                     statusMessage = ""
                     
-                    // Generate login ID
-                    val loginId = "login_${System.currentTimeMillis()}_${did.takeLast(8)}"
-                    lastLoginId = loginId
+                    // Use session ID from login session, or generate one for demo
+                    val sessionId = loginSession?.sessionId ?: "demo_${System.currentTimeMillis()}"
+                    lastLoginId = sessionId
                     
                     // Create invoice using Breez SDK
                     val result = breezMgr.createInvoice(
                         amountSats = invoiceAmountSats,
-                        description = "SignedByMe Login: $loginId"
+                        description = "SignedByMe Login: ${loginSession?.employerName ?: "Demo"} - $sessionId"
                     )
                     
                     result.onSuccess { invoice ->
@@ -194,8 +239,10 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
                         lastPaymentHash = invoice.takeLast(64)
                         isLoginActive = true
                         isPollingPayment = true
+                        // In real implementation, invoice would be sent to API here
+                        // For now, show dialog for demo/testing
                         showInvoiceDialog = true
-                        statusMessage = "Invoice created! Share with your employer."
+                        statusMessage = "Invoice sent to ${loginSession?.employerName ?: "employer"}. Awaiting payment..."
                     }.onFailure { e ->
                         statusMessage = "Failed to create invoice: ${e.message}"
                     }
@@ -227,6 +274,7 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
                 paymentReceived = false
                 showInvoiceDialog = false
                 statusMessage = ""
+                loginSession = null
             },
             onCopyVcc = {
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -642,6 +690,8 @@ fun LoginScreen(
     showInvoiceDialog: Boolean,
     invoiceAmountSats: ULong,
     statusMessage: String,
+    loginSession: LoginSession?,
+    onLoginSessionReceived: (LoginSession) -> Unit,
     onStartLogin: () -> Unit,
     onShowInvoiceDialog: () -> Unit,
     onDismissInvoiceDialog: () -> Unit,
@@ -651,6 +701,8 @@ fun LoginScreen(
     onCopyVcc: () -> Unit,
     onShareVcc: () -> Unit
 ) {
+    // QR Scanner state
+    var showQrScanner by remember { mutableStateOf(false) }
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -697,6 +749,7 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(32.dp))
 
             // Login Section
+            // Login Section Card
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -704,156 +757,224 @@ fun LoginScreen(
                 shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = Color.White)
             ) {
-                Column(
-                    modifier = Modifier.padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    if (paymentReceived) {
-                        // Success state
-                        Box(
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    // Employer badge in upper left when session exists
+                    if (loginSession != null) {
+                        Row(
                             modifier = Modifier
-                                .size(64.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFF10B981).copy(alpha = 0.1f)),
-                            contentAlignment = Alignment.Center
+                                .align(Alignment.TopStart)
+                                .padding(12.dp)
+                                .background(
+                                    Color(0xFF10B981).copy(alpha = 0.1f),
+                                    RoundedCornerShape(20.dp)
+                                )
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
                                 Icons.Default.CheckCircle,
                                 contentDescription = null,
                                 tint = Color(0xFF10B981),
-                                modifier = Modifier.size(40.dp)
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = loginSession.employerName,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF10B981)
                             )
                         }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        Text(
-                            "Login Verified!",
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF10B981)
-                        )
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Text(
-                            "Your identity has been verified by your employer.",
-                            fontSize = 14.sp,
-                            color = Color.Gray,
-                            textAlign = TextAlign.Center
-                        )
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        OutlinedButton(onClick = onResetLogin) {
-                            Text("Start New Login")
-                        }
-
-                    } else if (lastInvoice.isNotEmpty()) {
-                        // Awaiting payment state
-                        Text(
-                            "⏳",
-                            fontSize = 48.sp
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Text(
-                            "Awaiting Payment",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFFF59E0B)
-                        )
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Text(
-                            "Share the invoice with your employer",
-                            fontSize = 14.sp,
-                            color = Color.Gray,
-                            textAlign = TextAlign.Center
-                        )
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = onShowInvoiceDialog,
-                                modifier = Modifier.weight(1f)
+                    }
+                    
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp)
+                            .padding(top = if (loginSession != null) 24.dp else 0.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        if (paymentReceived) {
+                            // Success state
+                            Box(
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF10B981).copy(alpha = 0.1f)),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Text("Show QR")
-                            }
-
-                            OutlinedButton(
-                                onClick = onCopyInvoice,
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("📋 Copy")
-                            }
-                        }
-
-                        if (isPollingPayment) {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                    color = Color(0xFFF59E0B)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    "Checking for payment...",
-                                    fontSize = 12.sp,
-                                    color = Color.Gray
+                                Icon(
+                                    Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = Color(0xFF10B981),
+                                    modifier = Modifier.size(40.dp)
                                 )
                             }
-                        }
 
-                    } else {
-                        // Ready to start login
-                        Text(
-                            "🔐",
-                            fontSize = 48.sp
-                        )
+                            Spacer(modifier = Modifier.height(16.dp))
 
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Text(
-                            "Start Your Login",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Text(
-                            "Press button below to start your log-in with your Signature",
-                            fontSize = 14.sp,
-                            color = Color.Gray,
-                            textAlign = TextAlign.Center
-                        )
-
-                        Spacer(modifier = Modifier.height(20.dp))
-
-                        if (isCreatingInvoice) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(40.dp),
-                                color = Color(0xFF3B82F6)
+                            Text(
+                                "Login Verified!",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF10B981)
                             )
+
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text("Creating invoice...", fontSize = 13.sp, color = Color.Gray)
-                        } else {
-                            GradientButton(
-                                text = "Start Login",
-                                colors = listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6)),
-                                onClick = onStartLogin
+
+                            Text(
+                                if (loginSession != null) 
+                                    "You're now logged in to ${loginSession.employerName}"
+                                else 
+                                    "Your identity has been verified.",
+                                fontSize = 14.sp,
+                                color = Color.Gray,
+                                textAlign = TextAlign.Center
                             )
+
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            OutlinedButton(onClick = onResetLogin) {
+                                Text("Start New Login")
+                            }
+
+                        } else if (lastInvoice.isNotEmpty()) {
+                            // Awaiting payment state
+                            Text(
+                                "⏳",
+                                fontSize = 48.sp
+                            )
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Text(
+                                "Awaiting Payment",
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFFF59E0B)
+                            )
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // Show employer name if we have it
+                            if (loginSession != null) {
+                                Text(
+                                    "Waiting for ${loginSession.employerName} to confirm",
+                                    fontSize = 14.sp,
+                                    color = Color.Gray,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+
+                            if (isPollingPayment) {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = Color(0xFFF59E0B)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        "Checking for payment...",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                }
+                            }
+
+                        } else {
+                            // Ready to start login
+                            if (loginSession != null) {
+                                // Has a session from QR/deep link - ready to login
+                                Text(
+                                    "🔐",
+                                    fontSize = 48.sp
+                                )
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                Text(
+                                    "Ready to Log In",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Text(
+                                    "Press button below to start your log-in with your Signature",
+                                    fontSize = 14.sp,
+                                    color = Color.Gray,
+                                    textAlign = TextAlign.Center
+                                )
+
+                                Spacer(modifier = Modifier.height(20.dp))
+
+                                if (isCreatingInvoice) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(40.dp),
+                                        color = Color(0xFF3B82F6)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text("Creating invoice...", fontSize = 13.sp, color = Color.Gray)
+                                } else {
+                                    GradientButton(
+                                        text = "Start Login",
+                                        colors = listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6)),
+                                        onClick = onStartLogin
+                                    )
+                                }
+                            } else {
+                                // No session yet - show scan QR option
+                                Text(
+                                    "📷",
+                                    fontSize = 48.sp
+                                )
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                Text(
+                                    "Scan Login QR Code",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Text(
+                                    "Scan the QR code from your employer's login page",
+                                    fontSize = 14.sp,
+                                    color = Color.Gray,
+                                    textAlign = TextAlign.Center
+                                )
+
+                                Spacer(modifier = Modifier.height(20.dp))
+
+                                GradientButton(
+                                    text = "Scan QR Code",
+                                    colors = listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6)),
+                                    onClick = { showQrScanner = true }
+                                )
+
+                                Spacer(modifier = Modifier.height(16.dp))
+
+                                // Demo button for testing
+                                OutlinedButton(
+                                    onClick = {
+                                        // Demo: simulate receiving a login session
+                                        onLoginSessionReceived(LoginSession(
+                                            sessionId = "demo_${System.currentTimeMillis()}",
+                                            employerName = "Acme Corp"
+                                        ))
+                                    }
+                                ) {
+                                    Text("Demo: Acme Corp Login", fontSize = 13.sp)
+                                }
+                            }
                         }
                     }
                 }
@@ -957,6 +1078,199 @@ fun LoginScreen(
             onCopy = onCopyInvoice,
             onShare = onShareInvoice
         )
+    }
+    
+    // QR Scanner Dialog
+    if (showQrScanner) {
+        QrScannerDialog(
+            onQrScanned = { qrContent ->
+                showQrScanner = false
+                // Parse the QR content (signedby.me://login?session=xxx&employer=xxx)
+                try {
+                    val uri = android.net.Uri.parse(qrContent)
+                    val sessionId = uri.getQueryParameter("session")
+                    val employer = uri.getQueryParameter("employer")
+                    
+                    if (sessionId != null && employer != null) {
+                        onLoginSessionReceived(LoginSession(sessionId, employer))
+                    }
+                } catch (e: Exception) {
+                    // Invalid QR format
+                }
+            },
+            onDismiss = { showQrScanner = false }
+        )
+    }
+}
+
+// ===== QR Scanner Dialog =====
+@Composable
+fun QrScannerDialog(
+    onQrScanned: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    var hasCameraPermission by remember {
+        mutableStateOf(
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.CAMERA
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+    }
+    
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasCameraPermission = granted
+    }
+    
+    LaunchedEffect(Unit) {
+        if (!hasCameraPermission) {
+            permissionLauncher.launch(android.Manifest.permission.CAMERA)
+        }
+    }
+    
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(0.8f),
+            shape = RoundedCornerShape(24.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "Scan Login QR Code",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    "Point your camera at the QR code on your employer's login page",
+                    fontSize = 13.sp,
+                    color = Color.Gray,
+                    textAlign = TextAlign.Center
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                if (hasCameraPermission) {
+                    // Camera preview with QR scanning
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.Black)
+                    ) {
+                        AndroidView(
+                            factory = { ctx ->
+                                val previewView = androidx.camera.view.PreviewView(ctx)
+                                val cameraProviderFuture = androidx.camera.lifecycle.ProcessCameraProvider.getInstance(ctx)
+                                
+                                cameraProviderFuture.addListener({
+                                    val cameraProvider = cameraProviderFuture.get()
+                                    
+                                    val preview = androidx.camera.core.Preview.Builder().build().also {
+                                        it.surfaceProvider = previewView.surfaceProvider
+                                    }
+                                    
+                                    val imageAnalysis = androidx.camera.core.ImageAnalysis.Builder()
+                                        .setBackpressureStrategy(androidx.camera.core.ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                                        .build()
+                                        .also { analysis ->
+                                            analysis.setAnalyzer(
+                                                java.util.concurrent.Executors.newSingleThreadExecutor()
+                                            ) { imageProxy ->
+                                                @androidx.camera.core.ExperimentalGetImage
+                                                val mediaImage = imageProxy.image
+                                                if (mediaImage != null) {
+                                                    val inputImage = com.google.mlkit.vision.common.InputImage.fromMediaImage(
+                                                        mediaImage, imageProxy.imageInfo.rotationDegrees
+                                                    )
+                                                    
+                                                    val scanner = com.google.mlkit.vision.barcode.BarcodeScanning.getClient()
+                                                    scanner.process(inputImage)
+                                                        .addOnSuccessListener { barcodes ->
+                                                            for (barcode in barcodes) {
+                                                                barcode.rawValue?.let { value ->
+                                                                    if (value.contains("session=") && value.contains("employer=")) {
+                                                                        onQrScanned(value)
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        .addOnCompleteListener {
+                                                            imageProxy.close()
+                                                        }
+                                                } else {
+                                                    imageProxy.close()
+                                                }
+                                            }
+                                        }
+                                    
+                                    try {
+                                        cameraProvider.unbindAll()
+                                        cameraProvider.bindToLifecycle(
+                                            ctx as androidx.lifecycle.LifecycleOwner,
+                                            androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA,
+                                            preview,
+                                            imageAnalysis
+                                        )
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                    }
+                                }, androidx.core.content.ContextCompat.getMainExecutor(ctx))
+                                
+                                previewView
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        
+                        // Scanning frame overlay
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(40.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(200.dp)
+                                    .border(3.dp, Color.White, RoundedCornerShape(12.dp))
+                            )
+                        }
+                    }
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "Camera permission required",
+                            color = Color.Gray
+                        )
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Cancel")
+                }
+            }
+        }
     }
 }
 
