@@ -75,9 +75,11 @@ class MainActivity : ComponentActivity() {
             (uri.scheme == "https" && uri.host == "signedby.me")) {
             val sessionId = uri.getQueryParameter("session")
             val employer = uri.getQueryParameter("employer")
+            val amountStr = uri.getQueryParameter("amount")
+            val amount = amountStr?.toULongOrNull() ?: 100UL // Default 100 sats
             
             if (sessionId != null && employer != null) {
-                return LoginSession(sessionId, employer)
+                return LoginSession(sessionId, employer, amount)
             }
         }
         return null
@@ -87,7 +89,8 @@ class MainActivity : ComponentActivity() {
 // Data class for login session from deep link / QR
 data class LoginSession(
     val sessionId: String,
-    val employerName: String
+    val employerName: String,
+    val amountSats: ULong = 100UL // Default 100 sats if not specified
 )
 
 @Composable
@@ -213,7 +216,7 @@ fun SignedByMeApp(
             isPollingPayment = isPollingPayment,
             paymentReceived = paymentReceived,
             showInvoiceDialog = showInvoiceDialog,
-            invoiceAmountSats = invoiceAmountSats,
+            invoiceAmountSats = loginSession?.amountSats ?: 100UL,
             statusMessage = statusMessage,
             loginSession = loginSession,
             onLoginSessionReceived = { session ->
@@ -228,10 +231,13 @@ fun SignedByMeApp(
                     val sessionId = loginSession?.sessionId ?: "demo_${System.currentTimeMillis()}"
                     lastLoginId = sessionId
                     
+                    // Use amount from login session (set by employer in QR/link)
+                    val amountSats = loginSession?.amountSats ?: 100UL
+                    
                     // Create invoice using Breez SDK
                     val result = breezMgr.createInvoice(
-                        amountSats = invoiceAmountSats,
-                        description = "SignedByMe Login: ${loginSession?.employerName ?: "Demo"} - $sessionId"
+                        amountSats = amountSats,
+                        description = "SignedByMe Log In: ${loginSession?.employerName ?: "Demo"} - $sessionId"
                     )
                     
                     result.onSuccess { invoice ->
@@ -977,14 +983,15 @@ fun LoginScreen(
                                 // Demo button for testing
                                 OutlinedButton(
                                     onClick = {
-                                        // Demo: simulate receiving a login session
+                                        // Demo: simulate receiving a login session with 100 sats
                                         onLoginSessionReceived(LoginSession(
                                             sessionId = "demo_${System.currentTimeMillis()}",
-                                            employerName = "Acme Corp"
+                                            employerName = "Acme Corp",
+                                            amountSats = 100UL
                                         ))
                                     }
                                 ) {
-                                    Text("Demo: Acme Corp Log In", fontSize = 13.sp)
+                                    Text("Demo: Acme Corp Log In (100 sats)", fontSize = 12.sp)
                                 }
                             }
                         }
@@ -1099,14 +1106,16 @@ fun LoginScreen(
         QrScannerDialog(
             onQrScanned = { qrContent ->
                 showQrScanner = false
-                // Parse the QR content (signedby.me://login?session=xxx&employer=xxx)
+                // Parse the QR content (signedby.me://login?session=xxx&employer=xxx&amount=xxx)
                 try {
                     val uri = android.net.Uri.parse(qrContent)
                     val sessionId = uri.getQueryParameter("session")
                     val employer = uri.getQueryParameter("employer")
+                    val amountStr = uri.getQueryParameter("amount")
+                    val amount = amountStr?.toULongOrNull() ?: 100UL // Default 100 sats
                     
                     if (sessionId != null && employer != null) {
-                        onLoginSessionReceived(LoginSession(sessionId, employer))
+                        onLoginSessionReceived(LoginSession(sessionId, employer, amount))
                     }
                 } catch (e: Exception) {
                     // Invalid QR format
