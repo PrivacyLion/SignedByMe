@@ -1668,7 +1668,9 @@ fun LoginScreen(
 @Composable
 fun QrScannerDialog(
     onQrScanned: (String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    title: String = "Scan Log In QR Code",
+    subtitle: String = "Point your camera at the QR Code on your computer screen"
 ) {
     val context = LocalContext.current
     var hasCameraPermission by remember {
@@ -1705,7 +1707,7 @@ fun QrScannerDialog(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    "Scan Log In QR Code",
+                    title,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -1713,7 +1715,7 @@ fun QrScannerDialog(
                 Spacer(modifier = Modifier.height(8.dp))
                 
                 Text(
-                    "Point your camera at the QR Code on your computer screen",
+                    subtitle,
                     fontSize = 13.sp,
                     color = Color.Gray,
                     textAlign = TextAlign.Center
@@ -2311,7 +2313,9 @@ fun SendDialog(
                 showScanner = false
                 onInvoiceTextChange(scanned)
             },
-            onDismiss = { showScanner = false }
+            onDismiss = { showScanner = false },
+            title = "Scan Invoice QR Code",
+            subtitle = "Point your camera at the recipient's Lightning invoice"
         )
     }
 }
