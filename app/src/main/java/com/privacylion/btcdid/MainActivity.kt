@@ -1178,7 +1178,7 @@ fun QrScannerDialog(
                                     val cameraProvider = cameraProviderFuture.get()
                                     
                                     val preview = androidx.camera.core.Preview.Builder().build().also {
-                                        it.surfaceProvider = previewView.surfaceProvider
+                                        it.setSurfaceProvider(previewView.surfaceProvider)
                                     }
                                     
                                     val imageAnalysis = androidx.camera.core.ImageAnalysis.Builder()
