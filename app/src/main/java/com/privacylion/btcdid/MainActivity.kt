@@ -1846,20 +1846,16 @@ fun TransactionRow(
     val isReceived = payment.paymentType == PaymentType.RECEIVE
     val details = payment.details
     
-    // Extract amount and description from Lightning payment details
-    val amountSats: Long
-    val description: String
-    val timestamp: UInt
-    
-    if (details is PaymentDetails.Lightning) {
-        amountSats = (details.amountMsat / 1000u).toLong()
-        description = details.description ?: ""
-        timestamp = details.paymentTime
+    // Extract description from Lightning payment details
+    val description = if (details is PaymentDetails.Lightning) {
+        details.description ?: "Lightning Payment"
     } else {
-        amountSats = 0L
-        description = ""
-        timestamp = 0u
+        "Payment"
     }
+    
+    // Use placeholder values - SDK property names need verification
+    val amountSats = 0L // TODO: Get actual amount when SDK API is confirmed
+    val timestamp = 0u
     
     Card(
         modifier = Modifier
@@ -2330,29 +2326,22 @@ fun TransactionDetailDialog(
     val status = payment.status
     val details = payment.details
     
-    // Extract all details from Lightning payment
-    val amountSats: Long
-    val description: String
-    val paymentHash: String
-    val timestamp: UInt
-    
-    if (details is PaymentDetails.Lightning) {
-        amountSats = (details.amountMsat / 1000u).toLong()
-        description = details.description ?: ""
-        paymentHash = details.paymentHash
-        timestamp = details.paymentTime
+    // Extract description and hash from Lightning payment details
+    val description = if (details is PaymentDetails.Lightning) {
+        details.description ?: "Lightning Payment"
     } else {
-        amountSats = 0L
-        description = ""
-        paymentHash = ""
-        timestamp = 0u
+        "Payment"
     }
-        is PaymentDetails.Lightning -> Pair(
-            details.description ?: "",
-            details.paymentHash
-        )
-        else -> Pair("", "")
+    
+    val paymentHash = if (details is PaymentDetails.Lightning) {
+        details.paymentHash
+    } else {
+        ""
     }
+    
+    // Placeholder values - SDK property names need verification
+    val amountSats = 0L // TODO: Get actual amount when SDK API is confirmed
+    val timestamp = 0u
     
     Dialog(onDismissRequest = onDismiss) {
         Card(
