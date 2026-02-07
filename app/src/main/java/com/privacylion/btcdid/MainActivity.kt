@@ -486,7 +486,7 @@ fun OnboardingScreen(
             )
 
             Text(
-                text = "Set up your identity",
+                text = "Start by pressing the button below in Step 1",
                 fontSize = 16.sp,
                 color = Color.Gray,
                 textAlign = TextAlign.Center,
@@ -502,7 +502,7 @@ fun OnboardingScreen(
             ) {
                 if (!step1Complete) {
                     Text(
-                        "Generate your unique digital signature.",
+                        "Press button below to start",
                         color = Color.Gray,
                         fontSize = 14.sp,
                         textAlign = TextAlign.Center,
@@ -531,7 +531,7 @@ fun OnboardingScreen(
             ) {
                 if (!step2Complete || walletState !is BreezWalletManager.WalletState.Connected) {
                     Text(
-                        "Set up your Lightning wallet",
+                        "Press button below to set up your wallet",
                         color = Color.Gray,
                         fontSize = 14.sp,
                         textAlign = TextAlign.Center,
@@ -596,7 +596,7 @@ fun OnboardingScreen(
             ) {
                 if (!step3Complete) {
                     Text(
-                        "Generate your verified signature",
+                        "Press button below to generate your Signature",
                         fontSize = 14.sp,
                         color = Color.Gray,
                         textAlign = TextAlign.Center,
@@ -1015,9 +1015,11 @@ fun LoginScreen(
                         Spacer(modifier = Modifier.height(8.dp))
                         
                         Text(
-                            "Use this to prove your content is yours. Your VCC is cryptographically tied to your signature.",
+                            "Use your VCC to prove your content is yours. This VCC is cryptographically tied to your Signature.",
                             fontSize = 13.sp,
-                            color = Color.Gray
+                            color = Color.Gray,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
                         )
                         
                         Spacer(modifier = Modifier.height(12.dp))
