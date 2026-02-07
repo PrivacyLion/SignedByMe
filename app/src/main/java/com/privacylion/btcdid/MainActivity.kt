@@ -103,8 +103,17 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
     var isLoading by remember { mutableStateOf(false) }
     var vccId by remember { mutableStateOf("") }
 
-    // Check if onboarding is complete
+    // Check if onboarding is complete (with delayed transition)
     val onboardingComplete = step1Complete && step2Complete && step3Complete
+    var showLoginScreen by remember { mutableStateOf(false) }
+    
+    // Delay transition to login screen so user sees Step 3 complete
+    LaunchedEffect(onboardingComplete) {
+        if (onboardingComplete && !showLoginScreen) {
+            delay(1500) // 1.5 second delay to see completion
+            showLoginScreen = true
+        }
+    }
 
     // Auto-initialize wallet if already set up
     LaunchedEffect(step2Complete) {
@@ -151,12 +160,13 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
     }
 
     // ===== Screen Routing =====
-    if (onboardingComplete) {
+    if (showLoginScreen) {
         // Show Login Screen
         LoginScreen(
             did = did,
             balanceSats = balanceSats,
             vccId = vccId,
+            vccResult = vccResult,
             lastInvoice = lastInvoice,
             isCreatingInvoice = isCreatingInvoice,
             isPollingPayment = isPollingPayment,
@@ -217,6 +227,19 @@ fun SignedByMeApp(didMgr: DidWalletManager, breezMgr: BreezWalletManager) {
                 paymentReceived = false
                 showInvoiceDialog = false
                 statusMessage = ""
+            },
+            onCopyVcc = {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("VCC", vccResult))
+                Toast.makeText(context, "VCC copied!", Toast.LENGTH_SHORT).show()
+            },
+            onShareVcc = {
+                val sendIntent = Intent().apply {
+                    action = Intent.ACTION_SEND
+                    putExtra(Intent.EXTRA_TEXT, vccResult)
+                    type = "text/plain"
+                }
+                context.startActivity(Intent.createChooser(sendIntent, "Share VCC"))
             }
         )
     } else {
@@ -611,6 +634,7 @@ fun LoginScreen(
     did: String,
     balanceSats: Long,
     vccId: String,
+    vccResult: String,
     lastInvoice: String,
     isCreatingInvoice: Boolean,
     isPollingPayment: Boolean,
@@ -623,7 +647,9 @@ fun LoginScreen(
     onDismissInvoiceDialog: () -> Unit,
     onCopyInvoice: () -> Unit,
     onShareInvoice: () -> Unit,
-    onResetLogin: () -> Unit
+    onResetLogin: () -> Unit,
+    onCopyVcc: () -> Unit,
+    onShareVcc: () -> Unit
 ) {
     Box(
         modifier = Modifier
@@ -663,75 +689,10 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Ready to verify your identity",
+                text = "Ready to Log-In",
                 fontSize = 16.sp,
                 color = Color.Gray
             )
-
-            Spacer(modifier = Modifier.height(40.dp))
-
-            // Identity Card
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(12.dp, RoundedCornerShape(24.dp)),
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White)
-            ) {
-                Column(
-                    modifier = Modifier.padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    // Profile icon
-                    Box(
-                        modifier = Modifier
-                            .size(80.dp)
-                            .clip(CircleShape)
-                            .background(
-                                Brush.linearGradient(
-                                    listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6))
-                                )
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("👤", fontSize = 40.sp)
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Text(
-                        "Your Identity",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Truncated DID
-                    Text(
-                        text = "${did.take(16)}...${did.takeLast(8)}",
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = Color.Gray
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Balance
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("⚡", fontSize = 20.sp)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            "$balanceSats sats",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFF3B82F6)
-                        )
-                    }
-                }
-            }
 
             Spacer(modifier = Modifier.height(32.dp))
 
@@ -864,7 +825,7 @@ fun LoginScreen(
                         Spacer(modifier = Modifier.height(12.dp))
 
                         Text(
-                            "Verify Your Identity",
+                            "Start Your Login",
                             fontSize = 18.sp,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -872,7 +833,7 @@ fun LoginScreen(
                         Spacer(modifier = Modifier.height(8.dp))
 
                         Text(
-                            "Generate an invoice for your employer to pay and verify your identity.",
+                            "Press button below to start your log-in with your Signature",
                             fontSize = 14.sp,
                             color = Color.Gray,
                             textAlign = TextAlign.Center
@@ -893,6 +854,79 @@ fun LoginScreen(
                                 colors = listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6)),
                                 onClick = onStartLogin
                             )
+                        }
+                    }
+                }
+            }
+
+            // VCC Section
+            if (vccResult.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .shadow(8.dp, RoundedCornerShape(24.dp)),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp)
+                    ) {
+                        Text(
+                            "Your Verified Content Claim (VCC)",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        Text(
+                            "Use this to prove your content is yours. Your VCC is cryptographically tied to your signature.",
+                            fontSize = 13.sp,
+                            color = Color.Gray
+                        )
+                        
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        StatusPill("Verified Content Claim", Color(0xFF10B981))
+                        
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        // VCC preview
+                        Text(
+                            text = vccResult.take(60) + "...",
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = Color.Gray,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xFFF3F4F6), RoundedCornerShape(8.dp))
+                                .padding(12.dp)
+                        )
+                        
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        // Copy / Share buttons
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = onCopyVcc,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("📋 Copy")
+                            }
+                            
+                            OutlinedButton(
+                                onClick = onShareVcc,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Share")
+                            }
                         }
                     }
                 }
