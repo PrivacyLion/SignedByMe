@@ -97,6 +97,10 @@ dependencies {
     implementation(libs.breez.sdk.spark)
     // BIP39 mnemonic generation
     implementation(libs.bip39)
+    // Biometric authentication
+    implementation("androidx.biometric:biometric:1.1.0")
+    // Fragment for BiometricPrompt
+    implementation("androidx.fragment:fragment-ktx:1.6.2")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

@@ -22,6 +22,17 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /**
+ * Data class for parsed invoice details
+ */
+data class InvoiceDetails(
+    val amountSats: ULong?,
+    val description: String,
+    val paymentHash: String,
+    val expiry: ULong,
+    val isExpired: Boolean
+)
+
+/**
  * BreezWalletManager - Manages Breez SDK Spark wallet integration
  * 
  * Handles:
@@ -225,6 +236,143 @@ class BreezWalletManager(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to get payments", e)
             emptyList()
+        }
+    }
+    
+    /**
+     * Get ALL payments (no limit)
+     */
+    suspend fun getAllPayments(): List<Payment> = withContext(Dispatchers.IO) {
+        try {
+            val breezSdk = sdk ?: return@withContext emptyList()
+            
+            val response = breezSdk.listPayments(
+                ListPaymentsRequest(
+                    sortAscending = false
+                )
+            )
+            
+            response.payments
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get all payments", e)
+            emptyList()
+        }
+    }
+    
+    /**
+     * Send a Lightning payment (pay an invoice)
+     * 
+     * @param bolt11Invoice The BOLT11 invoice to pay
+     * @return The payment result
+     */
+    suspend fun sendPayment(bolt11Invoice: String): Result<Payment> = withContext(Dispatchers.IO) {
+        try {
+            val breezSdk = sdk ?: throw IllegalStateException("SDK not initialized")
+            
+            val request = PayRequest(
+                invoice = bolt11Invoice
+            )
+            
+            val response = breezSdk.pay(request)
+            
+            Log.i(TAG, "Payment sent successfully")
+            refreshBalance()
+            Result.success(response.payment)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send payment", e)
+            Result.failure(e)
+        }
+    }
+    
+    /**
+     * Parse a BOLT11 invoice to get its details without paying
+     * 
+     * @param bolt11Invoice The invoice to parse
+     * @return Parsed invoice details
+     */
+    suspend fun parseInvoice(bolt11Invoice: String): Result<InvoiceDetails> = withContext(Dispatchers.IO) {
+        try {
+            val breezSdk = sdk ?: throw IllegalStateException("SDK not initialized")
+            
+            // Use parseInput to decode the invoice
+            val input = breezSdk.parseInput(bolt11Invoice)
+            
+            when (input) {
+                is InputType.Bolt11 -> {
+                    val invoice = input.invoice
+                    Result.success(InvoiceDetails(
+                        amountSats = invoice.amountSats,
+                        description = invoice.description ?: "",
+                        paymentHash = invoice.paymentHash,
+                        expiry = invoice.expiry,
+                        isExpired = invoice.isExpired
+                    ))
+                }
+                else -> Result.failure(Exception("Not a valid BOLT11 invoice"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse invoice", e)
+            Result.failure(e)
+        }
+    }
+    
+    /**
+     * Get the wallet mnemonic (seed words) for backup
+     * This should be protected by biometric authentication before calling
+     */
+    fun getMnemonic(): String? {
+        return try {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val encryptedSeed = prefs.getString(PREF_ENCRYPTED_SEED, null)
+            val iv = prefs.getString(PREF_SEED_IV, null)
+            
+            if (encryptedSeed != null && iv != null) {
+                decryptMnemonic(encryptedSeed, iv)
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get mnemonic", e)
+            null
+        }
+    }
+    
+    /**
+     * Check if wallet exists (has saved mnemonic)
+     */
+    fun hasWallet(): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(PREF_ENCRYPTED_SEED, null) != null
+    }
+    
+    /**
+     * Restore wallet from mnemonic
+     */
+    suspend fun restoreFromMnemonic(mnemonic: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            // Validate mnemonic format (should be 12 or 24 words)
+            val words = mnemonic.trim().split("\\s+".toRegex())
+            if (words.size != 12 && words.size != 24) {
+                return@withContext Result.failure(Exception("Mnemonic must be 12 or 24 words"))
+            }
+            
+            // Store the new mnemonic
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val (encrypted, iv) = encryptMnemonic(mnemonic.trim())
+            prefs.edit()
+                .putString(PREF_ENCRYPTED_SEED, encrypted)
+                .putString(PREF_SEED_IV, iv)
+                .apply()
+            
+            // Re-initialize wallet with new mnemonic
+            sdk?.disconnect()
+            sdk = null
+            _walletState.value = WalletState.Disconnected
+            
+            initializeWallet()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to restore wallet", e)
+            Result.failure(e)
         }
     }
     

@@ -10,7 +10,12 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -21,6 +26,8 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,18 +40,30 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
+import breez_sdk_spark.Payment
+import breez_sdk_spark.PaymentType
+import breez_sdk_spark.PaymentStatus
+import breez_sdk_spark.PaymentDetails
 import com.privacylion.btcdid.ui.theme.BTC_DIDTheme
 import kotlinx.coroutines.*
 import org.json.JSONObject
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.common.BitMatrix
+import java.text.NumberFormat
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val didMgr = DidWalletManager(applicationContext)
@@ -136,6 +155,46 @@ private fun sendInvoiceToApi(
     }
 }
 
+/**
+ * Fetch current BTC price in USD from CoinGecko API
+ */
+private suspend fun fetchBtcPrice(): Double = withContext(Dispatchers.IO) {
+    try {
+        val url = java.net.URL("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd")
+        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 10000
+            readTimeout = 10000
+        }
+        
+        val response = conn.inputStream.bufferedReader().readText()
+        conn.disconnect()
+        
+        val json = JSONObject(response)
+        json.getJSONObject("bitcoin").getDouble("usd")
+    } catch (e: Exception) {
+        android.util.Log.e("SignedByMe", "Failed to fetch BTC price: ${e.message}")
+        0.0
+    }
+}
+
+/**
+ * Convert satoshis to USD string
+ */
+fun satsToUsd(sats: Long, btcPrice: Double): String {
+    if (btcPrice <= 0) return ""
+    val btc = sats / 100_000_000.0
+    val usd = btc * btcPrice
+    return String.format(Locale.US, "~$%.2f USD", usd)
+}
+
+/**
+ * Format satoshis with commas
+ */
+fun formatSats(sats: Long): String {
+    return NumberFormat.getNumberInstance(Locale.US).format(sats)
+}
+
 @Composable
 fun SignedByMeApp(
     didMgr: DidWalletManager, 
@@ -189,6 +248,22 @@ fun SignedByMeApp(
     var vccResult by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     var vccId by remember { mutableStateOf("") }
+    
+    // Wallet Section State (Screen 2)
+    var btcPriceUsd by remember { mutableStateOf(0.0) }
+    var transactions by remember { mutableStateOf<List<Payment>>(emptyList()) }
+    var showReceiveDialog by remember { mutableStateOf(false) }
+    var showSendDialog by remember { mutableStateOf(false) }
+    var showTransactionDetail by remember { mutableStateOf<Payment?>(null) }
+    var showSeedWordsDialog by remember { mutableStateOf(false) }
+    var seedWords by remember { mutableStateOf<List<String>>(emptyList()) }
+    var receiveInvoice by remember { mutableStateOf("") }
+    var isCreatingReceiveInvoice by remember { mutableStateOf(false) }
+    var sendInvoiceText by remember { mutableStateOf("") }
+    var parsedInvoice by remember { mutableStateOf<InvoiceDetails?>(null) }
+    var isSendingPayment by remember { mutableStateOf(false) }
+    var sendError by remember { mutableStateOf("") }
+    var walletSyncStatus by remember { mutableStateOf("Connected") }
 
     // Check if onboarding is complete (with delayed transition)
     val onboardingComplete = step1Complete && step2Complete && step3Complete
@@ -240,9 +315,33 @@ fun SignedByMeApp(
                     statusMessage = "✅ Payment received! Log In verified."
                     // Close the invoice dialog
                     showInvoiceDialog = false
+                    // Refresh transactions
+                    transactions = breezMgr.getAllPayments()
                 }
                 delay(3000) // Poll every 3 seconds
             }
+        }
+    }
+    
+    // Fetch BTC price from CoinGecko on start and periodically
+    LaunchedEffect(Unit) {
+        while (true) {
+            try {
+                val price = fetchBtcPrice()
+                if (price > 0) {
+                    btcPriceUsd = price
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("SignedByMe", "Failed to fetch BTC price: ${e.message}")
+            }
+            delay(60000) // Refresh every minute
+        }
+    }
+    
+    // Load transactions when wallet connects
+    LaunchedEffect(walletState) {
+        if (walletState is BreezWalletManager.WalletState.Connected) {
+            transactions = breezMgr.getAllPayments()
         }
     }
 
@@ -355,6 +454,129 @@ fun SignedByMeApp(
                     type = "text/plain"
                 }
                 context.startActivity(Intent.createChooser(sendIntent, "Share VCC"))
+            },
+            // Wallet Section parameters
+            btcPriceUsd = btcPriceUsd,
+            transactions = transactions,
+            walletSyncStatus = walletSyncStatus,
+            showReceiveDialog = showReceiveDialog,
+            showSendDialog = showSendDialog,
+            showTransactionDetail = showTransactionDetail,
+            showSeedWordsDialog = showSeedWordsDialog,
+            seedWords = seedWords,
+            receiveInvoice = receiveInvoice,
+            isCreatingReceiveInvoice = isCreatingReceiveInvoice,
+            sendInvoiceText = sendInvoiceText,
+            parsedInvoice = parsedInvoice,
+            isSendingPayment = isSendingPayment,
+            sendError = sendError,
+            onRefreshWallet = {
+                scope.launch {
+                    walletSyncStatus = "Syncing..."
+                    breezMgr.refreshBalance()
+                    transactions = breezMgr.getAllPayments()
+                    walletSyncStatus = "Connected"
+                }
+            },
+            onShowReceiveDialog = { showReceiveDialog = true },
+            onDismissReceiveDialog = { 
+                showReceiveDialog = false
+                receiveInvoice = ""
+            },
+            onCreateReceiveInvoice = { amountSats, memo ->
+                scope.launch {
+                    isCreatingReceiveInvoice = true
+                    val result = breezMgr.createInvoice(
+                        amountSats = amountSats.toULong(),
+                        description = memo.ifEmpty { "SignedByMe Receive" }
+                    )
+                    result.onSuccess { invoice ->
+                        receiveInvoice = invoice
+                    }.onFailure { e ->
+                        Toast.makeText(context, "Failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                    isCreatingReceiveInvoice = false
+                }
+            },
+            onCopyReceiveInvoice = {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Lightning Invoice", receiveInvoice))
+                Toast.makeText(context, "Invoice copied!", Toast.LENGTH_SHORT).show()
+            },
+            onShareReceiveInvoice = {
+                val sendIntent = Intent().apply {
+                    action = Intent.ACTION_SEND
+                    putExtra(Intent.EXTRA_TEXT, receiveInvoice)
+                    type = "text/plain"
+                }
+                context.startActivity(Intent.createChooser(sendIntent, "Share Invoice"))
+            },
+            onShowSendDialog = { showSendDialog = true },
+            onDismissSendDialog = {
+                showSendDialog = false
+                sendInvoiceText = ""
+                parsedInvoice = null
+                sendError = ""
+            },
+            onSendInvoiceTextChange = { text ->
+                sendInvoiceText = text
+                sendError = ""
+                // Try to parse the invoice
+                if (text.isNotEmpty()) {
+                    scope.launch {
+                        val result = breezMgr.parseInvoice(text)
+                        result.onSuccess { details ->
+                            parsedInvoice = details
+                            sendError = ""
+                        }.onFailure {
+                            parsedInvoice = null
+                        }
+                    }
+                } else {
+                    parsedInvoice = null
+                }
+            },
+            onSendPayment = {
+                scope.launch {
+                    isSendingPayment = true
+                    sendError = ""
+                    val result = breezMgr.sendPayment(sendInvoiceText)
+                    result.onSuccess {
+                        Toast.makeText(context, "Payment sent!", Toast.LENGTH_SHORT).show()
+                        showSendDialog = false
+                        sendInvoiceText = ""
+                        parsedInvoice = null
+                        transactions = breezMgr.getAllPayments()
+                    }.onFailure { e ->
+                        sendError = e.message ?: "Payment failed"
+                    }
+                    isSendingPayment = false
+                }
+            },
+            onShowTransactionDetail = { payment -> showTransactionDetail = payment },
+            onDismissTransactionDetail = { showTransactionDetail = null },
+            onShowSeedWords = {
+                // Get mnemonic from wallet manager
+                val mnemonic = breezMgr.getMnemonic()
+                if (mnemonic != null) {
+                    seedWords = mnemonic.split(" ")
+                    showSeedWordsDialog = true
+                } else {
+                    Toast.makeText(context, "Could not retrieve seed words", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onDismissSeedWords = { 
+                showSeedWordsDialog = false
+                seedWords = emptyList()
+            },
+            onCopySeedWords = {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Seed Words", seedWords.joinToString(" ")))
+                Toast.makeText(context, "Seed words copied!", Toast.LENGTH_SHORT).show()
+            },
+            onBackupToCloud = {
+                // TODO: Implement Google Drive backup
+                Toast.makeText(context, "Cloud backup coming soon!", Toast.LENGTH_SHORT).show()
             }
         )
     } else {
@@ -766,7 +988,38 @@ fun LoginScreen(
     onShareInvoice: () -> Unit,
     onResetLogin: () -> Unit,
     onCopyVcc: () -> Unit,
-    onShareVcc: () -> Unit
+    onShareVcc: () -> Unit,
+    // Wallet Section parameters
+    btcPriceUsd: Double,
+    transactions: List<Payment>,
+    walletSyncStatus: String,
+    showReceiveDialog: Boolean,
+    showSendDialog: Boolean,
+    showTransactionDetail: Payment?,
+    showSeedWordsDialog: Boolean,
+    seedWords: List<String>,
+    receiveInvoice: String,
+    isCreatingReceiveInvoice: Boolean,
+    sendInvoiceText: String,
+    parsedInvoice: InvoiceDetails?,
+    isSendingPayment: Boolean,
+    sendError: String,
+    onRefreshWallet: () -> Unit,
+    onShowReceiveDialog: () -> Unit,
+    onDismissReceiveDialog: () -> Unit,
+    onCreateReceiveInvoice: (Long, String) -> Unit,
+    onCopyReceiveInvoice: () -> Unit,
+    onShareReceiveInvoice: () -> Unit,
+    onShowSendDialog: () -> Unit,
+    onDismissSendDialog: () -> Unit,
+    onSendInvoiceTextChange: (String) -> Unit,
+    onSendPayment: () -> Unit,
+    onShowTransactionDetail: (Payment) -> Unit,
+    onDismissTransactionDetail: () -> Unit,
+    onShowSeedWords: () -> Unit,
+    onDismissSeedWords: () -> Unit,
+    onCopySeedWords: () -> Unit,
+    onBackupToCloud: () -> Unit
 ) {
     // QR Scanner state
     var showQrScanner by remember { mutableStateOf(false) }
@@ -1061,6 +1314,183 @@ fun LoginScreen(
                 }
             }
 
+            // ===== WALLET SECTION =====
+            Spacer(modifier = Modifier.height(24.dp))
+            
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .shadow(8.dp, RoundedCornerShape(24.dp)),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White)
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp)
+                ) {
+                    // Header with refresh button
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("⚡", fontSize = 24.sp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Your Wallet",
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        IconButton(onClick = onRefreshWallet) {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = "Refresh",
+                                tint = Color(0xFF3B82F6)
+                            )
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    // Balance display
+                    Text(
+                        "${formatSats(balanceSats)} sats",
+                        fontSize = 32.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF1F2937)
+                    )
+                    
+                    if (btcPriceUsd > 0) {
+                        Text(
+                            satsToUsd(balanceSats, btcPriceUsd),
+                            fontSize = 16.sp,
+                            color = Color.Gray
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    // Connection status
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (walletSyncStatus == "Connected") Color(0xFF10B981)
+                                    else Color(0xFFF59E0B)
+                                )
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            walletSyncStatus,
+                            fontSize = 12.sp,
+                            color = Color.Gray
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.height(20.dp))
+                    
+                    // Send & Receive buttons
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // Receive button
+                        Button(
+                            onClick = onShowReceiveDialog,
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF10B981)
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.KeyboardArrowDown,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Receive")
+                        }
+                        
+                        // Send button
+                        Button(
+                            onClick = onShowSendDialog,
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF3B82F6)
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.KeyboardArrowUp,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Send")
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(20.dp))
+                    
+                    // Backup & Seed buttons
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        TextButton(
+                            onClick = onBackupToCloud,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("☁️ Backup", fontSize = 13.sp, color = Color(0xFF3B82F6))
+                        }
+                        TextButton(
+                            onClick = onShowSeedWords,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("🔑 View Seed", fontSize = 13.sp, color = Color(0xFF3B82F6))
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    // Transaction History
+                    Text(
+                        "Transaction History",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    if (transactions.isEmpty()) {
+                        Text(
+                            "No transactions yet",
+                            fontSize = 14.sp,
+                            color = Color.Gray,
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center
+                        )
+                    } else {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            transactions.forEach { payment ->
+                                TransactionRow(
+                                    payment = payment,
+                                    btcPriceUsd = btcPriceUsd,
+                                    onClick = { onShowTransactionDetail(payment) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            // ===== END WALLET SECTION =====
+
             // VCC Section
             if (vccResult.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(24.dp))
@@ -1184,6 +1614,52 @@ fun LoginScreen(
                 }
             },
             onDismiss = { showQrScanner = false }
+        )
+    }
+    
+    // Receive Dialog
+    if (showReceiveDialog) {
+        ReceiveDialog(
+            invoice = receiveInvoice,
+            isCreating = isCreatingReceiveInvoice,
+            btcPriceUsd = btcPriceUsd,
+            onCreateInvoice = onCreateReceiveInvoice,
+            onCopy = onCopyReceiveInvoice,
+            onShare = onShareReceiveInvoice,
+            onDismiss = onDismissReceiveDialog
+        )
+    }
+    
+    // Send Dialog
+    if (showSendDialog) {
+        SendDialog(
+            invoiceText = sendInvoiceText,
+            parsedInvoice = parsedInvoice,
+            isSending = isSendingPayment,
+            error = sendError,
+            btcPriceUsd = btcPriceUsd,
+            onInvoiceTextChange = onSendInvoiceTextChange,
+            onSend = onSendPayment,
+            onDismiss = onDismissSendDialog
+        )
+    }
+    
+    // Transaction Detail Dialog
+    if (showTransactionDetail != null) {
+        TransactionDetailDialog(
+            payment = showTransactionDetail!!,
+            btcPriceUsd = btcPriceUsd,
+            onDismiss = onDismissTransactionDetail
+        )
+    }
+    
+    // Seed Words Dialog
+    if (showSeedWordsDialog) {
+        SeedWordsDialog(
+            seedWords = seedWords,
+            onCopy = onCopySeedWords,
+            onBackup = onBackupToCloud,
+            onDismiss = onDismissSeedWords
         )
     }
 }
@@ -1355,6 +1831,732 @@ fun QrScannerDialog(
                     Text("Cancel")
                 }
             }
+        }
+    }
+}
+
+// ===== Wallet Components =====
+
+@Composable
+fun TransactionRow(
+    payment: Payment,
+    btcPriceUsd: Double,
+    onClick: () -> Unit
+) {
+    val isReceived = payment.paymentType == PaymentType.RECEIVE
+    val amountSats = payment.amountSats.toLong()
+    val timestamp = payment.timestamp
+    
+    // Get description from payment details
+    val description = when (val details = payment.details) {
+        is PaymentDetails.Lightning -> details.description ?: ""
+        else -> ""
+    }
+    
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF9FAFB))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                // Direction indicator
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (isReceived) Color(0xFF10B981).copy(alpha = 0.1f)
+                            else Color(0xFF3B82F6).copy(alpha = 0.1f)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        if (isReceived) Icons.Default.KeyboardArrowDown 
+                        else Icons.Default.KeyboardArrowUp,
+                        contentDescription = null,
+                        tint = if (isReceived) Color(0xFF10B981) else Color(0xFF3B82F6),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                
+                Spacer(modifier = Modifier.width(12.dp))
+                
+                Column {
+                    Text(
+                        if (isReceived) "Received" else "Sent",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    if (description.isNotEmpty()) {
+                        Text(
+                            description.take(30) + if (description.length > 30) "..." else "",
+                            fontSize = 12.sp,
+                            color = Color.Gray,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Text(
+                        formatTimestamp(timestamp),
+                        fontSize = 11.sp,
+                        color = Color.Gray
+                    )
+                }
+            }
+            
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    "${if (isReceived) "+" else "-"}${formatSats(amountSats)} sats",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isReceived) Color(0xFF10B981) else Color(0xFF1F2937)
+                )
+                if (btcPriceUsd > 0) {
+                    Text(
+                        satsToUsd(amountSats, btcPriceUsd),
+                        fontSize = 11.sp,
+                        color = Color.Gray
+                    )
+                }
+            }
+        }
+    }
+}
+
+fun formatTimestamp(timestamp: UInt): String {
+    val date = Date(timestamp.toLong() * 1000)
+    val now = System.currentTimeMillis()
+    val diff = now - date.time
+    
+    return when {
+        diff < 60_000 -> "Just now"
+        diff < 3600_000 -> "${diff / 60_000} min ago"
+        diff < 86400_000 -> "${diff / 3600_000} hours ago"
+        diff < 172800_000 -> "Yesterday"
+        else -> SimpleDateFormat("MMM d", Locale.US).format(date)
+    }
+}
+
+// ===== Wallet Dialogs =====
+
+@Composable
+fun ReceiveDialog(
+    invoice: String,
+    isCreating: Boolean,
+    btcPriceUsd: Double,
+    onCreateInvoice: (Long, String) -> Unit,
+    onCopy: () -> Unit,
+    onShare: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var amountText by remember { mutableStateOf("") }
+    var memoText by remember { mutableStateOf("") }
+    
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Receive Sats",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Text("✕", fontSize = 18.sp, color = Color.Gray)
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                if (invoice.isEmpty()) {
+                    // Input form
+                    OutlinedTextField(
+                        value = amountText,
+                        onValueChange = { amountText = it.filter { c -> c.isDigit() } },
+                        label = { Text("Amount (sats)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    
+                    // Show USD equivalent
+                    if (amountText.isNotEmpty() && btcPriceUsd > 0) {
+                        val sats = amountText.toLongOrNull() ?: 0
+                        Text(
+                            satsToUsd(sats, btcPriceUsd),
+                            fontSize = 12.sp,
+                            color = Color.Gray,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    OutlinedTextField(
+                        value = memoText,
+                        onValueChange = { memoText = it },
+                        label = { Text("Memo (optional)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    
+                    Spacer(modifier = Modifier.height(20.dp))
+                    
+                    Button(
+                        onClick = {
+                            val amount = amountText.toLongOrNull() ?: 0
+                            if (amount > 0) {
+                                onCreateInvoice(amount, memoText)
+                            }
+                        },
+                        enabled = !isCreating && amountText.isNotEmpty() && (amountText.toLongOrNull() ?: 0) > 0,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        if (isCreating) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text("Generate Invoice")
+                        }
+                    }
+                } else {
+                    // Show generated invoice
+                    val amountSats = amountText.toLongOrNull() ?: 0
+                    
+                    Text(
+                        "${formatSats(amountSats)} sats",
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    
+                    if (btcPriceUsd > 0) {
+                        Text(
+                            satsToUsd(amountSats, btcPriceUsd),
+                            fontSize = 14.sp,
+                            color = Color.Gray
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    // QR Code
+                    val qrBitmap = remember(invoice) { generateQrCode(invoice) }
+                    qrBitmap?.let {
+                        Image(
+                            bitmap = it.asImageBitmap(),
+                            contentDescription = "Invoice QR Code",
+                            modifier = Modifier
+                                .size(200.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    // Invoice text (truncated)
+                    Text(
+                        invoice.take(30) + "...",
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = Color.Gray
+                    )
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onCopy,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("📋 Copy")
+                        }
+                        OutlinedButton(
+                            onClick = onShare,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("📤 Share")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SendDialog(
+    invoiceText: String,
+    parsedInvoice: InvoiceDetails?,
+    isSending: Boolean,
+    error: String,
+    btcPriceUsd: Double,
+    onInvoiceTextChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var showScanner by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Send Sats",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Text("✕", fontSize = 18.sp, color = Color.Gray)
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                OutlinedTextField(
+                    value = invoiceText,
+                    onValueChange = onInvoiceTextChange,
+                    label = { Text("Lightning Invoice") },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 3,
+                    placeholder = { Text("lnbc...", color = Color.Gray) }
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            val clip = clipboard.primaryClip
+                            if (clip != null && clip.itemCount > 0) {
+                                val pastedText = clip.getItemAt(0).text?.toString() ?: ""
+                                onInvoiceTextChange(pastedText)
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("📋 Paste")
+                    }
+                    OutlinedButton(
+                        onClick = { showScanner = true },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("📷 Scan")
+                    }
+                }
+                
+                // Parsed invoice preview
+                if (parsedInvoice != null) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF0FDF4)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Amount:", color = Color.Gray, fontSize = 14.sp)
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text(
+                                        "${formatSats(parsedInvoice.amountSats?.toLong() ?: 0)} sats",
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 14.sp
+                                    )
+                                    if (btcPriceUsd > 0 && parsedInvoice.amountSats != null) {
+                                        Text(
+                                            satsToUsd(parsedInvoice.amountSats.toLong(), btcPriceUsd),
+                                            fontSize = 12.sp,
+                                            color = Color.Gray
+                                        )
+                                    }
+                                }
+                            }
+                            if (parsedInvoice.description.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("To:", color = Color.Gray, fontSize = 14.sp)
+                                    Text(
+                                        parsedInvoice.description.take(30),
+                                        fontSize = 14.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            if (parsedInvoice.isExpired) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    "⚠️ Invoice expired",
+                                    color = Color(0xFFEF4444),
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
+                }
+                
+                // Error message
+                if (error.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        error,
+                        color = Color(0xFFEF4444),
+                        fontSize = 12.sp
+                    )
+                }
+                
+                Spacer(modifier = Modifier.height(20.dp))
+                
+                Button(
+                    onClick = onSend,
+                    enabled = !isSending && parsedInvoice != null && !parsedInvoice.isExpired,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    if (isSending) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("Confirm & Send")
+                    }
+                }
+            }
+        }
+    }
+    
+    // QR Scanner for invoice
+    if (showScanner) {
+        QrScannerDialog(
+            onQrScanned = { scanned ->
+                showScanner = false
+                onInvoiceTextChange(scanned)
+            },
+            onDismiss = { showScanner = false }
+        )
+    }
+}
+
+@Composable
+fun TransactionDetailDialog(
+    payment: Payment,
+    btcPriceUsd: Double,
+    onDismiss: () -> Unit
+) {
+    val isReceived = payment.paymentType == PaymentType.RECEIVE
+    val amountSats = payment.amountSats.toLong()
+    val timestamp = payment.timestamp
+    val status = payment.status
+    
+    // Extract details
+    val (description, paymentHash) = when (val details = payment.details) {
+        is PaymentDetails.Lightning -> Pair(
+            details.description ?: "",
+            details.paymentHash
+        )
+        else -> Pair("", "")
+    }
+    
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Transaction Details",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Text("✕", fontSize = 18.sp, color = Color.Gray)
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(20.dp))
+                
+                // Status
+                DetailRow("Status", when (status) {
+                    PaymentStatus.COMPLETED -> "✓ Complete"
+                    PaymentStatus.PENDING -> "⏳ Pending"
+                    PaymentStatus.FAILED -> "✗ Failed"
+                    else -> "Unknown"
+                })
+                
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                // Type
+                DetailRow("Type", if (isReceived) "Received" else "Sent")
+                
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                // Amount
+                DetailRow(
+                    "Amount",
+                    "${if (isReceived) "+" else "-"}${formatSats(amountSats)} sats" +
+                        if (btcPriceUsd > 0) " (${satsToUsd(amountSats, btcPriceUsd)})" else ""
+                )
+                
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                // Date
+                val date = Date(timestamp.toLong() * 1000)
+                val dateFormat = SimpleDateFormat("MMM d, yyyy h:mm a", Locale.US)
+                DetailRow("Date", dateFormat.format(date))
+                
+                if (description.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    DetailRow("Description", description)
+                }
+                
+                if (paymentHash.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    Text("Payment Hash:", fontSize = 12.sp, color = Color.Gray)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    
+                    val context = LocalContext.current
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            paymentHash.take(20) + "..." + paymentHash.takeLast(8),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("Payment Hash", paymentHash))
+                            Toast.makeText(context, "Copied!", Toast.LENGTH_SHORT).show()
+                        }) {
+                            Text("Copy", fontSize = 12.sp)
+                        }
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(20.dp))
+                
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Close")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun DetailRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, fontSize = 14.sp, color = Color.Gray)
+        Text(value, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+fun SeedWordsDialog(
+    seedWords: List<String>,
+    onCopy: () -> Unit,
+    onBackup: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Your Recovery Words",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Text("✕", fontSize = 18.sp, color = Color.Gray)
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                // Warning
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF3C7)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Text("⚠️", fontSize = 16.sp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "Write these down and keep safe! Anyone with these words can access your wallet.",
+                            fontSize = 13.sp,
+                            color = Color(0xFF92400E)
+                        )
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(20.dp))
+                
+                // Seed words grid
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    for (i in seedWords.indices step 2) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            SeedWordChip(
+                                number = i + 1,
+                                word = seedWords[i],
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (i + 1 < seedWords.size) {
+                                SeedWordChip(
+                                    number = i + 2,
+                                    word = seedWords[i + 1],
+                                    modifier = Modifier.weight(1f)
+                                )
+                            } else {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(20.dp))
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onCopy,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("📋 Copy All")
+                    }
+                    Button(
+                        onClick = onBackup,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6))
+                    ) {
+                        Text("☁️ Backup")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SeedWordChip(
+    number: Int,
+    word: String,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF3F4F6)),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "$number.",
+                fontSize = 12.sp,
+                color = Color.Gray,
+                modifier = Modifier.width(24.dp)
+            )
+            Text(
+                word,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
         }
     }
 }
