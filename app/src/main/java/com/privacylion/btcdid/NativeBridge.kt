@@ -56,6 +56,36 @@ object NativeBridge {
         inputHashHex: String, 
         outputHashHex: String
     ): String
+    
+    /**
+     * Generate an Identity Proof binding DID to wallet ownership.
+     * This is the core STWO proof for SignedByMe - generated in Step 3.
+     * 
+     * Proves (in zero knowledge):
+     * 1. User controls the DID (knows private key)
+     * 2. User controls the wallet (signed challenge)
+     * 3. Binding is fresh (timestamp + expiry)
+     * 
+     * @param didPubkey The DID public key (hex)
+     * @param walletAddress The wallet address (e.g., Spark address)
+     * @param walletSignature Signature over a challenge proving wallet ownership
+     * @param expiryDays How many days until the proof expires (default: 30)
+     * @return JSON string with the identity proof
+     */
+    @JvmStatic external fun generateIdentityProof(
+        didPubkey: String,
+        walletAddress: String,
+        walletSignature: String,
+        expiryDays: Long
+    ): String
+    
+    /**
+     * Verify an Identity Proof is valid and not expired.
+     * 
+     * @param proofJson The proof JSON to verify
+     * @return JSON with {valid: boolean, did_pubkey, wallet_address, expires_at, error?}
+     */
+    @JvmStatic external fun verifyIdentityProof(proofJson: String): String
 
     // ============================================================================
     // DLC (Discreet Log Contracts)

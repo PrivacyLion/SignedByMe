@@ -154,6 +154,10 @@ pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_generateStwoProo
         }
         Some(CircuitType::SignatureValidation) => prover.prove_signature_validation(&in_hex, &out_hex, ""),
         Some(CircuitType::PaymentTriggerHash) => prover.prove_payment_trigger("", &in_hex, &out_hex),
+        Some(CircuitType::IdentityProof) => {
+            // For identity proof, use the dedicated function
+            Err(anyhow!("Use generateIdentityProof() for identity proofs"))
+        }
         None => Err(anyhow!("Unknown circuit type: {}", circuit_s)),
     };
 
@@ -164,6 +168,84 @@ pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_generateStwoProo
         }
         Err(e) => {
             let error_json = format!(r#"{{"status":"error","error":"{}"}}"#, e);
+            env.new_string(error_json).unwrap().into_raw()
+        }
+    }
+}
+
+/// Generate an Identity Proof binding DID to wallet ownership
+/// This is the core proof for SignedByMe - generated in Step 3
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_generateIdentityProof(
+    mut env: JNIEnv,
+    _clazz: JClass,
+    did_pubkey: JString,
+    wallet_address: JString,
+    wallet_signature: JString,
+    expiry_days: jlong,
+) -> jstring {
+    let did = env.get_string(&did_pubkey)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let wallet = env.get_string(&wallet_address)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let sig = env.get_string(&wallet_signature)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    
+    let prover = StwoProver::default();
+    
+    match prover.prove_identity(&did, &wallet, &sig, timestamp, expiry_days as u32) {
+        Ok(proof) => {
+            let json = proof.to_json().unwrap_or_else(|_| "{}".to_string());
+            env.new_string(json).unwrap().into_raw()
+        }
+        Err(e) => {
+            let error_json = format!(r#"{{"status":"error","error":"{}"}}"#, e);
+            env.new_string(error_json).unwrap().into_raw()
+        }
+    }
+}
+
+/// Verify an Identity Proof
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_verifyIdentityProof(
+    mut env: JNIEnv,
+    _clazz: JClass,
+    proof_json: JString,
+) -> jstring {
+    let json_str = env.get_string(&proof_json)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    
+    let proof: stwo_prover::StwoProof = match serde_json::from_str(&json_str) {
+        Ok(p) => p,
+        Err(e) => {
+            let error_json = format!(r#"{{"valid":false,"error":"Invalid proof JSON: {}"}}"#, e);
+            return env.new_string(error_json).unwrap().into_raw();
+        }
+    };
+    
+    let prover = StwoProver::default();
+    
+    match prover.verify_identity(&proof) {
+        Ok(valid) => {
+            let result = serde_json::json!({
+                "valid": valid,
+                "did_pubkey": proof.public_inputs.did_pubkey,
+                "wallet_address": proof.public_inputs.wallet_address,
+                "expires_at": proof.public_inputs.expires_at,
+            });
+            env.new_string(result.to_string()).unwrap().into_raw()
+        }
+        Err(e) => {
+            let error_json = format!(r#"{{"valid":false,"error":"{}"}}"#, e);
             env.new_string(error_json).unwrap().into_raw()
         }
     }

@@ -121,13 +121,17 @@ private const val API_BASE_URL = "https://api.signedby.me" // TODO: Update with 
 
 /**
  * Send the Lightning invoice to the API for the employer to pay.
+ * Includes STWO proof and payment binding for cryptographic identity verification.
  * Returns true if successful, false otherwise.
  */
 private fun sendInvoiceToApi(
     sessionId: String,
     invoice: String,
     did: String,
-    employerName: String
+    employerName: String,
+    stwoproof: String? = null,
+    bindingSignature: String? = null,
+    nonce: String? = null
 ): Boolean {
     return try {
         val url = java.net.URL("$API_BASE_URL/v1/login/invoice")
@@ -144,6 +148,16 @@ private fun sendInvoiceToApi(
             put("invoice", invoice)
             put("did", did)
             put("employer", employerName)
+            // Include STWO proof if available (from Step 3)
+            if (stwoproof != null) {
+                put("stwo_proof", stwoproof)
+            }
+            if (bindingSignature != null) {
+                put("binding_signature", bindingSignature)
+            }
+            if (nonce != null) {
+                put("nonce", nonce)
+            }
         }.toString()
         
         conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
@@ -422,14 +436,30 @@ fun SignedByMeApp(
                         isLoginActive = true
                         isPollingPayment = true
                         
-                        // Send invoice to API for employer to pay
+                        // Send invoice to API for employer to pay (with STWO proof)
                         launch(Dispatchers.IO) {
                             try {
+                                // Get STWO identity proof (generated in Step 3)
+                                val stwoproof = didMgr.getIdentityProof()
+                                
+                                // Generate nonce and payment binding
+                                val nonce = java.util.UUID.randomUUID().toString()
+                                val bindingSignature = if (stwoproof != null) {
+                                    try {
+                                        didMgr.createPaymentBinding(lastPaymentHash, nonce)
+                                    } catch (e: Exception) {
+                                        null
+                                    }
+                                } else null
+                                
                                 val apiResult = sendInvoiceToApi(
                                     sessionId = sessionId,
                                     invoice = invoice,
                                     did = did,
-                                    employerName = loginSession?.employerName ?: "Demo"
+                                    employerName = loginSession?.employerName ?: "Demo",
+                                    stwoproof = stwoproof,
+                                    bindingSignature = bindingSignature,
+                                    nonce = if (stwoproof != null) nonce else null
                                 )
                                 withContext(Dispatchers.Main) {
                                     if (!apiResult) {
@@ -761,16 +791,26 @@ fun SignedByMeApp(
                             did = did,
                             preimageSha256Hex = preShaHex
                         )
+                        
+                        // Generate STWO Identity Proof (binds DID to wallet)
+                        val identityProofJson = didMgr.generateIdentityProof(
+                            walletAddress = walletSparkAddress.ifEmpty { "unknown" },
+                            expiryDays = 30
+                        )
+                        val stwoproofHash = didMgr.getIdentityProofHash() ?: "none"
 
                         val generatedVccId = "vcc_${System.currentTimeMillis()}_${did.takeLast(8)}"
                         val vcc = JSONObject().apply {
-                            put("schema", "signedby.me/vcc/1")
+                            put("schema", "signedby.me/vcc/2")  // Updated schema with STWO
                             put("id", generatedVccId)
                             put("did", did)
+                            put("wallet_address", walletSparkAddress)
                             put("content_hash", "sha256_demo_${System.currentTimeMillis()}")
                             put("proof_hash", preShaHex)
+                            put("stwo_proof_hash", stwoproofHash)  // STWO proof hash
                             put("wallet_type", "breez")
                             put("timestamp", System.currentTimeMillis())
+                            put("expires_at", System.currentTimeMillis() + 30L * 24 * 60 * 60 * 1000)
                             put("signature", sigHex)
                         }.toString()
 

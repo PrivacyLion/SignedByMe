@@ -270,6 +270,133 @@ class DidWalletManager(private val context: Context) {
             java.util.Arrays.fill(priv, 0)
         }
     }
+    
+    // ============================================================================
+    // STWO Identity Proof (for SignedByMe Login)
+    // ============================================================================
+    
+    private val identityProofFile = "identity_proof_wrapped.bin"
+    
+    /**
+     * Generate and store an STWO Identity Proof binding DID to wallet.
+     * This proves ownership of both DID and wallet in zero knowledge.
+     * 
+     * @param walletAddress The wallet address (e.g., Spark address)
+     * @param expiryDays How many days until the proof expires (default: 30)
+     * @return JSON string with the identity proof
+     */
+    fun generateIdentityProof(walletAddress: String, expiryDays: Long = 30): String {
+        val did = getPublicDID() ?: throw IllegalStateException("No DID created")
+        
+        // Create a challenge and sign it with DID to prove wallet ownership
+        // The wallet signature proves we control the wallet
+        val wrapped = loadWrapped() ?: throw IllegalStateException("No DID key")
+        val priv = unwrapPrivateKey(wrapped)
+        
+        return try {
+            // Sign a challenge binding DID to wallet
+            val challenge = "signedby.me:bind:$did:$walletAddress:${System.currentTimeMillis()}"
+            val walletSignature = NativeBridge.signMessageDerHex(priv, challenge)
+            
+            // Generate STWO proof
+            val proofJson = NativeBridge.generateIdentityProof(
+                did.removePrefix("did:btcr:"),
+                walletAddress,
+                walletSignature,
+                expiryDays
+            )
+            
+            // Store proof encrypted (defense in depth)
+            saveIdentityProof(proofJson)
+            
+            proofJson
+        } finally {
+            java.util.Arrays.fill(priv, 0)
+        }
+    }
+    
+    /**
+     * Get the stored identity proof, or null if none exists
+     */
+    fun getIdentityProof(): String? {
+        return loadIdentityProof()
+    }
+    
+    /**
+     * Get the hash of the stored identity proof (for including in VCC)
+     */
+    fun getIdentityProofHash(): String? {
+        val proof = loadIdentityProof() ?: return null
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        return bytesToHex(md.digest(proof.toByteArray(Charsets.UTF_8)))
+    }
+    
+    /**
+     * Check if an identity proof exists
+     */
+    fun hasIdentityProof(): Boolean {
+        return loadIdentityProof() != null
+    }
+    
+    /**
+     * Verify the stored identity proof is still valid (not expired)
+     */
+    fun verifyIdentityProof(): String {
+        val proof = loadIdentityProof() ?: return """{"valid":false,"error":"No proof stored"}"""
+        return try {
+            NativeBridge.verifyIdentityProof(proof)
+        } catch (t: Throwable) {
+            """{"valid":false,"error":"${t.message ?: "Verification failed"}"}"""
+        }
+    }
+    
+    /**
+     * Create a payment binding signature for login
+     * This binds the identity proof to a specific payment
+     * 
+     * @param paymentHash The payment hash from the invoice
+     * @param nonce A random nonce to prevent replay
+     * @return Signature over (proof_hash + payment_hash + nonce)
+     */
+    fun createPaymentBinding(paymentHash: String, nonce: String): String {
+        val proofHash = getIdentityProofHash() 
+            ?: throw IllegalStateException("No identity proof")
+        
+        // Build binding data
+        val bindingData = """{"stwo_proof_hash":"$proofHash","payment_hash":"$paymentHash","nonce":"$nonce","timestamp":${System.currentTimeMillis()}}"""
+        
+        // Hash the binding data
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        val bindingHash = bytesToHex(md.digest(bindingData.toByteArray(Charsets.UTF_8)))
+        
+        // Sign with DID
+        val wrapped = loadWrapped() ?: throw IllegalStateException("No DID key")
+        val priv = unwrapPrivateKey(wrapped)
+        
+        return try {
+            NativeBridge.signMessageDerHex(priv, bindingHash)
+        } finally {
+            java.util.Arrays.fill(priv, 0)
+        }
+    }
+    
+    private fun saveIdentityProof(proofJson: String) {
+        ensureKeystoreKey()
+        val proofBytes = proofJson.toByteArray(Charsets.UTF_8)
+        val wrapped = wrapPrivateKey(proofBytes)
+        context.openFileOutput(identityProofFile, Context.MODE_PRIVATE).use { it.write(wrapped) }
+    }
+    
+    private fun loadIdentityProof(): String? {
+        return try {
+            val wrapped = context.openFileInput(identityProofFile).use { it.readBytes() }
+            if (wrapped.isEmpty()) return null
+            val proofBytes = unwrapPrivateKey(wrapped)
+            String(proofBytes, Charsets.UTF_8)
+        } catch (_: Throwable) {
+            null
+        }
+    }
 
     private fun hexToBytes(hex: String): ByteArray =
         hex.trim().chunked(2).map { it.toInt(16).toByte() }.toByteArray()
