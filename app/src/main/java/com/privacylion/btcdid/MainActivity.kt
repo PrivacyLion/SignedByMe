@@ -1844,14 +1844,21 @@ fun TransactionRow(
     onClick: () -> Unit
 ) {
     val isReceived = payment.paymentType == PaymentType.RECEIVE
-    // amountMsat is in millisatoshis, convert to sats
-    val amountSats = (payment.amountMsat / 1000u).toLong()
-    val timestamp = payment.createdAt
+    val details = payment.details
     
-    // Get description from payment details
-    val description = when (val details = payment.details) {
-        is PaymentDetails.Lightning -> details.description ?: ""
-        else -> ""
+    // Extract amount and description from Lightning payment details
+    val amountSats: Long
+    val description: String
+    val timestamp: UInt
+    
+    if (details is PaymentDetails.Lightning) {
+        amountSats = (details.amountMsat / 1000u).toLong()
+        description = details.description ?: ""
+        timestamp = details.paymentTime
+    } else {
+        amountSats = 0L
+        description = ""
+        timestamp = 0u
     }
     
     Card(
@@ -2320,13 +2327,26 @@ fun TransactionDetailDialog(
     onDismiss: () -> Unit
 ) {
     val isReceived = payment.paymentType == PaymentType.RECEIVE
-    // amountMsat is in millisatoshis, convert to sats
-    val amountSats = (payment.amountMsat / 1000u).toLong()
-    val timestamp = payment.createdAt
     val status = payment.status
+    val details = payment.details
     
-    // Extract details
-    val (description, paymentHash) = when (val details = payment.details) {
+    // Extract all details from Lightning payment
+    val amountSats: Long
+    val description: String
+    val paymentHash: String
+    val timestamp: UInt
+    
+    if (details is PaymentDetails.Lightning) {
+        amountSats = (details.amountMsat / 1000u).toLong()
+        description = details.description ?: ""
+        paymentHash = details.paymentHash
+        timestamp = details.paymentTime
+    } else {
+        amountSats = 0L
+        description = ""
+        paymentHash = ""
+        timestamp = 0u
+    }
         is PaymentDetails.Lightning -> Pair(
             details.description ?: "",
             details.paymentHash
