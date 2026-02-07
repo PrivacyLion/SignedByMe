@@ -93,6 +93,49 @@ data class LoginSession(
     val amountSats: ULong = 100UL // Default 100 sats if not specified
 )
 
+// API Configuration
+private const val API_BASE_URL = "https://api.signedby.me" // TODO: Update with actual API URL
+
+/**
+ * Send the Lightning invoice to the API for the employer to pay.
+ * Returns true if successful, false otherwise.
+ */
+private fun sendInvoiceToApi(
+    sessionId: String,
+    invoice: String,
+    did: String,
+    employerName: String
+): Boolean {
+    return try {
+        val url = java.net.URL("$API_BASE_URL/v1/login/invoice")
+        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 10000
+            readTimeout = 10000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+        }
+        
+        val payload = JSONObject().apply {
+            put("session_id", sessionId)
+            put("invoice", invoice)
+            put("did", did)
+            put("employer", employerName)
+        }.toString()
+        
+        conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+        
+        val responseCode = conn.responseCode
+        conn.disconnect()
+        
+        // Success if 2xx response
+        responseCode in 200..299
+    } catch (e: Exception) {
+        android.util.Log.e("SignedByMe", "Failed to send invoice to API: ${e.message}")
+        false
+    }
+}
+
 @Composable
 fun SignedByMeApp(
     didMgr: DidWalletManager, 
@@ -245,9 +288,28 @@ fun SignedByMeApp(
                         lastPaymentHash = invoice.takeLast(64)
                         isLoginActive = true
                         isPollingPayment = true
-                        // Invoice created - in production, this would be auto-sent to employer via API
-                        // Don't auto-show dialog - cleaner UX
-                        statusMessage = ""
+                        
+                        // Send invoice to API for employer to pay
+                        launch(Dispatchers.IO) {
+                            try {
+                                val apiResult = sendInvoiceToApi(
+                                    sessionId = sessionId,
+                                    invoice = invoice,
+                                    did = did,
+                                    employerName = loginSession?.employerName ?: "Demo"
+                                )
+                                withContext(Dispatchers.Main) {
+                                    if (!apiResult) {
+                                        // API send failed - still allow manual testing via debug button
+                                        statusMessage = "Note: Could not reach API. Use debug button to test."
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    statusMessage = "API error: ${e.message}"
+                                }
+                            }
+                        }
                     }.onFailure { e ->
                         statusMessage = "Failed to create invoice: ${e.message}"
                     }
