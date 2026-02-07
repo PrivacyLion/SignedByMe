@@ -33,6 +33,16 @@ data class InvoiceDetails(
 )
 
 /**
+ * Data class for parsed Lightning Address details
+ */
+data class LightningAddressDetails(
+    val address: String,
+    val minSendableSats: ULong,
+    val maxSendableSats: ULong,
+    val payRequest: breez_sdk_spark.LnurlPayRequest
+)
+
+/**
  * BreezWalletManager - Manages Breez SDK Spark wallet integration
  * 
  * Handles:
@@ -260,16 +270,119 @@ class BreezWalletManager(private val context: Context) {
     }
     
     /**
-     * Send a Lightning payment (pay an invoice)
-     * TODO: Implement when Breez SDK Spark send API is confirmed
+     * Send a Lightning payment (pay a BOLT11 invoice)
      * 
      * @param bolt11Invoice The BOLT11 invoice to pay
      * @return The payment result
      */
     suspend fun sendPayment(bolt11Invoice: String): Result<Payment> = withContext(Dispatchers.IO) {
-        // TODO: Implement actual payment sending
-        // Breez SDK Spark API for sending needs to be verified
-        Result.failure(Exception("Send payment not yet implemented. Coming soon!"))
+        try {
+            val breezSdk = sdk ?: throw IllegalStateException("SDK not initialized")
+            
+            // Prepare the payment first
+            val prepareResponse = breezSdk.prepareSendPayment(
+                PrepareSendPaymentRequest(
+                    paymentRequest = bolt11Invoice,
+                    amount = null, // Use amount from invoice
+                    tokenIdentifier = null,
+                    conversionOptions = null
+                )
+            )
+            
+            // Send the payment
+            val sendResponse = breezSdk.sendPayment(
+                SendPaymentRequest(prepareResponse)
+            )
+            
+            Log.i(TAG, "Payment sent successfully")
+            refreshBalance()
+            Result.success(sendResponse.payment)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send payment", e)
+            Result.failure(e)
+        }
+    }
+    
+    /**
+     * Parse and validate a Lightning Address (e.g., user@wallet.com)
+     * 
+     * @param lightningAddress The Lightning Address to parse
+     * @return Parsed address details or null if invalid
+     */
+    suspend fun parseLightningAddress(lightningAddress: String): Result<LightningAddressDetails> = withContext(Dispatchers.IO) {
+        try {
+            val breezSdk = sdk ?: throw IllegalStateException("SDK not initialized")
+            
+            val input = breezSdk.parse(lightningAddress)
+            
+            when (input) {
+                is InputType.LightningAddress -> {
+                    val payRequest = input.v1.payRequest
+                    Result.success(LightningAddressDetails(
+                        address = lightningAddress,
+                        minSendableSats = payRequest.minSendableSats,
+                        maxSendableSats = payRequest.maxSendableSats,
+                        payRequest = payRequest
+                    ))
+                }
+                else -> Result.failure(Exception("Not a valid Lightning Address"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse Lightning Address", e)
+            Result.failure(e)
+        }
+    }
+    
+    /**
+     * Send payment to a Lightning Address with specified amount
+     * 
+     * @param lightningAddress The Lightning Address (e.g., user@wallet.com)
+     * @param amountSats Amount to send in satoshis
+     * @param comment Optional comment/message
+     * @return The payment result
+     */
+    suspend fun sendToLightningAddress(
+        lightningAddress: String,
+        amountSats: ULong,
+        comment: String? = null
+    ): Result<Payment> = withContext(Dispatchers.IO) {
+        try {
+            val breezSdk = sdk ?: throw IllegalStateException("SDK not initialized")
+            
+            // Parse the Lightning Address
+            val input = breezSdk.parse(lightningAddress)
+            
+            if (input !is InputType.LightningAddress) {
+                return@withContext Result.failure(Exception("Not a valid Lightning Address"))
+            }
+            
+            val payRequest = input.v1.payRequest
+            
+            // Prepare LNURL payment
+            val prepareResponse = breezSdk.prepareLnurlPay(
+                PrepareLnurlPayRequest(
+                    amountSats = amountSats,
+                    payRequest = payRequest,
+                    comment = comment,
+                    validateSuccessActionUrl = true
+                )
+            )
+            
+            // Send the payment
+            val response = breezSdk.lnurlPay(
+                LnurlPayRequest(
+                    prepareResponse = prepareResponse,
+                    idempotencyKey = null
+                )
+            )
+            
+            Log.i(TAG, "Lightning Address payment sent successfully")
+            refreshBalance()
+            Result.success(response.payment)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send to Lightning Address", e)
+            Result.failure(e)
+        }
     }
     
     /**

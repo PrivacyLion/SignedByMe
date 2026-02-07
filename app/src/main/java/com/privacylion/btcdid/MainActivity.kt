@@ -553,6 +553,25 @@ fun SignedByMeApp(
                     isSendingPayment = false
                 }
             },
+            onSendLightningAddress = { address, amount, comment ->
+                scope.launch {
+                    isSendingPayment = true
+                    sendError = ""
+                    val result = breezMgr.sendToLightningAddress(
+                        lightningAddress = address,
+                        amountSats = amount.toULong(),
+                        comment = comment
+                    )
+                    result.onSuccess {
+                        Toast.makeText(context, "Payment sent to $address!", Toast.LENGTH_SHORT).show()
+                        showSendDialog = false
+                        transactions = breezMgr.getAllPayments()
+                    }.onFailure { e ->
+                        sendError = e.message ?: "Payment to Lightning Address failed"
+                    }
+                    isSendingPayment = false
+                }
+            },
             onShowTransactionDetail = { payment -> showTransactionDetail = payment },
             onDismissTransactionDetail = { showTransactionDetail = null },
             onShowSeedWords = {
@@ -1014,6 +1033,7 @@ fun LoginScreen(
     onDismissSendDialog: () -> Unit,
     onSendInvoiceTextChange: (String) -> Unit,
     onSendPayment: () -> Unit,
+    onSendLightningAddress: (String, Long, String?) -> Unit,
     onShowTransactionDetail: (Payment) -> Unit,
     onDismissTransactionDetail: () -> Unit,
     onShowSeedWords: () -> Unit,
@@ -1639,7 +1659,8 @@ fun LoginScreen(
             error = sendError,
             btcPriceUsd = btcPriceUsd,
             onInvoiceTextChange = onSendInvoiceTextChange,
-            onSend = onSendPayment,
+            onSendInvoice = onSendPayment,
+            onSendLightningAddress = onSendLightningAddress,
             onDismiss = onDismissSendDialog
         )
     }
@@ -1855,9 +1876,9 @@ fun TransactionRow(
         "Payment"
     }
     
-    // Use placeholder values - SDK property names need verification
-    val amountSats = 0L // TODO: Get actual amount when SDK API is confirmed
-    val timestamp = 0u
+    // Get amount and timestamp from Payment object
+    val amountSats = payment.amount.toLong()
+    val timestamp = payment.timestamp
     
     Card(
         modifier = Modifier
@@ -1941,7 +1962,7 @@ fun TransactionRow(
     }
 }
 
-fun formatTimestamp(timestamp: UInt): String {
+fun formatTimestamp(timestamp: ULong): String {
     val date = Date(timestamp.toLong() * 1000)
     val now = System.currentTimeMillis()
     val diff = now - date.time
@@ -2147,11 +2168,21 @@ fun SendDialog(
     error: String,
     btcPriceUsd: Double,
     onInvoiceTextChange: (String) -> Unit,
-    onSend: () -> Unit,
+    onSendInvoice: () -> Unit,
+    onSendLightningAddress: (String, Long, String?) -> Unit,
     onDismiss: () -> Unit
 ) {
     var showScanner by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    
+    // Mode: 0 = Invoice, 1 = Lightning Address
+    var selectedMode by remember { mutableStateOf(0) }
+    
+    // Lightning Address state
+    var lightningAddress by remember { mutableStateOf("") }
+    var addressAmount by remember { mutableStateOf("") }
+    var addressComment by remember { mutableStateOf("") }
+    var addressError by remember { mutableStateOf("") }
     
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -2178,75 +2209,110 @@ fun SendDialog(
                     }
                 }
                 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(12.dp))
                 
-                OutlinedTextField(
-                    value = invoiceText,
-                    onValueChange = onInvoiceTextChange,
-                    label = { Text("Lightning Invoice") },
-                    modifier = Modifier.fillMaxWidth(),
-                    maxLines = 3,
-                    placeholder = { Text("lnbc...", color = Color.Gray) }
-                )
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
+                // Mode selector tabs
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFFF3F4F6)),
+                    horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    OutlinedButton(
-                        onClick = {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            val clip = clipboard.primaryClip
-                            if (clip != null && clip.itemCount > 0) {
-                                val pastedText = clip.getItemAt(0).text?.toString() ?: ""
-                                onInvoiceTextChange(pastedText)
-                            }
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("📋 Paste")
-                    }
-                    OutlinedButton(
-                        onClick = { showScanner = true },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("📷 Scan")
+                    listOf("Invoice", "Lightning Address").forEachIndexed { index, label ->
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(
+                                    if (selectedMode == index) Color.White
+                                    else Color.Transparent
+                                )
+                                .clickable { selectedMode = index }
+                                .padding(vertical = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                label,
+                                fontSize = 13.sp,
+                                fontWeight = if (selectedMode == index) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (selectedMode == index) Color(0xFF3B82F6) else Color.Gray
+                            )
+                        }
                     }
                 }
                 
-                // Parsed invoice preview
-                if (parsedInvoice != null) {
-                    Spacer(modifier = Modifier.height(16.dp))
-                    
-                    Card(
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                if (selectedMode == 0) {
+                    // ===== INVOICE MODE =====
+                    OutlinedTextField(
+                        value = invoiceText,
+                        onValueChange = onInvoiceTextChange,
+                        label = { Text("Lightning Invoice") },
                         modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF0FDF4)),
-                        shape = RoundedCornerShape(12.dp)
+                        maxLines = 3,
+                        placeholder = { Text("lnbc...", color = Color.Gray) }
+                    )
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("Amount:", color = Color.Gray, fontSize = 14.sp)
-                                Column(horizontalAlignment = Alignment.End) {
-                                    Text(
-                                        "${formatSats(parsedInvoice.amountSats?.toLong() ?: 0)} sats",
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontSize = 14.sp
-                                    )
-                                    if (btcPriceUsd > 0 && parsedInvoice.amountSats != null) {
+                        OutlinedButton(
+                            onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                val clip = clipboard.primaryClip
+                                if (clip != null && clip.itemCount > 0) {
+                                    val pastedText = clip.getItemAt(0).text?.toString() ?: ""
+                                    onInvoiceTextChange(pastedText)
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("📋 Paste")
+                        }
+                        OutlinedButton(
+                            onClick = { showScanner = true },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("📷 Scan")
+                        }
+                    }
+                    
+                    // Parsed invoice preview
+                    if (parsedInvoice != null) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFF0FDF4)),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("Amount:", color = Color.Gray, fontSize = 14.sp)
+                                    Column(horizontalAlignment = Alignment.End) {
                                         Text(
-                                            satsToUsd(parsedInvoice.amountSats.toLong(), btcPriceUsd),
-                                            fontSize = 12.sp,
-                                            color = Color.Gray
+                                            "${formatSats(parsedInvoice.amountSats?.toLong() ?: 0)} sats",
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = 14.sp
                                         )
+                                        if (btcPriceUsd > 0 && parsedInvoice.amountSats != null) {
+                                            Text(
+                                                satsToUsd(parsedInvoice.amountSats.toLong(), btcPriceUsd),
+                                                fontSize = 12.sp,
+                                                color = Color.Gray
+                                            )
+                                        }
                                     }
                                 }
-                            }
-                            if (parsedInvoice.description.isNotEmpty()) {
+                                if (parsedInvoice.description.isNotEmpty()) {
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
@@ -2271,35 +2337,126 @@ fun SendDialog(
                             }
                         }
                     }
-                }
-                
-                // Error message
-                if (error.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        error,
-                        color = Color(0xFFEF4444),
-                        fontSize = 12.sp
-                    )
-                }
-                
-                Spacer(modifier = Modifier.height(20.dp))
-                
-                Button(
-                    onClick = onSend,
-                    enabled = !isSending && parsedInvoice != null && !parsedInvoice.isExpired,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    if (isSending) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            color = Color.White,
-                            strokeWidth = 2.dp
+                    }
+                    
+                    // Error message for invoice mode
+                    if (error.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            error,
+                            color = Color(0xFFEF4444),
+                            fontSize = 12.sp
                         )
-                    } else {
-                        Text("Confirm & Send")
+                    }
+                    
+                    Spacer(modifier = Modifier.height(20.dp))
+                    
+                    Button(
+                        onClick = onSendInvoice,
+                        enabled = !isSending && parsedInvoice != null && !parsedInvoice.isExpired,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        if (isSending) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text("Confirm & Send")
+                        }
+                    }
+                } else {
+                    // ===== LIGHTNING ADDRESS MODE =====
+                    OutlinedTextField(
+                        value = lightningAddress,
+                        onValueChange = { 
+                            lightningAddress = it
+                            addressError = ""
+                        },
+                        label = { Text("Lightning Address") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text("user@wallet.com", color = Color.Gray) }
+                    )
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    OutlinedTextField(
+                        value = addressAmount,
+                        onValueChange = { addressAmount = it.filter { c -> c.isDigit() } },
+                        label = { Text("Amount (sats)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    
+                    // Show USD equivalent
+                    if (addressAmount.isNotEmpty() && btcPriceUsd > 0) {
+                        val sats = addressAmount.toLongOrNull() ?: 0
+                        Text(
+                            satsToUsd(sats, btcPriceUsd),
+                            fontSize = 12.sp,
+                            color = Color.Gray,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    OutlinedTextField(
+                        value = addressComment,
+                        onValueChange = { addressComment = it },
+                        label = { Text("Comment (optional)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    
+                    // Error message for Lightning Address mode
+                    if (addressError.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            addressError,
+                            color = Color(0xFFEF4444),
+                            fontSize = 12.sp
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.height(20.dp))
+                    
+                    Button(
+                        onClick = {
+                            val amount = addressAmount.toLongOrNull() ?: 0
+                            if (lightningAddress.isEmpty()) {
+                                addressError = "Please enter a Lightning Address"
+                            } else if (!lightningAddress.contains("@")) {
+                                addressError = "Invalid format. Use: user@wallet.com"
+                            } else if (amount <= 0) {
+                                addressError = "Please enter an amount"
+                            } else {
+                                onSendLightningAddress(
+                                    lightningAddress,
+                                    amount,
+                                    addressComment.ifEmpty { null }
+                                )
+                            }
+                        },
+                        enabled = !isSending && lightningAddress.isNotEmpty() && addressAmount.isNotEmpty(),
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        if (isSending) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text("Send to Address")
+                        }
                     }
                 }
             }
@@ -2343,9 +2500,10 @@ fun TransactionDetailDialog(
         ""
     }
     
-    // Placeholder values - SDK property names need verification
-    val amountSats = 0L // TODO: Get actual amount when SDK API is confirmed
-    val timestamp = 0u
+    // Get amount and timestamp from Payment object
+    val amountSats = payment.amount.toLong()
+    val timestamp = payment.timestamp
+    val feesSats = payment.fees.toLong()
     
     Dialog(onDismissRequest = onDismiss) {
         Card(
