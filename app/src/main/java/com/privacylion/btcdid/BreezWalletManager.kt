@@ -33,16 +33,6 @@ data class InvoiceDetails(
 )
 
 /**
- * Data class for parsed Lightning Address details
- */
-data class LightningAddressDetails(
-    val address: String,
-    val minSendableSats: ULong,
-    val maxSendableSats: ULong,
-    val payRequest: breez_sdk_spark.LnurlPayRequest
-)
-
-/**
  * BreezWalletManager - Manages Breez SDK Spark wallet integration
  * 
  * Handles:
@@ -304,36 +294,6 @@ class BreezWalletManager(private val context: Context) {
     }
     
     /**
-     * Parse and validate a Lightning Address (e.g., user@wallet.com)
-     * 
-     * @param lightningAddress The Lightning Address to parse
-     * @return Parsed address details or null if invalid
-     */
-    suspend fun parseLightningAddress(lightningAddress: String): Result<LightningAddressDetails> = withContext(Dispatchers.IO) {
-        try {
-            val breezSdk = sdk ?: throw IllegalStateException("SDK not initialized")
-            
-            val input = breezSdk.parse(lightningAddress)
-            
-            when (input) {
-                is InputType.LightningAddress -> {
-                    val payRequest = input.v1.payRequest
-                    Result.success(LightningAddressDetails(
-                        address = lightningAddress,
-                        minSendableSats = payRequest.minSendableSats,
-                        maxSendableSats = payRequest.maxSendableSats,
-                        payRequest = payRequest
-                    ))
-                }
-                else -> Result.failure(Exception("Not a valid Lightning Address"))
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to parse Lightning Address", e)
-            Result.failure(e)
-        }
-    }
-    
-    /**
      * Send payment to a Lightning Address with specified amount
      * 
      * @param lightningAddress The Lightning Address (e.g., user@wallet.com)
@@ -349,20 +309,21 @@ class BreezWalletManager(private val context: Context) {
         try {
             val breezSdk = sdk ?: throw IllegalStateException("SDK not initialized")
             
-            // Parse the Lightning Address
+            // Parse the Lightning Address to get LNURL data
             val input = breezSdk.parse(lightningAddress)
             
             if (input !is InputType.LightningAddress) {
                 return@withContext Result.failure(Exception("Not a valid Lightning Address"))
             }
             
-            val payRequest = input.v1.payRequest
+            // Get the LNURL pay request data
+            val data = input.v1.data
             
             // Prepare LNURL payment
             val prepareResponse = breezSdk.prepareLnurlPay(
                 PrepareLnurlPayRequest(
-                    amountSats = amountSats,
-                    payRequest = payRequest,
+                    data = data,
+                    amountMsat = amountSats * 1000UL, // Convert sats to msats
                     comment = comment,
                     validateSuccessActionUrl = true
                 )
@@ -371,8 +332,7 @@ class BreezWalletManager(private val context: Context) {
             // Send the payment
             val response = breezSdk.lnurlPay(
                 LnurlPayRequest(
-                    prepareResponse = prepareResponse,
-                    idempotencyKey = null
+                    prepareResponse = prepareResponse
                 )
             )
             
