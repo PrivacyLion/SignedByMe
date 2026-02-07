@@ -300,22 +300,47 @@ class BreezWalletManager(private val context: Context) {
      * @param amountSats Amount to send in satoshis
      * @param comment Optional comment/message
      * @return The payment result
-     * 
-     * TODO: Wire up when SDK types are confirmed via Android Studio autocomplete:
-     * 1. val input = sdk.parse(lightningAddress)
-     * 2. Check if input is InputType.LightningAddress
-     * 3. Get payRequest from input.v1.payRequest (check actual property name)
-     * 4. Call sdk.prepareLnurlPay(PrepareLnurlPayRequest(...))
-     * 5. Call sdk.lnurlPay(LnurlPayRequest(...))
      */
     suspend fun sendToLightningAddress(
         lightningAddress: String,
         amountSats: ULong,
         comment: String? = null
     ): Result<Payment> = withContext(Dispatchers.IO) {
-        // TODO: Implement when SDK types are confirmed
-        // Use Android Studio autocomplete on sdk.parse() result to find correct property names
-        Result.failure(Exception("Lightning Address payments coming soon! Use Invoice tab for now."))
+        try {
+            val breezSdk = sdk ?: throw IllegalStateException("SDK not initialized")
+            
+            // Parse the Lightning Address
+            val input = breezSdk.parse(lightningAddress)
+            
+            if (input !is InputType.LightningAddress) {
+                return@withContext Result.failure(Exception("Not a valid Lightning Address"))
+            }
+            
+            // Get the LNURL pay request details
+            val lnurlData = input.v1.payRequest
+            
+            // Prepare LNURL payment
+            val prepareResponse = breezSdk.prepareLnurlPay(
+                PrepareLnurlPayRequest(
+                    data = lnurlData,
+                    amountMsat = amountSats * 1000UL,
+                    comment = comment,
+                    validateSuccessActionUrl = true
+                )
+            )
+            
+            // Send the payment
+            val response = breezSdk.lnurlPay(
+                LnurlPayRequest(prepareResponse)
+            )
+            
+            Log.i(TAG, "Lightning Address payment sent successfully")
+            refreshBalance()
+            Result.success(response.payment)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send to Lightning Address", e)
+            Result.failure(e)
+        }
     }
     
     /**
