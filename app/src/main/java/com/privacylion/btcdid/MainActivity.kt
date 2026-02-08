@@ -164,7 +164,7 @@ data class LoginSession(
 )
 
 // API Configuration
-private const val API_BASE_URL = "https://api.signedby.me" // TODO: Update with actual API URL
+private const val API_BASE_URL = "https://api.beta.privacy-lion.com"
 
 /**
  * Send the Lightning invoice to the API (stateless flow).

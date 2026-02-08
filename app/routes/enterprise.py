@@ -19,7 +19,7 @@ router = APIRouter(tags=["enterprise"])
 # Configuration
 # =============================================================================
 
-ISSUER = "https://api.signedby.me"
+ISSUER = "https://api.beta.privacy-lion.com"
 TOKEN_EXPIRY_SECONDS = 600  # 10 minutes
 
 # Keys directory (same as OIDC)
