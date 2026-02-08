@@ -96,45 +96,100 @@ class MainActivity : FragmentActivity() {
         // Handle both signedby.me:// and https://signedby.me/login
         if (uri.scheme == "signedby.me" || 
             (uri.scheme == "https" && uri.host == "signedby.me")) {
+            
+            // New stateless flow: token parameter contains signed JWT
+            val token = uri.getQueryParameter("token")
+            if (token != null) {
+                return parseSessionToken(token)
+            }
+            
+            // Legacy flow: separate parameters (for backwards compatibility)
             val sessionId = uri.getQueryParameter("session")
-            val employer = uri.getQueryParameter("employer")
+            val employer = uri.getQueryParameter("employer")  // Keep "employer" param for backwards compat
             val amountStr = uri.getQueryParameter("amount")
-            val amount = amountStr?.toULongOrNull() ?: 100UL // Default 100 sats
+            val amount = amountStr?.toULongOrNull() ?: 100UL
             
             if (sessionId != null && employer != null) {
-                return LoginSession(sessionId, employer, amount)
+                return LoginSession(
+                    sessionToken = null,
+                    sessionId = sessionId,
+                    enterpriseName = employer,  // Map to enterpriseName internally
+                    amountSats = amount
+                )
             }
         }
         return null
+    }
+    
+    /**
+     * Parse a signed session token (JWT) to extract enterprise info.
+     * The token is a JWT with payload containing enterprise_name, amount_sats, etc.
+     */
+    private fun parseSessionToken(token: String): LoginSession? {
+        return try {
+            // JWT format: header.payload.signature
+            val parts = token.split(".")
+            if (parts.size != 3) return null
+            
+            // Decode payload (Base64URL)
+            val payloadJson = String(
+                android.util.Base64.decode(
+                    parts[1].replace('-', '+').replace('_', '/'),
+                    android.util.Base64.DEFAULT
+                ),
+                Charsets.UTF_8
+            )
+            
+            val payload = JSONObject(payloadJson)
+            
+            LoginSession(
+                sessionToken = token,
+                sessionId = payload.optString("session_id", ""),
+                enterpriseName = payload.optString("enterprise_name", "Unknown"),
+                amountSats = payload.optLong("amount_sats", 100).toULong()
+            )
+        } catch (e: Exception) {
+            android.util.Log.e("SignedByMe", "Failed to parse session token: ${e.message}")
+            null
+        }
     }
 }
 
 // Data class for login session from deep link / QR
 data class LoginSession(
+    val sessionToken: String?,  // Full JWT token for stateless API
     val sessionId: String,
-    val employerName: String,
-    val amountSats: ULong = 100UL // Default 100 sats if not specified
+    val enterpriseName: String,
+    val amountSats: ULong = 100UL
 )
 
 // API Configuration
 private const val API_BASE_URL = "https://api.signedby.me" // TODO: Update with actual API URL
 
 /**
- * Send the Lightning invoice to the API for the employer to pay.
- * Includes STWO proof and payment binding for cryptographic identity verification.
+ * Send the Lightning invoice to the API (stateless flow).
+ * 
+ * API will verify the session_token signature, verify STWO proof,
+ * then call the enterprise's callback URL with the invoice.
+ * Enterprise pays, user gets sats.
+ * 
  * Returns true if successful, false otherwise.
  */
 private fun sendInvoiceToApi(
-    sessionId: String,
+    sessionToken: String?,  // JWT from QR code (new stateless flow)
+    sessionId: String,      // Legacy fallback
     invoice: String,
     did: String,
-    employerName: String,
+    enterpriseName: String,
     stwoproof: String? = null,
     bindingSignature: String? = null,
     nonce: String? = null
 ): Boolean {
     return try {
-        val url = java.net.URL("$API_BASE_URL/v1/login/invoice")
+        // Use new stateless endpoint if we have a session token
+        val endpoint = if (sessionToken != null) "/v1/login/submit" else "/v1/login/invoice"
+        val url = java.net.URL("$API_BASE_URL$endpoint")
+        
         val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 10000
@@ -144,10 +199,17 @@ private fun sendInvoiceToApi(
         }
         
         val payload = JSONObject().apply {
-            put("session_id", sessionId)
+            if (sessionToken != null) {
+                // New stateless API
+                put("session_token", sessionToken)
+            } else {
+                // Legacy API fallback
+                put("session_id", sessionId)
+                put("enterprise", enterpriseName)
+            }
             put("invoice", invoice)
             put("did", did)
-            put("employer", employerName)
+            
             // Include STWO proof if available (from Step 3)
             if (stwoproof != null) {
                 put("stwo_proof", stwoproof)
@@ -421,13 +483,13 @@ fun SignedByMeApp(
                     val sessionId = loginSession?.sessionId ?: "demo_${System.currentTimeMillis()}"
                     lastLoginId = sessionId
                     
-                    // Use amount from login session (set by employer in QR/link)
+                    // Use amount from login session (set by enterprise in QR/link)
                     val amountSats = loginSession?.amountSats ?: 100UL
                     
                     // Create invoice using Breez SDK
                     val result = breezMgr.createInvoice(
                         amountSats = amountSats,
-                        description = "SignedByMe Log In: ${loginSession?.employerName ?: "Demo"} - $sessionId"
+                        description = "SignedByMe Log In: ${loginSession?.enterpriseName ?: "Demo"} - $sessionId"
                     )
                     
                     result.onSuccess { invoice ->
@@ -436,7 +498,7 @@ fun SignedByMeApp(
                         isLoginActive = true
                         isPollingPayment = true
                         
-                        // Send invoice to API for employer to pay (with STWO proof)
+                        // Send invoice to API for enterprise to pay (with STWO proof)
                         launch(Dispatchers.IO) {
                             try {
                                 // Get STWO identity proof (generated in Step 3)
@@ -453,10 +515,11 @@ fun SignedByMeApp(
                                 } else null
                                 
                                 val apiResult = sendInvoiceToApi(
+                                    sessionToken = loginSession?.sessionToken,
                                     sessionId = sessionId,
                                     invoice = invoice,
                                     did = did,
-                                    employerName = loginSession?.employerName ?: "Demo",
+                                    enterpriseName = loginSession?.enterpriseName ?: "Demo",
                                     stwoproof = stwoproof,
                                     bindingSignature = bindingSignature,
                                     nonce = if (stwoproof != null) nonce else null
@@ -1240,7 +1303,7 @@ fun LoginScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = loginSession.employerName,
+                                text = loginSession.enterpriseName,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = Color(0xFF10B981)
@@ -1285,7 +1348,7 @@ fun LoginScreen(
 
                             Text(
                                 if (loginSession != null) 
-                                    "You're now logged in to ${loginSession.employerName}"
+                                    "You're now logged in to ${loginSession.enterpriseName}"
                                 else 
                                     "Your identity has been verified.",
                                 fontSize = 14.sp,
@@ -1317,10 +1380,10 @@ fun LoginScreen(
 
                             Spacer(modifier = Modifier.height(8.dp))
 
-                            // Show employer name if we have it
+                            // Show enterprise name if we have it
                             if (loginSession != null) {
                                 Text(
-                                    "Waiting for ${loginSession.employerName} to confirm",
+                                    "Waiting for ${loginSession.enterpriseName} to confirm",
                                     fontSize = 14.sp,
                                     color = Color.Gray,
                                     textAlign = TextAlign.Center
@@ -1441,8 +1504,9 @@ fun LoginScreen(
                                     onClick = {
                                         // Demo: simulate receiving a login session with 100 sats
                                         onLoginSessionReceived(LoginSession(
+                                            sessionToken = null,  // No token for demo
                                             sessionId = "demo_${System.currentTimeMillis()}",
-                                            employerName = "Acme Corp",
+                                            enterpriseName = "Acme Corp",
                                             amountSats = 100UL
                                         ))
                                     }
@@ -1739,16 +1803,34 @@ fun LoginScreen(
         QrScannerDialog(
             onQrScanned = { qrContent ->
                 showQrScanner = false
-                // Parse the QR content (signedby.me://login?session=xxx&employer=xxx&amount=xxx)
+                // Parse the QR content - supports both new (token=) and legacy (session=&employer=) formats
                 try {
                     val uri = android.net.Uri.parse(qrContent)
+                    
+                    // New stateless flow: token parameter contains signed JWT
+                    val token = uri.getQueryParameter("token")
+                    if (token != null) {
+                        // Parse JWT to extract enterprise info
+                        val session = DeepLinkHandler.parseDeepLink(uri)
+                        if (session != null) {
+                            onLoginSessionReceived(session)
+                            return@QrScannerDialog
+                        }
+                    }
+                    
+                    // Legacy flow: session + employer parameters
                     val sessionId = uri.getQueryParameter("session")
-                    val employer = uri.getQueryParameter("employer")
+                    val employer = uri.getQueryParameter("employer")  // Keep "employer" for backwards compat
                     val amountStr = uri.getQueryParameter("amount")
-                    val amount = amountStr?.toULongOrNull() ?: 100UL // Default 100 sats
+                    val amount = amountStr?.toULongOrNull() ?: 100UL
                     
                     if (sessionId != null && employer != null) {
-                        onLoginSessionReceived(LoginSession(sessionId, employer, amount))
+                        onLoginSessionReceived(LoginSession(
+                            sessionToken = null,
+                            sessionId = sessionId,
+                            enterpriseName = employer,
+                            amountSats = amount
+                        ))
                     }
                 } catch (e: Exception) {
                     // Invalid QR format
@@ -1905,7 +1987,7 @@ fun QrScannerDialog(
                                                         .addOnSuccessListener { barcodes ->
                                                             for (barcode in barcodes) {
                                                                 barcode.rawValue?.let { value ->
-                                                                    if (value.contains("session=") && value.contains("employer=")) {
+                                                                    if (value.contains("session=") && value.contains("enterprise=")) {
                                                                         onQrScanned(value)
                                                                     }
                                                                 }
@@ -3437,7 +3519,7 @@ fun InvoiceDialog(
 
                 // Instructions
                 Text(
-                    "Share this invoice with your employer.\nThey will pay it to verify your identity.",
+                    "Share this invoice with your enterprise.\nThey will pay it to verify your identity.",
                     fontSize = 12.sp,
                     color = Color.Gray,
                     textAlign = TextAlign.Center
