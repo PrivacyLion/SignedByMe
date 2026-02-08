@@ -4,22 +4,27 @@ set -euo pipefail
 VM_IP="134.199.198.192"
 VM_USER="root"
 
-echo "== Sync frontend =="
-rsync -avz --delete ~/btc_did_api/site/ ${VM_USER}@${VM_IP}:/var/www/site/
+# Get the repo root (works from any subdirectory)
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+echo "== Deploying from: $REPO_ROOT =="
 
 echo "== Sync backend app/ =="
-rsync -avz --delete ~/btc_did_api/app/  ${VM_USER}@${VM_IP}:/opt/sbm-api/app/
+rsync -avz --delete "${REPO_ROOT}/app/" ${VM_USER}@${VM_IP}:/opt/sbm-api/app/
 
-echo "== Sync requirements (if changed) =="
-rsync -avz ~/btc_did_api/requirements.txt ${VM_USER}@${VM_IP}:/opt/sbm-api/requirements.txt
+echo "== Sync keys/ (if exists) =="
+if [ -d "${REPO_ROOT}/keys" ]; then
+    rsync -avz "${REPO_ROOT}/keys/" ${VM_USER}@${VM_IP}:/opt/sbm-api/keys/
+fi
 
 echo "== Install deps + restart API =="
 ssh ${VM_USER}@${VM_IP} '
   set -e
-  /opt/sbm-api/.venv/bin/pip install -r /opt/sbm-api/requirements.txt >/dev/null
+  cd /opt/sbm-api
+  /opt/sbm-api/.venv/bin/pip install -q httpx python-multipart cryptography
   systemctl restart sbm-api
 '
 
 echo "== Done. Smoke tests =="
-curl -sS https://beta.privacy-lion.com/ >/dev/null && echo "Frontend OK"
-curl -sS https://api.beta.privacy-lion.com/healthz && echo
+curl -sS https://api.beta.privacy-lion.com/healthz && echo " ✓ API healthy"
+curl -sS https://api.beta.privacy-lion.com/v1/enterprise/info && echo " ✓ Enterprise endpoint"
