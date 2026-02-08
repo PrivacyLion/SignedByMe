@@ -1,6 +1,6 @@
 /**
  * SignedByMe Enterprise Demo
- * Tests the stateless authentication flow
+ * Tests the stateless authentication flow with Strike API integration
  */
 (function() {
   const API = "https://api.beta.privacy-lion.com";
@@ -13,7 +13,10 @@
     invoice: null,
     did: null,
     stwoVerified: false,
-    idToken: null
+    bindingVerified: false,
+    idToken: null,
+    amountSats: 100,
+    strikeApiKey: null
   };
 
   // DOM helpers
@@ -56,41 +59,89 @@
     return data;
   }
 
+  // Strike API
+  async function strikePayInvoice(invoice) {
+    if (!state.strikeApiKey) throw new Error('Strike API key not configured');
+    
+    // Create payment quote
+    const quoteResp = await fetch('https://api.strike.me/v1/payment-quotes/lightning', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${state.strikeApiKey}`
+      },
+      body: JSON.stringify({
+        lnInvoice: invoice,
+        sourceCurrency: 'BTC'
+      })
+    });
+    
+    if (!quoteResp.ok) {
+      const err = await quoteResp.json();
+      throw new Error(err.data?.message || err.message || 'Strike quote failed');
+    }
+    
+    const quote = await quoteResp.json();
+    
+    // Execute payment
+    const payResp = await fetch(`https://api.strike.me/v1/payment-quotes/${quote.paymentQuoteId}/execute`, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${state.strikeApiKey}`
+      }
+    });
+    
+    if (!payResp.ok) {
+      const err = await payResp.json();
+      throw new Error(err.data?.message || err.message || 'Strike payment failed');
+    }
+    
+    const payment = await payResp.json();
+    
+    // Get the preimage from the completed payment
+    // Strike returns it in the payment result
+    if (payment.preimage) {
+      return payment.preimage;
+    }
+    
+    // If not immediately available, poll for completion
+    // (Strike payments are usually instant)
+    throw new Error('Payment sent but preimage not returned. Check Strike dashboard.');
+  }
+
   // Create session
   async function createSession() {
-    const name = $('#enterprise-name').value || 'Test Corp';
+    const name = $('#enterprise-name').value || 'Acme Corp';
     const amount = parseInt($('#amount-sats').value) || 100;
-    let callback = $('#callback-url').value;
+    const strikeKey = $('#strike-api-key').value.trim();
     
-    // Use httpbin as a test callback if none provided
-    if (!callback) {
-      callback = 'https://httpbin.org/post';
-    }
+    state.amountSats = amount;
+    state.strikeApiKey = strikeKey || null;
 
     try {
       setStatus('status-create', 'Creating session...', 'pending');
       
       const resp = await apiPost('/v1/enterprise/session', {
-        enterprise_id: 'test-' + Date.now(),
+        enterprise_id: 'demo-' + Date.now(),
         enterprise_name: name,
         amount_sats: amount,
-        callback_url: callback,
-        domain: window.location.hostname || 'localhost'
+        callback_url: 'https://httpbin.org/post', // Test callback
+        domain: window.location.hostname || 'signedby.me'
       });
 
       state.sessionToken = resp.session_token;
       state.sessionId = resp.session_id;
       state.qrData = resp.qr_data;
 
-      setStatus('status-create', `Session created!\nID: ${resp.session_id}\nExpires: ${new Date(resp.expires_at * 1000).toLocaleString()}`, 'success');
+      setStatus('status-create', `✓ Session created!\nID: ${resp.session_id}\nAmount: ${amount} sats\nExpires: ${new Date(resp.expires_at * 1000).toLocaleString()}`, 'success');
 
       // Show QR card
-      showQR();
+      setTimeout(() => showQR(), 500);
       setStep(2);
 
     } catch (e) {
       console.error(e);
-      setStatus('status-create', 'Error: ' + (e.detail || e.message || JSON.stringify(e)), 'error');
+      setStatus('status-create', '✗ Error: ' + (e.detail || e.message || JSON.stringify(e)), 'error');
     }
   }
 
@@ -103,26 +154,40 @@
     container.innerHTML = '';
     new QRCode(container, {
       text: state.qrData,
-      width: 256,
-      height: 256,
-      colorDark: '#1a1a2e',
+      width: 220,
+      height: 220,
+      colorDark: '#3B82F6',
       colorLight: '#ffffff'
     });
 
     // Show deep link
     $('#deep-link').textContent = state.qrData;
 
-    // Start polling for invoice (simulated - in real scenario, webhook would notify)
-    setStatus('status-waiting', `Session: ${state.sessionId}\nWaiting for user to scan QR and submit invoice...\n\nNote: Since this demo uses httpbin.org as callback, you'll need to manually enter the invoice details when the app submits.`, 'pending');
+    // Update status
+    let statusMsg = `Session: ${state.sessionId}\n\nWaiting for user to scan QR and submit invoice...\n\n`;
+    if (state.strikeApiKey) {
+      statusMsg += '✓ Strike API configured — real payments enabled!';
+    } else {
+      statusMsg += 'ℹ No Strike API key — using manual/simulated payments';
+    }
+    setStatus('status-waiting', statusMsg, 'pending');
   }
 
   function copyDeepLink() {
     navigator.clipboard.writeText(state.qrData);
-    alert('Deep link copied to clipboard!');
+    const btn = $('#btn-copy-link');
+    const original = btn.textContent;
+    btn.textContent = '✓ Copied!';
+    setTimeout(() => btn.textContent = original, 2000);
   }
 
   function newSession() {
-    state = { sessionToken: null, sessionId: null, qrData: null, invoice: null, did: null, stwoVerified: false, idToken: null };
+    state = { 
+      sessionToken: null, sessionId: null, qrData: null, 
+      invoice: null, did: null, stwoVerified: false, 
+      bindingVerified: false, idToken: null, amountSats: 100,
+      strikeApiKey: state.strikeApiKey // Keep API key
+    };
     hide('card-qr');
     hide('card-invoice');
     hide('card-verified');
@@ -133,16 +198,16 @@
 
   // Manually enter invoice (since we can't receive webhooks in browser)
   function showInvoiceEntry() {
-    // For demo, allow manual invoice entry
     const invoice = prompt('Enter the BOLT11 invoice from the mobile app:');
     if (!invoice) return;
     
-    const did = prompt('Enter the user DID (e.g., did:btcr:02abc...):', 'did:btcr:test');
+    const did = prompt('Enter the user DID:', 'did:btcr:02...');
     if (!did) return;
 
-    state.invoice = invoice;
-    state.did = did;
-    state.stwoVerified = true; // Assume verified for demo
+    state.invoice = invoice.trim();
+    state.did = did.trim();
+    state.stwoVerified = true;
+    state.bindingVerified = true;
 
     showInvoiceCard();
   }
@@ -154,14 +219,53 @@
 
     $('#invoice-display').textContent = state.invoice;
     $('#user-did').value = state.did;
-    $('#stwo-status').value = state.stwoVerified ? '✓ Verified' : '✗ Not verified';
+    $('#stwo-status').value = state.stwoVerified ? '✓ STWO Verified' : '⚠ Not verified';
+    $('#amount-display').textContent = state.amountSats;
+
+    // Show Strike section if API key is configured
+    if (state.strikeApiKey) {
+      show('strike-pay-section');
+    } else {
+      hide('strike-pay-section');
+    }
+  }
+
+  async function payWithStrike() {
+    if (!state.strikeApiKey) {
+      alert('Strike API key not configured');
+      return;
+    }
+
+    const btn = $('#btn-strike-pay');
+    const originalText = btn.textContent;
+    btn.textContent = 'Paying...';
+    btn.disabled = true;
+
+    try {
+      setStatus('status-invoice', '⚡ Sending payment via Strike...', 'pending');
+      
+      const preimage = await strikePayInvoice(state.invoice);
+      
+      $('#preimage-input').value = preimage;
+      setStatus('status-invoice', `✓ Payment sent!\nPreimage: ${preimage}\n\nConfirming with API...`, 'success');
+      
+      // Auto-confirm
+      await confirmPayment();
+
+    } catch (e) {
+      console.error(e);
+      setStatus('status-invoice', '✗ Strike payment failed: ' + e.message, 'error');
+    } finally {
+      btn.textContent = originalText;
+      btn.disabled = false;
+    }
   }
 
   async function confirmPayment() {
     const preimage = $('#preimage-input').value.trim();
     
     if (!preimage || preimage.length !== 64) {
-      alert('Please enter a valid 64-character hex preimage');
+      setStatus('status-invoice', '⚠ Please enter a valid 64-character hex preimage', 'error');
       return;
     }
 
@@ -175,26 +279,26 @@
 
       if (resp.verified) {
         state.idToken = resp.id_token;
-        showVerified();
+        setStatus('status-invoice', '✓ Payment verified!', 'success');
+        setTimeout(() => showVerified(), 500);
       } else {
-        setStatus('status-invoice', 'Verification failed: ' + JSON.stringify(resp), 'error');
+        setStatus('status-invoice', '✗ Verification failed: ' + JSON.stringify(resp), 'error');
       }
 
     } catch (e) {
       console.error(e);
-      setStatus('status-invoice', 'Error: ' + (e.detail || e.message || JSON.stringify(e)), 'error');
+      setStatus('status-invoice', '✗ Error: ' + (e.detail || e.message || JSON.stringify(e)), 'error');
     }
   }
 
   function simulatePayment() {
     // Generate a random "preimage" for testing
-    // In real scenario, this comes from the Lightning payment
     const randomBytes = new Uint8Array(32);
     crypto.getRandomValues(randomBytes);
     const preimage = Array.from(randomBytes).map(b => b.toString(16).padStart(2, '0')).join('');
     
     $('#preimage-input').value = preimage;
-    setStatus('status-invoice', `Simulated preimage generated.\n\nNote: This won't actually verify against the real invoice payment_hash.\nIn production, you'd get the real preimage from your Lightning node after paying.`, 'pending');
+    setStatus('status-invoice', `🧪 Test preimage generated.\n\nNote: This won't verify against the real payment_hash.\nFor real testing, pay the invoice and use the actual preimage.`, 'pending');
   }
 
   function showVerified() {
@@ -215,7 +319,7 @@
       
       setStatus('status-verified', `Header:\n${JSON.stringify(header, null, 2)}\n\nPayload:\n${JSON.stringify(payload, null, 2)}`, 'success');
     } catch (e) {
-      setStatus('status-verified', 'Error decoding: ' + e.message, 'error');
+      setStatus('status-verified', '✗ Error decoding: ' + e.message, 'error');
     }
   }
 
@@ -223,9 +327,9 @@
   async function checkHealth() {
     try {
       const data = await apiGet('/healthz');
-      setStatus('api-status', JSON.stringify(data, null, 2), 'success');
+      setStatus('api-status', '✓ API is healthy\n' + JSON.stringify(data, null, 2), 'success');
     } catch (e) {
-      setStatus('api-status', 'Error: ' + JSON.stringify(e), 'error');
+      setStatus('api-status', '✗ Error: ' + JSON.stringify(e), 'error');
     }
   }
 
@@ -234,7 +338,7 @@
       const data = await apiGet('/v1/enterprise/info');
       setStatus('api-status', JSON.stringify(data, null, 2), 'success');
     } catch (e) {
-      setStatus('api-status', 'Error: ' + JSON.stringify(e), 'error');
+      setStatus('api-status', '✗ Error: ' + JSON.stringify(e), 'error');
     }
   }
 
@@ -246,6 +350,7 @@
     $('#btn-new-session')?.addEventListener('click', newSession);
     $('#btn-confirm')?.addEventListener('click', confirmPayment);
     $('#btn-simulate-pay')?.addEventListener('click', simulatePayment);
+    $('#btn-strike-pay')?.addEventListener('click', payWithStrike);
     $('#btn-decode-token')?.addEventListener('click', decodeToken);
     $('#btn-start-over')?.addEventListener('click', newSession);
     $('#btn-health')?.addEventListener('click', checkHealth);
@@ -256,8 +361,10 @@
     if (qrCard) {
       const btn = document.createElement('button');
       btn.className = 'btn btn-secondary';
-      btn.textContent = 'Enter Invoice Manually';
+      btn.textContent = '📝 Enter Invoice Manually';
       btn.style.marginTop = '12px';
+      btn.style.display = 'block';
+      btn.style.width = '100%';
       btn.addEventListener('click', showInvoiceEntry);
       qrCard.appendChild(btn);
     }
