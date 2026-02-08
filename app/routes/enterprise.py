@@ -690,7 +690,7 @@ def enterprise_info():
     """Return API information for enterprise integration."""
     return {
         "issuer": ISSUER,
-        "jwks_uri": f"{ISSUER}/.well-known/jwks.json",
+        "jwks_uri": f"{ISSUER}/oidc/jwks.json",
         "endpoints": {
             "create_session": "POST /v1/enterprise/session",
             "login_submit": "POST /v1/login/submit",

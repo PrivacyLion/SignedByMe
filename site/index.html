@@ -2,55 +2,270 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>SignedByMe — Beta</title>
+  <title>SignedByMe — Enterprise Test Portal</title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif;margin:24px;color:#111}
-    h1{font-size:28px;margin:0 0 16px}
-    .row{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
-    .btn{appearance:none;border:1px solid #d1d5db;background:#f8fafc;border-radius:8px;padding:8px 12px;cursor:pointer}
-    .btn:hover{background:#eef2f7}
-    fieldset{max-width:720px;border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin:10px 0}
-    legend{font-weight:600}
-    .alert{background:#f8fafc;border:1px solid #eef2f7;border-radius:6px;padding:8px;margin:6px 0}
-    pre.alert{overflow:auto;white-space:pre-wrap}
-    small.muted{color:#6b7280}
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, "Helvetica Neue", Arial, sans-serif;
+      margin: 0;
+      padding: 24px;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      min-height: 100vh;
+      color: #e0e0e0;
+    }
+    h1 {
+      font-size: 32px;
+      margin: 0 0 8px;
+      background: linear-gradient(90deg, #f7931a, #ff9500);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .subtitle {
+      color: #888;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      padding: 20px;
+      margin: 16px 0;
+      max-width: 600px;
+    }
+    .card h2 {
+      margin: 0 0 16px;
+      font-size: 18px;
+      color: #f7931a;
+    }
+    .form-group {
+      margin: 12px 0;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      color: #aaa;
+      margin-bottom: 4px;
+    }
+    input, select {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px;
+      background: rgba(0,0,0,0.3);
+      color: #fff;
+      font-size: 14px;
+    }
+    input:focus, select:focus {
+      outline: none;
+      border-color: #f7931a;
+    }
+    .btn {
+      appearance: none;
+      border: none;
+      background: linear-gradient(90deg, #f7931a, #ff9500);
+      color: #000;
+      font-weight: 600;
+      border-radius: 8px;
+      padding: 12px 20px;
+      cursor: pointer;
+      font-size: 14px;
+      margin: 4px 4px 4px 0;
+    }
+    .btn:hover {
+      opacity: 0.9;
+    }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .btn-secondary {
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+    }
+    .qr-container {
+      text-align: center;
+      padding: 20px;
+      background: #fff;
+      border-radius: 12px;
+      display: inline-block;
+      margin: 16px 0;
+    }
+    .status {
+      font-family: monospace;
+      font-size: 13px;
+      padding: 12px;
+      background: rgba(0,0,0,0.3);
+      border-radius: 8px;
+      margin: 12px 0;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .status.success { border-left: 3px solid #4ade80; }
+    .status.error { border-left: 3px solid #f87171; }
+    .status.pending { border-left: 3px solid #fbbf24; }
+    .hidden { display: none; }
+    .step-indicator {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+    .step {
+      flex: 1;
+      padding: 8px;
+      text-align: center;
+      background: rgba(255,255,255,0.05);
+      border-radius: 6px;
+      font-size: 12px;
+    }
+    .step.active {
+      background: rgba(247, 147, 26, 0.3);
+      border: 1px solid #f7931a;
+    }
+    .step.done {
+      background: rgba(74, 222, 128, 0.2);
+      border: 1px solid #4ade80;
+    }
+    .deep-link {
+      font-size: 12px;
+      color: #888;
+      margin-top: 8px;
+      word-break: break-all;
+    }
+    .invoice-box {
+      background: rgba(247, 147, 26, 0.1);
+      border: 1px solid #f7931a;
+      border-radius: 8px;
+      padding: 16px;
+      margin: 12px 0;
+    }
+    .invoice-box code {
+      font-size: 11px;
+      word-break: break-all;
+    }
   </style>
 </head>
 <body>
-  <h1>SignedByMe — API Beta</h1>
+  <h1>⚡ SignedByMe</h1>
+  <p class="subtitle">Enterprise Test Portal — Stateless Identity Verification</p>
 
-  <!-- Top toolbar (unchanged) -->
-  <div class="row" id="top-toolbar">
-    <button class="btn" id="btn-verify-payment">Verify payment</button>
-    <button class="btn" id="btn-ea-pay-user">Start EA Login (pay user)</button>
+  <!-- Step Indicator -->
+  <div class="step-indicator">
+    <div class="step" id="step1">1. Create Session</div>
+    <div class="step" id="step2">2. User Scans</div>
+    <div class="step" id="step3">3. Pay Invoice</div>
+    <div class="step" id="step4">4. Verified ✓</div>
   </div>
 
-  <!-- Demo card -->
-  <fieldset id="sbm-demo">
-    <legend>SignedByMe API Demo Beta</legend>
-    <div class="row">
-      <button class="btn" id="btn-demo-qr">Start EA Login (show QR)</button>
-      <button class="btn" id="btn-demo-real">Start with REAL invoice</button>
-      <button class="btn" id="btn-demo-status">Check Status</button>
-      <button class="btn" id="btn-demo-preimg">Verify with preimage</button>
+  <!-- Card 1: Create Session -->
+  <div class="card" id="card-create">
+    <h2>🏢 Create Login Session</h2>
+    <p style="font-size: 13px; color: #888;">As an enterprise, create a session for user authentication.</p>
+    
+    <div class="form-group">
+      <label>Enterprise Name</label>
+      <input type="text" id="enterprise-name" value="Test Corp" />
     </div>
-    <div id="qr" class="alert"></div>
-    <div id="status-line-1" class="alert"></div>
-    <div id="status-line-2" class="alert"></div>
-    <pre id="login-status-json" class="alert"></pre>
-  </fieldset>
-
-  <div class="row">
-    <button class="btn" id="btn-ping">Ping /health</button>
-    <button class="btn" id="btn-openapi">Get /openapi.json</button>
-    <button class="btn" id="btn-invoice">Get /v1/invoice</button>
+    
+    <div class="form-group">
+      <label>Amount (sats) — User will receive this</label>
+      <input type="number" id="amount-sats" value="100" min="1" />
+    </div>
+    
+    <div class="form-group">
+      <label>Callback URL (webhook to receive invoice)</label>
+      <input type="text" id="callback-url" value="" placeholder="Leave empty to use this page" />
+    </div>
+    
+    <button class="btn" id="btn-create-session">Create Session & Show QR</button>
+    
+    <div id="status-create" class="status hidden"></div>
   </div>
 
-  <small class="muted">This page calls the production API at <strong>api.beta.privacy-lion.com</strong>.</small>
+  <!-- Card 2: QR Code Display -->
+  <div class="card hidden" id="card-qr">
+    <h2>📱 Scan with SignedByMe App</h2>
+    <p style="font-size: 13px; color: #888;">User scans this QR code with the SignedByMe mobile app.</p>
+    
+    <div id="qr-container" class="qr-container"></div>
+    
+    <p class="deep-link" id="deep-link"></p>
+    
+    <button class="btn btn-secondary" id="btn-copy-link">Copy Deep Link</button>
+    <button class="btn btn-secondary" id="btn-new-session">New Session</button>
+    
+    <div id="status-waiting" class="status pending">Waiting for user to scan and submit invoice...</div>
+  </div>
 
-  <!-- Scripts -->
-  <script src="/qrcode.min.js"></script>
-  <script src="/qr-addon.js?v=6"></script>
+  <!-- Card 3: Invoice Received -->
+  <div class="card hidden" id="card-invoice">
+    <h2>⚡ Invoice Received</h2>
+    <p style="font-size: 13px; color: #888;">User submitted their Lightning invoice. Pay it to verify their identity.</p>
+    
+    <div class="invoice-box">
+      <label>Lightning Invoice</label>
+      <code id="invoice-display"></code>
+    </div>
+    
+    <div class="form-group">
+      <label>User DID</label>
+      <input type="text" id="user-did" readonly />
+    </div>
+    
+    <div class="form-group">
+      <label>STWO Verified</label>
+      <input type="text" id="stwo-status" readonly />
+    </div>
+    
+    <p style="font-size: 13px; color: #888; margin-top: 16px;">
+      In production, you'd pay this invoice via Strike, OpenNode, or your Lightning node.
+      For testing, enter a preimage (or use the simulated one):
+    </p>
+    
+    <div class="form-group">
+      <label>Payment Preimage (hex, 64 chars)</label>
+      <input type="text" id="preimage-input" placeholder="Enter preimage after paying..." />
+    </div>
+    
+    <button class="btn" id="btn-confirm">Confirm Payment</button>
+    <button class="btn btn-secondary" id="btn-simulate-pay">Simulate Payment (Test)</button>
+    
+    <div id="status-invoice" class="status hidden"></div>
+  </div>
+
+  <!-- Card 4: Verified -->
+  <div class="card hidden" id="card-verified">
+    <h2>✅ Identity Verified!</h2>
+    <p style="font-size: 13px; color: #888;">User has been authenticated and received their sats.</p>
+    
+    <div class="form-group">
+      <label>ID Token (JWT)</label>
+      <textarea id="id-token" readonly style="width: 100%; height: 120px; font-family: monospace; font-size: 11px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; padding: 10px; color: #4ade80;"></textarea>
+    </div>
+    
+    <button class="btn" id="btn-decode-token">Decode Token</button>
+    <button class="btn btn-secondary" id="btn-start-over">Start Over</button>
+    
+    <div id="status-verified" class="status success hidden"></div>
+  </div>
+
+  <!-- API Status -->
+  <div class="card">
+    <h2>🔧 API Status</h2>
+    <button class="btn btn-secondary" id="btn-health">Check Health</button>
+    <button class="btn btn-secondary" id="btn-info">API Info</button>
+    <div id="api-status" class="status hidden"></div>
+  </div>
+
+  <p style="font-size: 12px; color: #666; margin-top: 32px;">
+    API: <strong>api.beta.privacy-lion.com</strong> | 
+    <a href="https://github.com/PrivacyLion/btc-did" style="color: #f7931a;">GitHub</a>
+  </p>
+
+  <script src="qrcode.min.js"></script>
+  <script src="enterprise-demo.js"></script>
 </body>
 </html>

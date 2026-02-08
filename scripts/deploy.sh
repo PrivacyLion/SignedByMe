@@ -12,6 +12,9 @@ echo "== Deploying from: $REPO_ROOT =="
 echo "== Sync backend app/ =="
 rsync -avz --delete "${REPO_ROOT}/app/" ${VM_USER}@${VM_IP}:/opt/sbm-api/app/
 
+echo "== Sync site/ (static files) =="
+rsync -avz --delete "${REPO_ROOT}/site/" ${VM_USER}@${VM_IP}:/opt/sbm-api/site/
+
 echo "== Sync keys/ (if exists) =="
 if [ -d "${REPO_ROOT}/keys" ]; then
     rsync -avz "${REPO_ROOT}/keys/" ${VM_USER}@${VM_IP}:/opt/sbm-api/keys/
