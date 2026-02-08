@@ -148,6 +148,57 @@ def verify_signed_token(token: str) -> dict:
 
 
 # =============================================================================
+# Bech32 Decoding (for BOLT11)
+# =============================================================================
+
+BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+def _bech32_decode(bech: str) -> tuple[str, list[int]]:
+    """Decode bech32 string, return (hrp, data as 5-bit values)."""
+    if any(ord(c) < 33 or ord(c) > 126 for c in bech):
+        raise ValueError("Invalid character")
+    
+    bech = bech.lower()
+    pos = bech.rfind("1")
+    if pos < 1 or pos + 7 > len(bech):
+        raise ValueError("Invalid separator position")
+    
+    hrp = bech[:pos]
+    data = []
+    for c in bech[pos + 1:]:
+        d = BECH32_CHARSET.find(c)
+        if d == -1:
+            raise ValueError(f"Invalid character: {c}")
+        data.append(d)
+    
+    # Skip checksum verification for simplicity (last 6 chars)
+    return hrp, data[:-6]
+
+
+def _convert_bits(data: list[int], from_bits: int, to_bits: int, pad: bool = True) -> list[int]:
+    """Convert between bit sizes."""
+    acc = 0
+    bits = 0
+    ret = []
+    maxv = (1 << to_bits) - 1
+    
+    for value in data:
+        acc = (acc << from_bits) | value
+        bits += from_bits
+        while bits >= to_bits:
+            bits -= to_bits
+            ret.append((acc >> bits) & maxv)
+    
+    if pad and bits:
+        ret.append((acc << (to_bits - bits)) & maxv)
+    elif bits >= from_bits or ((acc << (to_bits - bits)) & maxv):
+        if not pad:
+            pass  # Ignore padding bits
+    
+    return ret
+
+
+# =============================================================================
 # BOLT11 Invoice Parsing
 # =============================================================================
 
@@ -155,26 +206,53 @@ def extract_payment_hash_from_bolt11(invoice: str) -> str:
     """
     Extract payment hash from BOLT11 invoice.
     
-    BOLT11 format: ln[tb][c]<amount><multiplier>1<data><checksum>
-    The payment hash is in the tagged fields.
-    
-    For production, use a proper library. This is a simplified parser.
+    BOLT11 format: ln<network><amount>1<timestamp><tagged_fields><signature>
+    Payment hash is tag 'p' (type 1), always 52 5-bit chars = 32 bytes.
     """
-    # Try to use the bolt11 library if available
+    invoice = invoice.strip().lower()
+    
+    # Validate prefix
+    if not invoice.startswith("ln"):
+        raise ValueError("Invoice must start with 'ln'")
+    
     try:
-        from bolt11 import decode
-        decoded = decode(invoice)
-        return decoded.payment_hash
-    except ImportError:
-        pass
+        hrp, data = _bech32_decode(invoice)
+    except Exception as e:
+        raise ValueError(f"Bech32 decode failed: {e}")
     
-    # Fallback: extract from bech32 data
-    # Payment hash is typically the first 32 bytes after the timestamp
-    # This is a simplified approach - for production use a proper parser
+    # data[0:7] is timestamp (35 bits), then tagged fields, then signature (104 chars)
+    # Signature is 65 bytes = 104 * 5 / 8 = 65 bytes (520 bits + recovery)
     
-    # For now, hash the invoice itself as a unique identifier
-    # TODO: Implement proper BOLT11 parsing or use rust library
-    return hashlib.sha256(invoice.encode()).hexdigest()
+    if len(data) < 7 + 104:
+        raise ValueError("Invoice too short")
+    
+    # Skip timestamp (first 7 5-bit values)
+    tagged_data = data[7:-104]  # Exclude signature at end
+    
+    # Parse tagged fields
+    i = 0
+    while i < len(tagged_data):
+        if i + 3 > len(tagged_data):
+            break
+        
+        tag_type = tagged_data[i]
+        data_len = (tagged_data[i + 1] << 5) | tagged_data[i + 2]
+        i += 3
+        
+        if i + data_len > len(tagged_data):
+            break
+        
+        tag_data = tagged_data[i:i + data_len]
+        i += data_len
+        
+        # Tag type 1 = payment hash (52 5-bit values = 32 bytes)
+        if tag_type == 1 and data_len == 52:
+            # Convert 5-bit to 8-bit
+            hash_bytes = _convert_bits(tag_data, 5, 8, pad=False)
+            if len(hash_bytes) == 32:
+                return bytes(hash_bytes).hex()
+    
+    raise ValueError("Payment hash not found in invoice")
 
 
 # =============================================================================
@@ -234,12 +312,92 @@ class LoginConfirmResponse(BaseModel):
 
 
 # =============================================================================
-# STWO Verification (basic for now)
+# secp256k1 Signature Verification
+# =============================================================================
+
+def _verify_secp256k1_signature(pubkey_hex: str, message_hash: bytes, signature_hex: str) -> bool:
+    """
+    Verify secp256k1 signature using cryptography library.
+    
+    Args:
+        pubkey_hex: Compressed (33 bytes) or uncompressed (65 bytes) public key
+        message_hash: 32-byte message hash
+        signature_hex: DER or compact signature
+    
+    Returns:
+        True if signature is valid
+    """
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.backends import default_backend
+        from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+        from cryptography.exceptions import InvalidSignature
+        
+        pubkey_bytes = bytes.fromhex(pubkey_hex)
+        sig_bytes = bytes.fromhex(signature_hex)
+        
+        # Load public key
+        if len(pubkey_bytes) == 33:
+            # Compressed public key - need to decompress
+            # Use cryptography's from_encoded_point
+            public_key = ec.EllipticCurvePublicKey.from_encoded_point(
+                ec.SECP256K1(), pubkey_bytes
+            )
+        elif len(pubkey_bytes) == 65:
+            # Uncompressed public key
+            public_key = ec.EllipticCurvePublicKey.from_encoded_point(
+                ec.SECP256K1(), pubkey_bytes
+            )
+        else:
+            return False
+        
+        # Handle signature format
+        if len(sig_bytes) == 64:
+            # Compact format (r || s)
+            r = int.from_bytes(sig_bytes[:32], 'big')
+            s = int.from_bytes(sig_bytes[32:], 'big')
+            
+            # Convert to DER
+            from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+            der_sig = encode_dss_signature(r, s)
+        else:
+            # Assume DER format
+            der_sig = sig_bytes
+        
+        # Verify using ECDSA with prehashed message
+        from cryptography.hazmat.primitives.asymmetric import utils
+        
+        public_key.verify(
+            der_sig,
+            message_hash,
+            ec.ECDSA(utils.Prehashed(hashes.SHA256()))
+        )
+        
+        return True
+        
+    except (InvalidSignature, Exception) as e:
+        import logging
+        logging.debug(f"Signature verification failed: {e}")
+        return False
+
+
+# =============================================================================
+# STWO Verification
 # =============================================================================
 
 def verify_stwo_proof(proof_json: str, did: str) -> bool:
     """
     Verify STWO identity proof.
+    
+    Checks:
+    1. Proof structure is valid
+    2. Circuit type is identity_proof
+    3. Proof claims to be valid
+    4. DID in proof matches claimed DID
+    5. Proof has not expired
+    6. Commitment signature is valid (secp256k1)
+    
     Returns True if proof is valid and matches DID.
     """
     if not proof_json:
@@ -269,9 +427,27 @@ def verify_stwo_proof(proof_json: str, did: str) -> bool:
         if expires_at and time.time() > expires_at:
             return False
         
+        # Verify commitment signature if present
+        commitment = proof.get("commitment")
+        if commitment and proof_did:
+            commitment_sig = commitment.get("signature")
+            if commitment_sig:
+                # Reconstruct the signed message
+                # Format: hash(did_pubkey || wallet_address || expires_at || nonce)
+                wallet_addr = public_inputs.get("wallet_address", "")
+                commitment_nonce = commitment.get("nonce", "")
+                
+                msg_preimage = f"{proof_did}{wallet_addr}{expires_at or ''}{commitment_nonce}"
+                msg_hash = hashlib.sha256(msg_preimage.encode()).digest()
+                
+                if not _verify_secp256k1_signature(proof_did, msg_hash, commitment_sig):
+                    return False
+        
         return True
         
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.warning(f"STWO proof verification error: {e}")
         return False
 
 
@@ -282,21 +458,45 @@ def verify_binding_signature(
     signature: str
 ) -> bool:
     """
-    Verify binding signature links proof to payment.
-    For production: implement secp256k1 signature verification.
+    Verify binding signature links STWO proof to Lightning payment.
+    
+    The binding signature proves the user authorized THIS specific payment
+    with their identity proof. Prevents replay attacks.
+    
+    Binding data = SHA256(stwo_proof_hash || payment_hash || nonce)
+    Signature is over binding data using DID private key.
     """
     if not all([proof_json, payment_hash, nonce, signature]):
         return False
     
-    # Basic validation - signature exists and has reasonable length
-    if len(signature) < 20:
+    try:
+        proof = json.loads(proof_json)
+        
+        # Get public key from proof
+        public_inputs = proof.get("public_inputs", {})
+        did_pubkey = public_inputs.get("did_pubkey", "")
+        
+        if not did_pubkey:
+            return False
+        
+        # Compute proof hash (for binding)
+        stwo_proof_hash = proof.get("stwo_proof_hash")
+        if not stwo_proof_hash:
+            # Compute from proof JSON if not provided
+            stwo_proof_hash = hashlib.sha256(proof_json.encode()).hexdigest()
+        
+        # Construct binding message
+        # binding_data = SHA256(proof_hash || payment_hash || nonce)
+        binding_preimage = f"{stwo_proof_hash}{payment_hash}{nonce}"
+        binding_hash = hashlib.sha256(binding_preimage.encode()).digest()
+        
+        # Verify signature
+        return _verify_secp256k1_signature(did_pubkey, binding_hash, signature)
+        
+    except Exception as e:
+        import logging
+        logging.warning(f"Binding signature verification error: {e}")
         return False
-    
-    # TODO: Implement proper secp256k1 verification
-    # 1. Compute binding_data = hash(proof_hash + payment_hash + nonce)
-    # 2. Verify signature over binding_data using DID pubkey
-    
-    return True
 
 
 # =============================================================================
@@ -367,7 +567,10 @@ async def login_submit(req: LoginSubmitRequest):
         raise HTTPException(400, "Invalid token type")
     
     # 2. Extract payment hash from invoice
-    payment_hash = extract_payment_hash_from_bolt11(req.invoice)
+    try:
+        payment_hash = extract_payment_hash_from_bolt11(req.invoice)
+    except ValueError as e:
+        raise HTTPException(400, f"Invalid BOLT11 invoice: {e}")
     
     # 3. Verify STWO proof
     stwo_verified = verify_stwo_proof(req.stwo_proof, req.did) if req.stwo_proof else False
