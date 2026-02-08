@@ -1807,15 +1807,11 @@ fun LoginScreen(
                 try {
                     val uri = android.net.Uri.parse(qrContent)
                     
-                    // New stateless flow: token parameter contains signed JWT
-                    val token = uri.getQueryParameter("token")
-                    if (token != null) {
-                        // Parse JWT to extract enterprise info
-                        val session = DeepLinkHandler.parseDeepLink(uri)
-                        if (session != null) {
-                            onLoginSessionReceived(session)
-                            return@QrScannerDialog
-                        }
+                    // Try parsing with DeepLinkHandler (handles both token and legacy formats)
+                    val session = com.privacylion.btcdid.DeepLinkHandler.parseDeepLink(uri)
+                    if (session != null) {
+                        onLoginSessionReceived(session)
+                        return@QrScannerDialog
                     }
                     
                     // Legacy flow: session + employer parameters
