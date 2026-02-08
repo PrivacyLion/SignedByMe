@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 router = APIRouter()
 
 ISSUER = "https://api.beta.privacy-lion.com"
-VAR_DIR = Path("/opt/sbm-api/var")
+VAR_DIR = Path(__file__).resolve().parents[1] / "var"
 VAR_DIR.mkdir(parents=True, exist_ok=True)
 CODES_DB = str(VAR_DIR / "oidc_codes.db")  # short-lived auth codes storage
 
@@ -32,7 +32,7 @@ def _jwt_rs256(payload: dict, kid: str, pem_path: Path) -> str:
     s_b64 = _b64url(sig)
     return f"{h_b64}.{p_b64}.{s_b64}"
 
-CLIENTS_PATH = Path("/opt/sbm-api/clients.json")
+CLIENTS_PATH = Path(__file__).resolve().parents[1] / "clients.json"
 
 def load_clients() -> dict:
     try:
