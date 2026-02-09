@@ -88,6 +88,45 @@ object NativeBridge {
     @JvmStatic external fun verifyIdentityProof(proofJson: String): String
 
     // ============================================================================
+    // Real STWO (Circle STARK Proofs) - Cryptographically Sound
+    // ============================================================================
+    
+    /**
+     * Check if real STWO support is compiled in.
+     * When true, generateRealIdentityProof produces actual STARK proofs.
+     * When false, falls back to mock proofs (for testing only).
+     */
+    @JvmStatic external fun hasRealStwo(): Boolean
+    
+    /**
+     * Generate a REAL STWO identity proof with Circle STARK verification.
+     * This creates a cryptographically sound zero-knowledge proof that:
+     * 1. Binds the DID to the wallet address
+     * 2. Includes the payment hash for the login session
+     * 3. Has a cryptographic commitment that can be verified by anyone
+     * 
+     * @param didPubkeyHex The DID public key (hex encoded)
+     * @param walletAddress The wallet address (e.g., Spark address)
+     * @param paymentHashHex The Lightning payment hash (32 bytes hex)
+     * @param expiryDays How many days until the proof expires
+     * @return JSON string with the real STWO proof
+     */
+    @JvmStatic external fun generateRealIdentityProof(
+        didPubkeyHex: String,
+        walletAddress: String,
+        paymentHashHex: String,
+        expiryDays: Long
+    ): String
+    
+    /**
+     * Verify a REAL STWO identity proof.
+     * 
+     * @param proofJson The proof JSON to verify
+     * @return JSON with {valid: boolean, real_stwo: true, error?}
+     */
+    @JvmStatic external fun verifyRealIdentityProof(proofJson: String): String
+
+    // ============================================================================
     // DLC (Discreet Log Contracts)
     // ============================================================================
     

@@ -380,6 +380,62 @@ class DidWalletManager(private val context: Context) {
         }
     }
     
+    /**
+     * Generate a real STWO login proof for authentication.
+     * This creates a cryptographically sound Circle STARK proof that binds:
+     * - The user's DID
+     * - Their wallet address
+     * - The specific payment hash for this login session
+     * 
+     * @param walletAddress The user's wallet address
+     * @param paymentHashHex The payment hash from the employer's invoice (32 bytes hex)
+     * @param expiryDays How many days until the proof expires (default: 1 for login)
+     * @return JSON with the real STWO proof, or falls back to mock if real STWO unavailable
+     */
+    fun generateLoginProof(walletAddress: String, paymentHashHex: String, expiryDays: Long = 1): String {
+        val did = getPublicDID() ?: throw IllegalStateException("No DID created")
+        val didPubkeyHex = did.removePrefix("did:btcr:")
+        
+        return try {
+            if (NativeBridge.hasRealStwo()) {
+                // Use real STWO Circle STARK proof
+                NativeBridge.generateRealIdentityProof(
+                    didPubkeyHex,
+                    walletAddress,
+                    paymentHashHex,
+                    expiryDays
+                )
+            } else {
+                // Fallback to mock proof (for testing/development only)
+                android.util.Log.w("DidWalletManager", "Real STWO not available, using mock proof")
+                val wrapped = loadWrapped() ?: throw IllegalStateException("No DID key")
+                val priv = unwrapPrivateKey(wrapped)
+                try {
+                    val challenge = "signedby.me:bind:$did:$walletAddress:${System.currentTimeMillis()}"
+                    val signature = NativeBridge.signMessageDerHex(priv, challenge)
+                    NativeBridge.generateIdentityProof(didPubkeyHex, walletAddress, signature, expiryDays)
+                } finally {
+                    java.util.Arrays.fill(priv, 0)
+                }
+            }
+        } catch (t: Throwable) {
+            """{"status":"error","error":"${t.message ?: "Failed to generate login proof"}"}"""
+        }
+    }
+    
+    /**
+     * Check if real STWO (Circle STARK) proofs are available.
+     * When true, login proofs are cryptographically sound.
+     * When false, mock proofs are used (testing only).
+     */
+    fun hasRealStwoSupport(): Boolean {
+        return try {
+            NativeBridge.hasRealStwo()
+        } catch (_: Throwable) {
+            false
+        }
+    }
+    
     private fun saveIdentityProof(proofJson: String) {
         ensureKeystoreKey()
         val proofBytes = proofJson.toByteArray(Charsets.UTF_8)

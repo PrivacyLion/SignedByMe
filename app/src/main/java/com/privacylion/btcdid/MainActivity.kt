@@ -502,11 +502,22 @@ fun SignedByMeApp(
                         launch(Dispatchers.IO) {
                             try {
                                 // Get STWO identity proof (generated in Step 3)
-                                val stwoproof = didMgr.getIdentityProof()
+                                // Get wallet address for the login proof
+                                val walletAddress = breezMgr.getSparkAddress() ?: "unknown"
                                 
-                                // Generate nonce and payment binding
+                                // Generate real STWO login proof with payment hash
+                                // This creates a Circle STARK proof binding DID + wallet + payment_hash
                                 val nonce = java.util.UUID.randomUUID().toString()
-                                val bindingSignature = if (stwoproof != null) {
+                                val stwoproof = try {
+                                    didMgr.generateLoginProof(walletAddress, lastPaymentHash, 1)
+                                } catch (e: Exception) {
+                                    android.util.Log.e("SignedByMe", "Failed to generate login proof: ${e.message}")
+                                    // Fallback to Step 3 proof if login proof fails
+                                    didMgr.getIdentityProof()
+                                }
+                                
+                                // Legacy binding signature (kept for backwards compatibility)
+                                val bindingSignature = if (stwoproof != null && !didMgr.hasRealStwoSupport()) {
                                     try {
                                         didMgr.createPaymentBinding(lastPaymentHash, nonce)
                                     } catch (e: Exception) {
@@ -522,7 +533,7 @@ fun SignedByMeApp(
                                     enterpriseName = loginSession?.enterpriseName ?: "Demo",
                                     stwoproof = stwoproof,
                                     bindingSignature = bindingSignature,
-                                    nonce = if (stwoproof != null) nonce else null
+                                    nonce = if (bindingSignature != null) nonce else null
                                 )
                                 withContext(Dispatchers.Main) {
                                     if (!apiResult) {
