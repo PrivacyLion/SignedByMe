@@ -503,7 +503,7 @@ fun SignedByMeApp(
                             try {
                                 // Get STWO identity proof (generated in Step 3)
                                 // Get wallet address for the login proof
-                                val walletAddress = breezMgr.getSparkAddress() ?: "unknown"
+                                val walletAddress = (breezMgr.walletState.value as? BreezWalletManager.WalletState.Connected)?.sparkAddress ?: "unknown"
                                 
                                 // Generate real STWO login proof with payment hash
                                 // This creates a Circle STARK proof binding DID + wallet + payment_hash
