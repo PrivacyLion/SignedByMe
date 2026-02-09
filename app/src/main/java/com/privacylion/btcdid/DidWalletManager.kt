@@ -396,15 +396,22 @@ class DidWalletManager(private val context: Context) {
         val did = getPublicDID() ?: throw IllegalStateException("No DID created")
         val didPubkeyHex = did.removePrefix("did:btcr:")
         
+        android.util.Log.i("DidWalletManager", "generateLoginProof called: wallet=$walletAddress, paymentHash=$paymentHashHex")
+        
         return try {
-            if (NativeBridge.hasRealStwo()) {
+            val hasReal = NativeBridge.hasRealStwo()
+            android.util.Log.i("DidWalletManager", "hasRealStwo() = $hasReal")
+            if (hasReal) {
                 // Use real STWO Circle STARK proof
-                NativeBridge.generateRealIdentityProof(
+                android.util.Log.i("DidWalletManager", "Generating REAL STWO Circle STARK proof...")
+                val proof = NativeBridge.generateRealIdentityProof(
                     didPubkeyHex,
                     walletAddress,
                     paymentHashHex,
                     expiryDays
                 )
+                android.util.Log.i("DidWalletManager", "Real STWO proof generated successfully!")
+                proof
             } else {
                 // Fallback to mock proof (for testing/development only)
                 android.util.Log.w("DidWalletManager", "Real STWO not available, using mock proof")
