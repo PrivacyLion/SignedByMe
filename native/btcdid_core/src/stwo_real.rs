@@ -18,8 +18,7 @@ use stwo::core::fields::m31::BaseField;
 use stwo::core::fields::qm31::SecureField;
 use stwo::core::pcs::{CommitmentSchemeVerifier, PcsConfig};
 use stwo::core::poly::circle::CanonicCoset;
-use stwo::core::vcs_lifted::blake2_merkle::Blake2sM31MerkleChannel;
-use stwo::core::vcs::blake2_hash::Blake2sHasher;
+use stwo::core::vcs_lifted::blake2_merkle::{Blake2sM31MerkleChannel, Blake2sHasherGeneric};
 use stwo::core::verifier::verify;
 use stwo::core::ColumnVec;
 use stwo::prover::backend::CpuBackend;
@@ -298,7 +297,7 @@ pub fn verify_identity_binding(proof: &RealStwoProof) -> Result<bool> {
         .map_err(|e| anyhow!("Failed to decode proof: {}", e))?;
 
     // Deserialize the STARK proof
-    let stark_proof: stwo::core::proof::StarkProof<Blake2sHasher> =
+    let stark_proof: stwo::core::proof::StarkProof<Blake2sHasherGeneric<true>> =
         bincode::deserialize(&proof_bytes)
             .map_err(|e| anyhow!("Failed to deserialize proof: {}", e))?;
 
