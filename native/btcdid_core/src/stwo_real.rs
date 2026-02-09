@@ -33,8 +33,8 @@ use stwo_constraint_framework::{EvalAtRow, FrameworkComponent, FrameworkEval, Tr
 const N_COLS: usize = 16;
 
 /// Log2 of number of rows (2^LOG_N_ROWS = number of instances)
-/// For a single identity proof, we use LOG_N_ROWS = 0 (1 row)
-const LOG_N_ROWS: u32 = 0;
+/// Minimum is 1 (2 rows) due to STWO requirements
+const LOG_N_ROWS: u32 = 1;
 
 /// Real STWO proof structure (serializable)
 #[derive(Debug, Clone, Serialize, Deserialize)]
