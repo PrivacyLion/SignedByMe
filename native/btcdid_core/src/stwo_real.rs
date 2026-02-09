@@ -18,7 +18,8 @@ use stwo::core::fields::m31::BaseField;
 use stwo::core::fields::qm31::SecureField;
 use stwo::core::pcs::{CommitmentSchemeVerifier, PcsConfig};
 use stwo::core::poly::circle::CanonicCoset;
-use stwo::core::vcs_lifted::blake2_merkle::{Blake2sM31MerkleChannel, Blake2sHasher};
+use stwo::core::vcs_lifted::blake2_merkle::Blake2sM31MerkleChannel;
+use stwo::core::vcs::blake2_hash::Blake2sHasher;
 use stwo::core::verifier::verify;
 use stwo::core::ColumnVec;
 use stwo::prover::backend::CpuBackend;
@@ -248,7 +249,8 @@ pub fn prove_identity_binding(
     // Serialize proof to bytes
     let proof_bytes = bincode::serialize(&proof)
         .map_err(|e| anyhow!("Failed to serialize proof: {}", e))?;
-    let proof_data = base64::encode(&proof_bytes);
+    use base64::Engine;
+    let proof_data = base64::engine::general_purpose::STANDARD.encode(&proof_bytes);
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -291,7 +293,8 @@ pub fn verify_identity_binding(proof: &RealStwoProof) -> Result<bool> {
     }
 
     // Decode proof data
-    let proof_bytes = base64::decode(&proof.proof_data)
+    use base64::Engine;
+    let proof_bytes = base64::engine::general_purpose::STANDARD.decode(&proof.proof_data)
         .map_err(|e| anyhow!("Failed to decode proof: {}", e))?;
 
     // Deserialize the STARK proof
