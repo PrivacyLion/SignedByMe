@@ -3,7 +3,7 @@
 
 use anyhow::{Result, anyhow};
 use jni::objects::{JByteArray, JClass, JString};
-use jni::sys::{jbyteArray, jstring, jlong};
+use jni::sys::{jbyteArray, jstring, jlong, jboolean};
 use jni::JNIEnv;
 
 use sha2::{Digest, Sha256};
@@ -14,6 +14,10 @@ pub mod dlc_builder;
 pub mod stwo_prover;
 pub mod lightning;
 pub mod dlc_oracle; // Keep for backwards compatibility
+
+// Real STWO module (only when feature enabled)
+#[cfg(feature = "real-stwo")]
+pub mod stwo_real;
 
 use key_manager::ManagedKey;
 use dlc_builder::{DlcContract, DlcOutcome, OracleInfo, PayoutSplit, oracle_sign_outcome};
@@ -507,4 +511,120 @@ pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_getXOnlyPubkey(
     };
 
     env.new_string(key.x_only_pubkey_hex()).unwrap().into_raw()
+}
+
+// ============================================================================
+// REAL STWO PROVER JNI FUNCTIONS (only available with real-stwo feature)
+// ============================================================================
+
+/// Generate a REAL STWO identity proof (cryptographically sound)
+/// This replaces the mock proof with actual Circle STARK verification
+#[cfg(feature = "real-stwo")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_generateRealIdentityProof(
+    mut env: JNIEnv,
+    _clazz: JClass,
+    did_pubkey_hex: JString,
+    wallet_address: JString,
+    payment_hash_hex: JString,
+    expiry_days: jlong,
+) -> jstring {
+    use stwo_real::prove_identity_binding;
+    
+    let did_hex = env.get_string(&did_pubkey_hex)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let wallet = env.get_string(&wallet_address)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let payment_hex = env.get_string(&payment_hash_hex)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    
+    // Parse hex inputs
+    let did_bytes = match hex::decode(&did_hex) {
+        Ok(b) => b,
+        Err(e) => {
+            let error_json = format!(r#"{{"status":"error","error":"Invalid DID hex: {}"}}"#, e);
+            return env.new_string(error_json).unwrap().into_raw();
+        }
+    };
+    
+    let payment_hash: [u8; 32] = match hex::decode(&payment_hex) {
+        Ok(b) if b.len() == 32 => {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&b);
+            arr
+        }
+        Ok(_) => {
+            let error_json = r#"{"status":"error","error":"Payment hash must be 32 bytes"}"#;
+            return env.new_string(error_json).unwrap().into_raw();
+        }
+        Err(e) => {
+            let error_json = format!(r#"{{"status":"error","error":"Invalid payment hash hex: {}"}}"#, e);
+            return env.new_string(error_json).unwrap().into_raw();
+        }
+    };
+    
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    
+    match prove_identity_binding(&did_bytes, &wallet, &payment_hash, timestamp, expiry_days as u32) {
+        Ok(proof) => {
+            match serde_json::to_string(&proof) {
+                Ok(json) => env.new_string(json).unwrap().into_raw(),
+                Err(e) => {
+                    let error_json = format!(r#"{{"status":"error","error":"JSON serialization failed: {}"}}"#, e);
+                    env.new_string(error_json).unwrap().into_raw()
+                }
+            }
+        }
+        Err(e) => {
+            let error_json = format!(r#"{{"status":"error","error":"{}"}}"#, e);
+            env.new_string(error_json).unwrap().into_raw()
+        }
+    }
+}
+
+/// Verify a REAL STWO identity proof
+#[cfg(feature = "real-stwo")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_verifyRealIdentityProof(
+    mut env: JNIEnv,
+    _clazz: JClass,
+    proof_json: JString,
+) -> jstring {
+    use stwo_real::verify_proof_json;
+    
+    let json_str = env.get_string(&proof_json)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    
+    match verify_proof_json(&json_str) {
+        Ok(valid) => {
+            let result = serde_json::json!({
+                "valid": valid,
+                "real_stwo": true,
+            });
+            env.new_string(result.to_string()).unwrap().into_raw()
+        }
+        Err(e) => {
+            let error_json = format!(r#"{{"valid":false,"real_stwo":true,"error":"{}"}}"#, e);
+            env.new_string(error_json).unwrap().into_raw()
+        }
+    }
+}
+
+/// Check if real STWO is available
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_hasRealStwo(
+    mut env: JNIEnv,
+    _clazz: JClass,
+) -> jboolean {
+    #[cfg(feature = "real-stwo")]
+    { 1 }
+    #[cfg(not(feature = "real-stwo"))]
+    { 0 }
 }

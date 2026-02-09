@@ -8,6 +8,7 @@ from .routes.auth import router as auth_router
 from .routes.unlock import router as unlock_router
 from .routes.claims import router as claims_router
 from .routes.enterprise import router as enterprise_router
+from .routes.enterprise_payments import router as enterprise_payments_router
 
 from app.oidc_discovery import router as oidc_router
 from app.oidc_endpoints import router as oidc_endpoints_router
@@ -35,6 +36,7 @@ app.include_router(auth_router, prefix="/v1")
 app.include_router(unlock_router, prefix="/v1")
 app.include_router(claims_router, prefix="/v1")
 app.include_router(enterprise_router)  # Stateless enterprise login (routes have /v1 prefix)
+app.include_router(enterprise_payments_router)  # Strike auto-pay integration
 
 @app.get("/healthz")
 def health():

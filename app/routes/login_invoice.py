@@ -75,38 +75,37 @@ def extract_payment_hash(invoice: str) -> str:
 def verify_stwo_proof(proof_json: str, did: str) -> bool:
     """
     Verify STWO identity proof.
-    In production, this would call the Rust verifier.
-    For now, we do basic validation.
+    Uses the real Rust verifier if available, otherwise falls back to mock.
     """
     try:
+        # Import the real verifier
+        from ..lib.stwo_verify import verify_any_proof, is_real_stwo_proof
+        
         proof = json.loads(proof_json)
         
-        # Check proof structure
-        if proof.get("circuit_type") != "identity_proof":
-            return False
-        
-        if not proof.get("valid", False):
-            return False
-        
-        # Check DID matches
+        # Check DID matches first
         public_inputs = proof.get("public_inputs", {})
         proof_did = public_inputs.get("did_pubkey", "")
         
         # DID format: did:btcr:<pubkey>
         did_pubkey = did.replace("did:btcr:", "")
         if proof_did and proof_did != did_pubkey:
+            print(f"STWO verification: DID mismatch. Expected {did_pubkey}, got {proof_did}")
             return False
         
-        # Check expiry
-        expires_at = public_inputs.get("expires_at")
-        if expires_at and time.time() > expires_at:
-            return False
+        # Use the appropriate verifier
+        is_valid, message = verify_any_proof(proof_json)
         
-        # Verify proof hash (basic check)
-        if not proof.get("proof_hash"):
-            return False
+        if is_valid:
+            if is_real_stwo_proof(proof):
+                print(f"STWO verification: REAL proof verified - {message}")
+            else:
+                print(f"STWO verification: Mock proof accepted - {message}")
+        else:
+            print(f"STWO verification failed: {message}")
         
-        return True
+        return is_valid
+        
     except Exception as e:
         print(f"STWO verification error: {e}")
         return False
