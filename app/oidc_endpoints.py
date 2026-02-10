@@ -220,25 +220,56 @@ async def oidc_token_code_grant(
         raise HTTPException(status_code=500, detail="empty JWKS")
     kid = jwks["keys"][0].get("kid") or ""
 
-    now = int(time.time()); exp = now + 300
-    sub_material = f"{rec['client_id']}|{rec['rp_domain']}|{rec['nonce']}".encode()
-    sub = hashlib.sha256(sub_material).hexdigest()
-
-    claims = {
-        "iss": ISSUER,
-        "aud": rec["client_id"],
-        "sub": sub,
-        "iat": now,
-        "exp": exp,
-        "nonce": rec["nonce"],
-        "amr": ["pkce"],
-        "rp_domain": rec["rp_domain"],
-    }
+    now = int(time.time()); exp = now + 3600  # 1 hour for SignedByMe tokens
+    
+    # Check if this is a SignedByMe login flow
+    if rec.get("signedby"):
+        # SignedByMe flow: use DID as subject, include payment claims
+        claims = {
+            "iss": ISSUER,
+            "aud": rec["client_id"],
+            "sub": rec.get("did", ""),  # DID is the subject
+            "iat": now,
+            "exp": exp,
+            "nonce": rec.get("nonce", ""),
+            "sid": rec.get("signedby_session_id", ""),
+            "amr": ["did_sig", "stwo_proof", "ln_payment"],
+            # SignedByMe-specific claims (namespaced)
+            "https://signedby.me/claims/attestation_hash": rec.get("audit_hash", ""),
+            "https://signedby.me/claims/payment_verified": True,
+            "https://signedby.me/claims/payment_hash": rec.get("payment_hash", ""),
+            "https://signedby.me/claims/amount_sats": rec.get("amount_sats", 0),
+        }
+    else:
+        # Standard OIDC flow (existing behavior)
+        sub_material = f"{rec['client_id']}|{rec.get('rp_domain', '')}|{rec['nonce']}".encode()
+        sub = hashlib.sha256(sub_material).hexdigest()
+        claims = {
+            "iss": ISSUER,
+            "aud": rec["client_id"],
+            "sub": sub,
+            "iat": now,
+            "exp": exp,
+            "nonce": rec["nonce"],
+            "amr": ["pkce"],
+            "rp_domain": rec.get("rp_domain", ""),
+        }
+    
     id_token = _jwt_rs256(claims, kid, priv_path)
 
-    # OIDC token response (no access_token for now)
+    # OIDC token response
+    response_data = {
+        "id_token": id_token,
+        "token_type": "Bearer",
+        "expires_in": exp - now
+    }
+    
+    # Add access_token for SignedByMe (can be used to fetch attestation later)
+    if rec.get("signedby"):
+        response_data["access_token"] = secrets.token_urlsafe(32)
+    
     return JSONResponse(
-        {"id_token": id_token, "token_type": "Bearer", "expires_in": exp - now},
+        response_data,
         headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
     )
 

@@ -7,14 +7,20 @@ v3 Security Bindings:
 - ea_domain: Bound into hash (prevents cross-RP replay)
 - amount_sats: Bound into hash (prevents payment substitution)
 - nonce: Bound into hash (prevents replay attacks)
+
+Option B (OIDC) Flow:
+- Enterprise calls /confirm-payment with preimage (payer-side proof)
+- SA verifies preimage, returns auth_code
+- Enterprise exchanges auth_code at /oidc/token for id_token
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel, Field
 from typing import Optional
 import time
 import hashlib
 import json
 import secrets
+import os
 from pathlib import Path
 import shelve
 
@@ -25,6 +31,50 @@ VAR_DIR = Path(__file__).resolve().parents[2] / "var"
 VAR_DIR.mkdir(parents=True, exist_ok=True)
 SESSIONS_DB = str(VAR_DIR / "login_sessions.db")
 NONCES_DB = str(VAR_DIR / "used_nonces.db")
+CODES_DB = str(VAR_DIR / "oidc_codes.db")  # Shared with OIDC endpoints
+
+# Clients config
+CLIENTS_PATH = Path(__file__).resolve().parents[2] / "clients.json"
+
+
+def load_clients() -> dict:
+    """Load client configuration from clients.json and/or SBM_CLIENTS_JSON env var."""
+    clients = {}
+    
+    # Load from file first
+    if CLIENTS_PATH.exists():
+        try:
+            clients = json.loads(CLIENTS_PATH.read_text())
+        except Exception as e:
+            print(f"Warning: Could not load clients.json: {e}")
+    
+    # Override/extend with env var
+    env_clients = os.environ.get("SBM_CLIENTS_JSON")
+    if env_clients:
+        try:
+            env_data = json.loads(env_clients)
+            clients.update(env_data)
+        except Exception as e:
+            print(f"Warning: Could not parse SBM_CLIENTS_JSON: {e}")
+    
+    return clients
+
+
+def validate_api_key(api_key: str) -> tuple[str, dict]:
+    """
+    Validate API key and return (client_id, client_config).
+    Raises HTTPException if invalid.
+    """
+    if not api_key:
+        raise HTTPException(401, "Missing API key")
+    
+    clients = load_clients()
+    
+    for client_id, config in clients.items():
+        if config.get("api_key") == api_key:
+            return client_id, config
+    
+    raise HTTPException(401, "Invalid API key")
 
 
 class DlcContractModel(BaseModel):
@@ -217,11 +267,19 @@ def verify_binding_signature(
 
 
 @router.post("/v1/login/start", response_model=LoginStartResponse)
-def start_login_session(body: LoginStartRequest):
+def start_login_session(
+    body: LoginStartRequest,
+    x_api_key: str = Header(..., alias="X-API-Key")
+):
     """
     Start a new login session. Returns session details for QR/deep link.
     The enterprise displays this to the user.
+    
+    Requires X-API-Key header for authentication.
     """
+    # Validate API key and get client_id
+    client_id, client_config = validate_api_key(x_api_key)
+    
     session_id = secrets.token_urlsafe(16)
     nonce = generate_nonce()  # 16 bytes hex = 32 chars
     expires_at = int(time.time()) + (body.expiry_minutes * 60)
@@ -232,6 +290,7 @@ def start_login_session(body: LoginStartRequest):
     # Store session (pre-create for polling)
     session_data = {
         "session_id": session_id,
+        "client_id": client_id,  # Track which enterprise owns this session
         "nonce": nonce,
         "employer": body.employer,
         "amount_sats": body.amount_sats,
@@ -436,28 +495,40 @@ def generate_session_token(session_id: str, did: str, employer: str) -> str:
 
 
 @router.get("/v1/login/session/{session_id}", response_model=SessionStatusResponse)
-def get_session(session_id: str):
+def get_session(
+    session_id: str,
+    x_api_key: str = Header(..., alias="X-API-Key")
+):
     """
     Get session status for employer polling.
-    Returns invoice, DID, verification status, payment status, and session token.
+    Returns invoice, DID, verification status, payment status.
+    
+    Requires X-API-Key header. Only returns data to the enterprise that created the session.
+    Invoice is only returned if the session is verified (STWO proof passed).
     """
+    # Validate API key and get client_id
+    client_id, _ = validate_api_key(x_api_key)
+    
     with shelve.open(SESSIONS_DB) as sessions:
         session = sessions.get(session_id)
         if not session:
             raise HTTPException(404, "Session not found")
         
-        # Generate session token if paid and verified
+        # Verify this enterprise owns the session
+        if session.get("client_id") != client_id:
+            raise HTTPException(403, "Not authorized to access this session")
+        
+        # Only return invoice if session is verified (prevent leaking before proof)
+        invoice = ""
+        if session.get("stwo_verified") and session.get("binding_verified"):
+            invoice = session.get("invoice", "")
+        
+        # No longer return session_token here - use /confirm-payment + /oidc/token instead
         session_token = None
-        if session.get("paid") and session.get("stwo_verified") and session.get("binding_verified"):
-            session_token = generate_session_token(
-                session_id=session_id,
-                did=session.get("did", ""),
-                employer=session.get("employer", "")
-            )
         
         return SessionStatusResponse(
             session_id=session_id,
-            invoice=session.get("invoice", ""),
+            invoice=invoice,  # Only populated if verified
             did=session.get("did", ""),
             employer=session["employer"],
             verified=session.get("stwo_verified", False) and session.get("binding_verified", False),
@@ -505,65 +576,161 @@ def mark_session_paid(session_id: str, preimage: str = ""):
         }
 
 
-class SettlementRequest(BaseModel):
-    """Settlement notification from mobile after payment received"""
+class ConfirmPaymentRequest(BaseModel):
+    """Enterprise confirms payment with preimage (payer-side proof)"""
+    preimage_hex: str = Field(..., description="Lightning preimage (32 bytes hex)")
+
+
+class ConfirmPaymentResponse(BaseModel):
+    """Response after payment confirmation - includes auth_code for OIDC exchange"""
+    ok: bool
     session_id: str
-    payment_hash: str
-    settled_at: int
-    oracle_attestation: Optional[dict] = None
-    receipt: Optional[dict] = None
+    did: str
+    paid: bool
+    paid_at: int
+    auth_code: str  # Exchange this at /oidc/token
+    auth_code_expires_in: int
+    attestation: dict  # SA's signed attestation
+    audit_hash: str
+    user_amount_sats: Optional[int] = None
+    operator_amount_sats: Optional[int] = None
 
 
-@router.post("/v1/login/session/{session_id}/settled")
-def notify_settlement(session_id: str, body: SettlementRequest):
+def compute_attestation(session: dict) -> tuple[dict, str]:
     """
-    Receive settlement notification from mobile app.
-    This is called after payment is received and DLC is completed.
+    Compute canonical attestation and sign it.
+    Returns (attestation_dict, audit_hash).
+    """
+    now = int(time.time())
     
-    Includes:
-    - Oracle attestation (Schnorr signature on "auth_verified")
-    - Settlement receipt with audit hash
-    - Payout breakdown (90/10 split)
+    # Canonical attestation data (fixed order for hashing)
+    attestation_data = {
+        "schema_version": 1,
+        "outcome": "auth_verified",
+        "client_id": session.get("client_id", ""),
+        "session_id": session.get("session_id", ""),
+        "did": session.get("did", ""),
+        "payment_hash": session.get("payment_hash", ""),
+        "amount_sats": session.get("amount_sats", 0),
+        "paid_at": session.get("paid_at", now),
+    }
+    
+    # Compute canonical hash (sorted keys, no whitespace)
+    canonical = json.dumps(attestation_data, separators=(",", ":"), sort_keys=True)
+    audit_hash = hashlib.sha256(canonical.encode()).hexdigest()
+    
+    # Add hash to attestation
+    attestation_data["audit_hash"] = audit_hash
+    
+    # TODO: Sign with SA's Schnorr key (for now, include hash as "signature")
+    # In production, this would be a real Schnorr signature
+    attestation_data["signature_hex"] = audit_hash[:64]  # Placeholder
+    attestation_data["pubkey_hex"] = "sa_pubkey_placeholder"  # Placeholder
+    
+    return attestation_data, audit_hash
+
+
+@router.post("/v1/login/session/{session_id}/confirm-payment", response_model=ConfirmPaymentResponse)
+def confirm_payment(
+    session_id: str,
+    body: ConfirmPaymentRequest,
+    x_api_key: str = Header(..., alias="X-API-Key")
+):
     """
+    Enterprise confirms payment with preimage (payer-side proof).
+    
+    This is the key endpoint for Option B (OIDC):
+    1. Enterprise (payer) proves they paid by providing the preimage
+    2. SA verifies sha256(preimage) == payment_hash
+    3. SA generates auth_code for OIDC token exchange
+    4. SA signs attestation
+    5. Enterprise exchanges auth_code at /oidc/token for id_token
+    
+    Requires X-API-Key header. Only the enterprise that created the session can confirm.
+    """
+    # Validate API key and get client_id
+    client_id, _ = validate_api_key(x_api_key)
+    
     with shelve.open(SESSIONS_DB, writeback=True) as sessions:
         session = sessions.get(session_id)
         if not session:
             raise HTTPException(404, "Session not found")
         
-        # Update session with settlement info
+        # Verify this enterprise owns the session
+        if session.get("client_id") != client_id:
+            raise HTTPException(403, "Not authorized to confirm this session")
+        
+        # Verify session is verified (STWO proof passed)
+        if not (session.get("stwo_verified") and session.get("binding_verified")):
+            raise HTTPException(400, "Session not verified - waiting for user proof")
+        
+        # Verify session not already paid
+        if session.get("paid"):
+            raise HTTPException(400, "Session already paid")
+        
+        # Verify preimage matches payment_hash
+        try:
+            preimage_bytes = bytes.fromhex(body.preimage_hex)
+            if len(preimage_bytes) != 32:
+                raise ValueError("Preimage must be 32 bytes")
+            computed_hash = hashlib.sha256(preimage_bytes).hexdigest()
+        except Exception as e:
+            raise HTTPException(400, f"Invalid preimage: {e}")
+        
+        stored_payment_hash = session.get("payment_hash", "")
+        if computed_hash.lower() != stored_payment_hash.lower():
+            raise HTTPException(400, "Preimage does not match payment hash")
+        
+        # Mark as paid
+        now = int(time.time())
         session["paid"] = True
-        session["paid_at"] = body.settled_at
+        session["paid_at"] = now
+        session["preimage_hex"] = body.preimage_hex
         
-        if body.oracle_attestation:
-            session["oracle_attestation"] = body.oracle_attestation
-            print(f"Oracle attestation received: {body.oracle_attestation.get('outcome')}")
+        # Generate auth_code (short-lived, one-time use)
+        auth_code = secrets.token_urlsafe(32)
+        auth_code_expires = now + 60  # 60 seconds to exchange
         
-        if body.receipt:
-            session["audit_hash"] = body.receipt.get("audit_hash")
-            session["settlement_receipt"] = body.receipt
-            print(f"Settlement receipt: audit_hash={body.receipt.get('audit_hash')}")
+        # Compute attestation
+        attestation, audit_hash = compute_attestation(session)
+        session["audit_hash"] = audit_hash
+        session["attestation"] = attestation
         
+        # Save session
         sessions[session_id] = session
-        
-        # Generate session token for enterprise
-        session_token = None
-        if session.get("stwo_verified") and session.get("binding_verified"):
-            session_token = generate_session_token(
-                session_id=session_id,
-                did=session.get("did", ""),
-                employer=session.get("employer", "")
-            )
-        
-        return {
-            "ok": True,
-            "session_id": session_id,
-            "status": "settled",
+    
+    # Store auth_code in OIDC codes DB (shared with oidc_endpoints.py)
+    with shelve.open(CODES_DB, writeback=True) as codes:
+        codes[auth_code] = {
+            "client_id": client_id,
+            "redirect_uri": None,  # Not used for API flow
+            "nonce": session.get("nonce", ""),
+            "iat": now,
+            "exp": auth_code_expires,
+            # SignedByMe-specific fields
+            "signedby": True,
+            "signedby_session_id": session_id,
             "did": session.get("did", ""),
-            "verified": session.get("stwo_verified", False) and session.get("binding_verified", False),
-            "dlc_completed": body.oracle_attestation is not None,
-            "audit_hash": session.get("audit_hash"),
-            "session_token": session_token
+            "payment_hash": session.get("payment_hash", ""),
+            "amount_sats": session.get("amount_sats"),
+            "audit_hash": audit_hash,
         }
+    
+    print(f"Payment confirmed for session {session_id}: auth_code issued")
+    
+    return ConfirmPaymentResponse(
+        ok=True,
+        session_id=session_id,
+        did=session.get("did", ""),
+        paid=True,
+        paid_at=now,
+        auth_code=auth_code,
+        auth_code_expires_in=60,
+        attestation=attestation,
+        audit_hash=audit_hash,
+        user_amount_sats=session.get("user_amount_sats"),
+        operator_amount_sats=session.get("operator_amount_sats"),
+    )
 
 
 @router.get("/v1/login/sessions")

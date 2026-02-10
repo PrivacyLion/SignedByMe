@@ -25,9 +25,17 @@ def openid_configuration():
         "grant_types_supported": ["authorization_code"],
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["RS256"],
-        "token_endpoint_auth_methods_supported": ["none"],
+        "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
         "scopes_supported": ["openid"],
-        "claims_supported": ["sub", "aud", "iss", "exp", "iat", "nonce", "amr"],
+        "claims_supported": [
+            # Standard OIDC claims
+            "sub", "aud", "iss", "exp", "iat", "nonce", "amr", "sid", "auth_time",
+            # SignedByMe-specific claims
+            "https://signedby.me/claims/attestation_hash",
+            "https://signedby.me/claims/payment_verified",
+            "https://signedby.me/claims/payment_hash",
+            "https://signedby.me/claims/amount_sats",
+        ],
         "code_challenge_methods_supported": ["S256"],
     }
     return JSONResponse(doc)
