@@ -108,13 +108,19 @@ class MainActivity : FragmentActivity() {
             val employer = uri.getQueryParameter("employer")  // Keep "employer" param for backwards compat
             val amountStr = uri.getQueryParameter("amount")
             val amount = amountStr?.toULongOrNull() ?: 100UL
+            // v3 parameters
+            val nonce = uri.getQueryParameter("nonce")  // 16 bytes hex = 32 chars
+            val expiresStr = uri.getQueryParameter("expires")
+            val expiresAt = expiresStr?.toLongOrNull()
             
             if (sessionId != null && employer != null) {
                 return LoginSession(
                     sessionToken = null,
                     sessionId = sessionId,
                     enterpriseName = employer,  // Map to enterpriseName internally
-                    amountSats = amount
+                    amountSats = amount,
+                    nonce = nonce,
+                    expiresAt = expiresAt
                 )
             }
         }
@@ -146,7 +152,9 @@ class MainActivity : FragmentActivity() {
                 sessionToken = token,
                 sessionId = payload.optString("session_id", ""),
                 enterpriseName = payload.optString("enterprise_name", "Unknown"),
-                amountSats = payload.optLong("amount_sats", 100).toULong()
+                amountSats = payload.optLong("amount_sats", 100).toULong(),
+                nonce = payload.optString("nonce", null),
+                expiresAt = if (payload.has("expires_at")) payload.optLong("expires_at") else null
             )
         } catch (e: Exception) {
             android.util.Log.e("SignedByMe", "Failed to parse session token: ${e.message}")
@@ -160,7 +168,9 @@ data class LoginSession(
     val sessionToken: String?,  // Full JWT token for stateless API
     val sessionId: String,
     val enterpriseName: String,
-    val amountSats: ULong = 100UL
+    val amountSats: ULong = 100UL,
+    val nonce: String? = null,       // v3: 16-byte session nonce (32 hex chars)
+    val expiresAt: Long? = null      // v3: Unix timestamp when session expires
 )
 
 // API Configuration
@@ -181,6 +191,7 @@ private fun sendInvoiceToApi(
     invoice: String,
     did: String,
     enterpriseName: String,
+    amountSats: Long? = null,  // v3: amount binding
     stwoproof: String? = null,
     bindingSignature: String? = null,
     nonce: String? = null
@@ -205,12 +216,17 @@ private fun sendInvoiceToApi(
             } else {
                 // Legacy API fallback
                 put("session_id", sessionId)
-                put("enterprise", enterpriseName)
+                put("employer", enterpriseName)  // API expects "employer" not "enterprise"
             }
             put("invoice", invoice)
             put("did", did)
             
-            // Include STWO proof if available (from Step 3)
+            // v3: Include amount for binding verification
+            if (amountSats != null) {
+                put("amount_sats", amountSats)
+            }
+            
+            // Include STWO proof if available
             if (stwoproof != null) {
                 put("stwo_proof", stwoproof)
             }
@@ -501,25 +517,52 @@ fun SignedByMeApp(
                         // Send invoice to API for enterprise to pay (with STWO proof)
                         launch(Dispatchers.IO) {
                             try {
-                                // Get STWO identity proof (generated in Step 3)
                                 // Get wallet address for the login proof
                                 val walletAddress = (breezMgr.walletState.value as? BreezWalletManager.WalletState.Connected)?.sparkAddress ?: "unknown"
                                 
-                                // Generate real STWO login proof with payment hash
-                                // This creates a Circle STARK proof binding DID + wallet + payment_hash
-                                val nonce = java.util.UUID.randomUUID().toString()
-                                val stwoproof = try {
-                                    didMgr.generateLoginProof(walletAddress, lastPaymentHash, 1)
-                                } catch (e: Exception) {
-                                    android.util.Log.e("SignedByMe", "Failed to generate login proof: ${e.message}")
-                                    // Fallback to Step 3 proof if login proof fails
-                                    didMgr.getIdentityProof()
+                                // Check if we have v3 session (with nonce from QR/deep link)
+                                val sessionNonce = loginSession?.nonce
+                                val sessionAmount = loginSession?.amountSats?.toLong() ?: 100L
+                                val enterpriseDomain = loginSession?.enterpriseName ?: "demo.signedby.me"
+                                
+                                val stwoproof: String?
+                                val proofNonce: String?
+                                
+                                if (sessionNonce != null && sessionNonce.length == 32) {
+                                    // v3 flow: Use session nonce from QR/deep link for full security bindings
+                                    android.util.Log.i("SignedByMe", "Using v3 proof with session nonce")
+                                    stwoproof = try {
+                                        didMgr.generateLoginProofV3(
+                                            walletAddress = walletAddress,
+                                            paymentHashHex = lastPaymentHash,
+                                            amountSats = sessionAmount,
+                                            eaDomain = enterpriseDomain,
+                                            nonceHex = sessionNonce,
+                                            expiryMinutes = 5
+                                        )
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("SignedByMe", "Failed to generate v3 login proof: ${e.message}")
+                                        // Fallback to v1 proof
+                                        didMgr.generateLoginProof(walletAddress, lastPaymentHash, 1)
+                                    }
+                                    proofNonce = sessionNonce
+                                } else {
+                                    // v1 flow: Generate random nonce (legacy/demo mode)
+                                    android.util.Log.i("SignedByMe", "Using v1 proof (no session nonce)")
+                                    val randomNonce = java.util.UUID.randomUUID().toString()
+                                    stwoproof = try {
+                                        didMgr.generateLoginProof(walletAddress, lastPaymentHash, 1)
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("SignedByMe", "Failed to generate login proof: ${e.message}")
+                                        didMgr.getIdentityProof()
+                                    }
+                                    proofNonce = randomNonce
                                 }
                                 
-                                // Legacy binding signature (kept for backwards compatibility)
-                                val bindingSignature = if (stwoproof != null && !didMgr.hasRealStwoSupport()) {
+                                // Legacy binding signature (kept for backwards compatibility with v1/v2)
+                                val bindingSignature = if (stwoproof != null && !didMgr.hasRealStwoSupport() && sessionNonce == null) {
                                     try {
-                                        didMgr.createPaymentBinding(lastPaymentHash, nonce)
+                                        didMgr.createPaymentBinding(lastPaymentHash, proofNonce!!)
                                     } catch (e: Exception) {
                                         null
                                     }
@@ -530,10 +573,11 @@ fun SignedByMeApp(
                                     sessionId = sessionId,
                                     invoice = invoice,
                                     did = did,
-                                    enterpriseName = loginSession?.enterpriseName ?: "Demo",
+                                    enterpriseName = enterpriseDomain,
+                                    amountSats = sessionAmount,
                                     stwoproof = stwoproof,
                                     bindingSignature = bindingSignature,
-                                    nonce = if (bindingSignature != null) nonce else null
+                                    nonce = proofNonce
                                 )
                                 withContext(Dispatchers.Main) {
                                     if (!apiResult) {
@@ -1836,7 +1880,9 @@ fun LoginScreen(
                                 sessionToken = token,
                                 sessionId = payload.optString("session_id", ""),
                                 enterpriseName = payload.optString("enterprise_name", "Unknown"),
-                                amountSats = payload.optLong("amount_sats", 100).toULong()
+                                amountSats = payload.optLong("amount_sats", 100).toULong(),
+                                nonce = payload.optString("nonce", null),
+                                expiresAt = if (payload.has("expires_at")) payload.optLong("expires_at") else null
                             ))
                             return@QrScannerDialog
                         }
@@ -1847,13 +1893,19 @@ fun LoginScreen(
                     val employer = uri.getQueryParameter("employer")  // Keep "employer" for backwards compat
                     val amountStr = uri.getQueryParameter("amount")
                     val amount = amountStr?.toULongOrNull() ?: 100UL
+                    // v3 parameters
+                    val nonce = uri.getQueryParameter("nonce")  // 16 bytes hex = 32 chars
+                    val expiresStr = uri.getQueryParameter("expires")
+                    val expiresAt = expiresStr?.toLongOrNull()
                     
                     if (sessionId != null && employer != null) {
                         onLoginSessionReceived(LoginSession(
                             sessionToken = null,
                             sessionId = sessionId,
                             enterpriseName = employer,
-                            amountSats = amount
+                            amountSats = amount,
+                            nonce = nonce,
+                            expiresAt = expiresAt
                         ))
                     }
                 } catch (e: Exception) {
