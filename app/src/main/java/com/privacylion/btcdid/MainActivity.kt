@@ -520,53 +520,32 @@ fun SignedByMeApp(
                                 // Get wallet address for the login proof
                                 val walletAddress = (breezMgr.walletState.value as? BreezWalletManager.WalletState.Connected)?.sparkAddress ?: "unknown"
                                 
-                                // Check if we have v3 session (with nonce from QR/deep link)
-                                val sessionNonce = loginSession?.nonce
+                                // v3 only: Use session nonce from QR, or generate random for demo
+                                val sessionNonce = loginSession?.nonce?.takeIf { it.length == 32 }
+                                    ?: run {
+                                        // Generate random 16-byte nonce for demo mode (32 hex chars)
+                                        val bytes = ByteArray(16)
+                                        java.security.SecureRandom().nextBytes(bytes)
+                                        bytes.joinToString("") { "%02x".format(it) }
+                                    }
                                 val sessionAmount = loginSession?.amountSats?.toLong() ?: 100L
                                 val enterpriseDomain = loginSession?.enterpriseName ?: "demo.signedby.me"
                                 
-                                val stwoproof: String?
-                                val proofNonce: String?
+                                android.util.Log.i("SignedByMe", "Generating v3 proof: domain=$enterpriseDomain, amount=$sessionAmount")
                                 
-                                if (sessionNonce != null && sessionNonce.length == 32) {
-                                    // v3 flow: Use session nonce from QR/deep link for full security bindings
-                                    android.util.Log.i("SignedByMe", "Using v3 proof with session nonce")
-                                    stwoproof = try {
-                                        didMgr.generateLoginProofV3(
-                                            walletAddress = walletAddress,
-                                            paymentHashHex = lastPaymentHash,
-                                            amountSats = sessionAmount,
-                                            eaDomain = enterpriseDomain,
-                                            nonceHex = sessionNonce,
-                                            expiryMinutes = 5
-                                        )
-                                    } catch (e: Exception) {
-                                        android.util.Log.e("SignedByMe", "Failed to generate v3 login proof: ${e.message}")
-                                        // Fallback to v1 proof
-                                        didMgr.generateLoginProof(walletAddress, lastPaymentHash, 1)
-                                    }
-                                    proofNonce = sessionNonce
-                                } else {
-                                    // v1 flow: Generate random nonce (legacy/demo mode)
-                                    android.util.Log.i("SignedByMe", "Using v1 proof (no session nonce)")
-                                    val randomNonce = java.util.UUID.randomUUID().toString()
-                                    stwoproof = try {
-                                        didMgr.generateLoginProof(walletAddress, lastPaymentHash, 1)
-                                    } catch (e: Exception) {
-                                        android.util.Log.e("SignedByMe", "Failed to generate login proof: ${e.message}")
-                                        didMgr.getIdentityProof()
-                                    }
-                                    proofNonce = randomNonce
+                                val stwoproof = try {
+                                    didMgr.generateLoginProofV3(
+                                        walletAddress = walletAddress,
+                                        paymentHashHex = lastPaymentHash,
+                                        amountSats = sessionAmount,
+                                        eaDomain = enterpriseDomain,
+                                        nonceHex = sessionNonce,
+                                        expiryMinutes = 5
+                                    )
+                                } catch (e: Exception) {
+                                    android.util.Log.e("SignedByMe", "Failed to generate v3 login proof: ${e.message}")
+                                    null
                                 }
-                                
-                                // Legacy binding signature (kept for backwards compatibility with v1/v2)
-                                val bindingSignature = if (stwoproof != null && !didMgr.hasRealStwoSupport() && sessionNonce == null) {
-                                    try {
-                                        didMgr.createPaymentBinding(lastPaymentHash, proofNonce!!)
-                                    } catch (e: Exception) {
-                                        null
-                                    }
-                                } else null
                                 
                                 val apiResult = sendInvoiceToApi(
                                     sessionToken = loginSession?.sessionToken,
@@ -576,8 +555,8 @@ fun SignedByMeApp(
                                     enterpriseName = enterpriseDomain,
                                     amountSats = sessionAmount,
                                     stwoproof = stwoproof,
-                                    bindingSignature = bindingSignature,
-                                    nonce = proofNonce
+                                    bindingSignature = null,  // v3 doesn't need separate binding signature
+                                    nonce = sessionNonce
                                 )
                                 withContext(Dispatchers.Main) {
                                     if (!apiResult) {
