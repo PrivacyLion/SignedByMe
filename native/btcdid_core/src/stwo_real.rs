@@ -42,10 +42,10 @@ const LOG_N_ROWS: u32 = 1;
 pub const SCHEMA_VERSION: u8 = 3;
 
 /// Domain separator for v3 binding hashes
-const DOMAIN_SEPARATOR_V3: &[u8; 24] = b"signedby.me:identity:v3";
+const DOMAIN_SEPARATOR_V3: &[u8; 23] = b"signedby.me:identity:v3";
 
 /// Domain separator for v2 binding hashes (backwards compat)
-const DOMAIN_SEPARATOR_V2: &[u8; 24] = b"signedby.me:identity:v2";
+const DOMAIN_SEPARATOR_V2: &[u8; 23] = b"signedby.me:identity:v2";
 
 /// Real STWO proof structure (serializable)
 #[derive(Debug, Clone, Serialize, Deserialize)]
