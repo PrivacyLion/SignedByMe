@@ -154,20 +154,48 @@ object NativeBridge {
     @JvmStatic external fun verifyRealIdentityProof(proofJson: String): String
 
     // ============================================================================
-    // DLC (Discreet Log Contracts)
+    // DLC (Discreet Log Contracts) - Real Schnorr Oracle
     // ============================================================================
     
     /**
-     * Get the oracle's public key (x-only, 32 bytes hex)
+     * Get the oracle's x-only public key (BIP340 format, 32 bytes hex)
+     * This is a deterministic key derived from the SignedByMe oracle domain.
      */
     @JvmStatic external fun oraclePubkeyHex(): String
     
     /**
-     * Sign an outcome as the oracle (Schnorr signature)
-     * @param outcome The outcome string (e.g., "paid=true", "refund=true")
-     * @return JSON string with signature and attestation data
+     * Sign an outcome as the oracle using real Schnorr signature (BIP340)
+     * This is steps 14-15 in the spec.
+     * 
+     * @param outcome The outcome string (e.g., "auth_verified", "paid=true", "refund")
+     * @return JSON string with {status, outcome, signature_hex, pubkey_hex, timestamp}
      */
     @JvmStatic external fun oracleSignOutcome(outcome: String): String
+    
+    /**
+     * Acknowledge a signing policy for a contract (steps 7-8)
+     * The oracle commits to signing a specific outcome for a contract.
+     * 
+     * @param outcome The outcome to acknowledge (e.g., "auth_verified")
+     * @param contractId The DLC contract ID
+     * @return JSON string with policy acknowledgment {contract_id, outcome, commitment_hex, ...}
+     */
+    @JvmStatic external fun oracleAcknowledgePolicy(outcome: String, contractId: String): String
+    
+    /**
+     * Verify an oracle attestation signature
+     * Use this to verify that an oracle signature is valid.
+     * 
+     * @param outcome The outcome that was signed
+     * @param signatureHex The Schnorr signature (64 bytes hex)
+     * @param pubkeyHex The oracle's x-only public key (32 bytes hex)
+     * @return true if signature is valid
+     */
+    @JvmStatic external fun oracleVerifyAttestation(
+        outcome: String,
+        signatureHex: String,
+        pubkeyHex: String
+    ): Boolean
     
     /**
      * Create a DLC contract
@@ -183,7 +211,7 @@ object NativeBridge {
     ): String
     
     /**
-     * Sign a DLC outcome
+     * Sign a DLC outcome (alias for oracleSignOutcome)
      * @param outcome The outcome to sign
      * @return JSON string with signature
      */

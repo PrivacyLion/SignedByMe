@@ -315,7 +315,7 @@ pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_createDlcContrac
     }
 }
 
-/// Sign a DLC outcome (as oracle)
+/// Sign a DLC outcome with real Schnorr signature (steps 14-15)
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_signDlcOutcome(
     mut env: JNIEnv,
@@ -326,57 +326,73 @@ pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_signDlcOutcome(
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    // Generate oracle key (in production, this would be stored/loaded)
-    let oracle_key = match ManagedKey::generate() {
-        Ok(k) => k,
-        Err(e) => {
-            let error_json = format!(r#"{{"status":"error","error":"{}"}}"#, e);
-            return env.new_string(error_json).unwrap().into_raw();
-        }
-    };
-
-    let dlc_outcome = if outcome_str == "paid=true" {
-        DlcOutcome::Paid
-    } else if outcome_str == "refund=true" {
-        DlcOutcome::Refund
-    } else {
-        DlcOutcome::Custom(outcome_str)
-    };
-
-    match oracle_sign_outcome(&oracle_key, &dlc_outcome) {
-        Ok(attestation) => {
-            let json = serde_json::to_string_pretty(&attestation)
-                .unwrap_or_else(|_| "{}".to_string());
-            env.new_string(json).unwrap().into_raw()
-        }
-        Err(e) => {
-            let error_json = format!(r#"{{"status":"error","error":"{}"}}"#, e);
-            env.new_string(error_json).unwrap().into_raw()
-        }
-    }
+    // Use the deterministic local oracle with real Schnorr signing
+    let json = dlc_oracle::oracle_sign_outcome(&outcome_str);
+    env.new_string(json).unwrap().into_raw()
 }
 
-/// Get oracle public key
+/// Get oracle x-only public key (BIP340 format)
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_oraclePubkeyHex(
     mut env: JNIEnv,
     _clazz: JClass,
 ) -> jstring {
-    // Return the standard oracle pubkey (generator point for testing)
-    env.new_string("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+    // Return the real oracle's x-only pubkey (deterministic)
+    env.new_string(dlc_oracle::oracle_pubkey_hex())
         .unwrap()
         .into_raw()
 }
 
-/// Oracle sign outcome (backwards compat)
+/// Oracle sign outcome (alias for signDlcOutcome)
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_oracleSignOutcome(
     mut env: JNIEnv,
     _clazz: JClass,
     outcome: JString,
 ) -> jstring {
-    // Delegate to the new function
     Java_com_privacylion_btcdid_NativeBridge_signDlcOutcome(env, _clazz, outcome)
+}
+
+/// Acknowledge oracle signing policy for a contract (steps 7-8)
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_oracleAcknowledgePolicy(
+    mut env: JNIEnv,
+    _clazz: JClass,
+    outcome: JString,
+    contract_id: JString,
+) -> jstring {
+    let outcome_str = env.get_string(&outcome)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let contract_str = env.get_string(&contract_id)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    let json = dlc_oracle::oracle_acknowledge_policy(&outcome_str, &contract_str);
+    env.new_string(json).unwrap().into_raw()
+}
+
+/// Verify an oracle attestation signature
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_oracleVerifyAttestation(
+    mut env: JNIEnv,
+    _clazz: JClass,
+    outcome: JString,
+    signature_hex: JString,
+    pubkey_hex: JString,
+) -> jboolean {
+    let outcome_str = env.get_string(&outcome)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let sig_str = env.get_string(&signature_hex)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let pubkey_str = env.get_string(&pubkey_hex)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    let is_valid = dlc_oracle::oracle_verify_attestation(&outcome_str, &sig_str, &pubkey_str);
+    if is_valid { 1 } else { 0 }
 }
 
 // ============================================================================

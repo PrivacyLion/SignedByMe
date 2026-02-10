@@ -167,9 +167,25 @@ class DlcManager {
     }
     
     /**
+     * Policy acknowledgment from oracle
+     */
+    data class PolicyAcknowledgment(
+        val contractId: String,
+        val outcome: String,
+        val oraclePubkeyHex: String,
+        val commitmentHex: String,
+        val acknowledgedAt: Long
+    )
+    
+    /**
      * Build a DLC contract for login authentication.
      * This contract specifies the 90/10 payout split that will be enforced
      * when the oracle signs the auth_verified outcome.
+     * 
+     * Steps 6-8 in the spec:
+     * 6. Build DLC outcome auth_verified, payout 90/10
+     * 7. Request outcome sign policy for auth_verified
+     * 8. Oracle policy acknowledged
      * 
      * @param loginId Session login ID
      * @param did User's DID
@@ -206,6 +222,10 @@ class DlcManager {
         val contractObj = JSONObject(contractJson)
         val contractId = contractObj.optString("contract_id", "dlc_${System.currentTimeMillis()}")
         
+        // Step 7-8: Request and receive oracle policy acknowledgment
+        val policyAck = requestPolicyAcknowledgment(OUTCOME_AUTH_VERIFIED, contractId)
+        Log.i(TAG, "Oracle policy acknowledged: ${policyAck?.commitmentHex?.take(16)}...")
+        
         return AuthDlcContract(
             contractId = contractId,
             loginId = loginId,
@@ -221,6 +241,33 @@ class DlcManager {
             adaptorPointHex = contractObj.optString("adaptor_point_hex", null),
             scriptHashHex = contractObj.optString("script_hash_hex", null)
         )
+    }
+    
+    /**
+     * Request oracle to acknowledge signing policy (steps 7-8)
+     * The oracle commits to signing a specific outcome when conditions are met.
+     */
+    fun requestPolicyAcknowledgment(outcome: String, contractId: String): PolicyAcknowledgment? {
+        return try {
+            val ackJson = NativeBridge.oracleAcknowledgePolicy(outcome, contractId)
+            val obj = JSONObject(ackJson)
+            
+            if (obj.optString("status") != "ok") {
+                Log.e(TAG, "Policy acknowledgment failed: ${obj.optString("error")}")
+                return null
+            }
+            
+            PolicyAcknowledgment(
+                contractId = obj.getString("contract_id"),
+                outcome = obj.getString("outcome"),
+                oraclePubkeyHex = obj.getString("oracle_pubkey_hex"),
+                commitmentHex = obj.getString("commitment_hex"),
+                acknowledgedAt = obj.getLong("acknowledged_at")
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get policy acknowledgment: ${e.message}")
+            null
+        }
     }
     
     /**
@@ -295,16 +342,22 @@ class DlcManager {
     }
     
     /**
-     * Verify an oracle attestation signature
+     * Verify an oracle attestation signature using real Schnorr verification
      * 
      * @param attestation The attestation to verify
-     * @return true if valid
+     * @return true if the Schnorr signature is valid
      */
     fun verifyAttestation(attestation: OracleAttestation): Boolean {
-        // For now, basic validation
-        // In production, this would verify the Schnorr signature
-        return attestation.signatureHex.isNotEmpty() &&
-               attestation.pubkeyHex.isNotEmpty() &&
-               attestation.outcome.isNotEmpty()
+        return try {
+            // Use real BIP340 Schnorr verification via Rust
+            NativeBridge.oracleVerifyAttestation(
+                attestation.outcome,
+                attestation.signatureHex,
+                attestation.pubkeyHex
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Attestation verification failed: ${e.message}")
+            false
+        }
     }
 }
