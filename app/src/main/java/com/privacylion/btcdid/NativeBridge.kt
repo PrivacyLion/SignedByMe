@@ -99,11 +99,37 @@ object NativeBridge {
     @JvmStatic external fun hasRealStwo(): Boolean
     
     /**
-     * Generate a REAL STWO identity proof with Circle STARK verification.
+     * Generate a REAL STWO identity proof v3 with full security bindings.
      * This creates a cryptographically sound zero-knowledge proof that:
      * 1. Binds the DID to the wallet address
      * 2. Includes the payment hash for the login session
-     * 3. Has a cryptographic commitment that can be verified by anyone
+     * 3. Binds the exact amount (prevents payment substitution)
+     * 4. Binds the enterprise domain (prevents cross-RP replay)
+     * 5. Includes session nonce (prevents replay attacks)
+     * 6. Has an expiry timestamp bound into the hash (prevents extension)
+     * 
+     * @param didPubkeyHex The DID public key (hex encoded)
+     * @param walletAddress The wallet address (e.g., Spark address)
+     * @param paymentHashHex The Lightning payment hash (32 bytes hex)
+     * @param amountSats The payment amount in satoshis
+     * @param expiresAt Unix timestamp when the proof expires
+     * @param eaDomain Enterprise/RP domain (e.g., "acmecorp.com")
+     * @param nonceHex Session nonce (16 bytes hex = 32 chars)
+     * @return JSON string with the real STWO v3 proof
+     */
+    @JvmStatic external fun generateRealIdentityProofV3(
+        didPubkeyHex: String,
+        walletAddress: String,
+        paymentHashHex: String,
+        amountSats: Long,
+        expiresAt: Long,
+        eaDomain: String,
+        nonceHex: String
+    ): String
+    
+    /**
+     * Generate a REAL STWO identity proof (v1 legacy format).
+     * Use generateRealIdentityProofV3 for new deployments.
      * 
      * @param didPubkeyHex The DID public key (hex encoded)
      * @param walletAddress The wallet address (e.g., Spark address)
@@ -119,7 +145,8 @@ object NativeBridge {
     ): String
     
     /**
-     * Verify a REAL STWO identity proof.
+     * Verify a REAL STWO identity proof (v1, v2, or v3).
+     * Automatically detects schema version and verifies appropriately.
      * 
      * @param proofJson The proof JSON to verify
      * @return JSON with {valid: boolean, real_stwo: true, error?}

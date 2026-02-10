@@ -381,11 +381,78 @@ class DidWalletManager(private val context: Context) {
     }
     
     /**
-     * Generate a real STWO login proof for authentication.
-     * This creates a cryptographically sound Circle STARK proof that binds:
+     * Generate a real STWO login proof v3 for authentication.
+     * This creates a cryptographically sound Circle STARK proof with full security bindings:
      * - The user's DID
      * - Their wallet address
      * - The specific payment hash for this login session
+     * - The exact amount (prevents payment substitution)
+     * - The enterprise domain (prevents cross-RP replay)
+     * - Session nonce (prevents replay attacks)
+     * - Expiry timestamp bound into hash (prevents extension)
+     * 
+     * @param walletAddress The user's wallet address
+     * @param paymentHashHex The payment hash from the employer's invoice (32 bytes hex)
+     * @param amountSats The payment amount in satoshis
+     * @param eaDomain The enterprise/RP domain (e.g., "acmecorp.com")
+     * @param nonceHex Session nonce from QR/deep link (16 bytes hex = 32 chars)
+     * @param expiryMinutes How many minutes until the proof expires (default: 5 for login)
+     * @return JSON with the real STWO v3 proof, or falls back to mock if real STWO unavailable
+     */
+    fun generateLoginProofV3(
+        walletAddress: String,
+        paymentHashHex: String,
+        amountSats: Long,
+        eaDomain: String,
+        nonceHex: String,
+        expiryMinutes: Long = 5
+    ): String {
+        val did = getPublicDID() ?: throw IllegalStateException("No DID created")
+        val didPubkeyHex = did.removePrefix("did:btcr:")
+        
+        // Calculate expiry timestamp
+        val expiresAt = System.currentTimeMillis() / 1000 + (expiryMinutes * 60)
+        
+        android.util.Log.i("DidWalletManager", "generateLoginProofV3 called: wallet=$walletAddress, paymentHash=$paymentHashHex, amount=$amountSats, domain=$eaDomain")
+        
+        return try {
+            val hasReal = NativeBridge.hasRealStwo()
+            android.util.Log.i("DidWalletManager", "hasRealStwo() = $hasReal")
+            if (hasReal) {
+                // Use real STWO Circle STARK proof v3
+                android.util.Log.i("DidWalletManager", "Generating REAL STWO v3 Circle STARK proof...")
+                val proof = NativeBridge.generateRealIdentityProofV3(
+                    didPubkeyHex,
+                    walletAddress,
+                    paymentHashHex,
+                    amountSats,
+                    expiresAt,
+                    eaDomain,
+                    nonceHex
+                )
+                android.util.Log.i("DidWalletManager", "Real STWO v3 proof generated successfully!")
+                proof
+            } else {
+                // Fallback to mock proof (for testing/development only)
+                android.util.Log.w("DidWalletManager", "Real STWO not available, using mock proof")
+                val wrapped = loadWrapped() ?: throw IllegalStateException("No DID key")
+                val priv = unwrapPrivateKey(wrapped)
+                try {
+                    val challenge = "signedby.me:bind:$did:$walletAddress:${System.currentTimeMillis()}"
+                    val signature = NativeBridge.signMessageDerHex(priv, challenge)
+                    NativeBridge.generateIdentityProof(didPubkeyHex, walletAddress, signature, 1)
+                } finally {
+                    java.util.Arrays.fill(priv, 0)
+                }
+            }
+        } catch (t: Throwable) {
+            """{"status":"error","error":"${t.message ?: "Failed to generate login proof"}"}"""
+        }
+    }
+    
+    /**
+     * Generate a real STWO login proof for authentication (legacy v1 format).
+     * Use generateLoginProofV3 for new deployments with full security bindings.
      * 
      * @param walletAddress The user's wallet address
      * @param paymentHashHex The payment hash from the employer's invoice (32 bytes hex)
