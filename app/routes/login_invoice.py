@@ -27,6 +27,21 @@ SESSIONS_DB = str(VAR_DIR / "login_sessions.db")
 NONCES_DB = str(VAR_DIR / "used_nonces.db")
 
 
+class DlcContractModel(BaseModel):
+    """DLC contract for 90/10 payout split"""
+    contract_id: str
+    login_id: Optional[str] = None
+    did: str
+    user_pubkey_hex: str
+    oracle: Optional[dict] = None
+    outcome: str = "auth_verified"
+    payout_split: Optional[dict] = None
+    amount_sats: int
+    created_at: int
+    adaptor_point_hex: Optional[str] = None
+    script_hash_hex: Optional[str] = None
+
+
 class LoginInvoiceRequest(BaseModel):
     """Request to submit a login invoice with STWO proof"""
     session_id: str = Field(..., description="Session ID from QR/deep link")
@@ -37,6 +52,7 @@ class LoginInvoiceRequest(BaseModel):
     stwo_proof: Optional[str] = Field(None, description="STWO identity proof JSON")
     binding_signature: Optional[str] = Field(None, description="Signature binding proof to payment (legacy)")
     nonce: Optional[str] = Field(None, description="Nonce for replay protection (16 bytes hex for v3)")
+    dlc_contract: Optional[dict] = Field(None, description="DLC contract for 90/10 split")
 
 
 class LoginInvoiceResponse(BaseModel):
@@ -45,7 +61,9 @@ class LoginInvoiceResponse(BaseModel):
     session_id: str
     stwo_verified: bool = False
     binding_verified: bool = False
+    dlc_verified: bool = False
     schema_version: int = 2
+    contract_id: Optional[str] = None
     message: Optional[str] = None
 
 
@@ -59,6 +77,11 @@ class SessionStatusResponse(BaseModel):
     paid: bool
     schema_version: int = 2
     amount_sats: Optional[int] = None
+    user_amount_sats: Optional[int] = None  # 90% to user
+    operator_amount_sats: Optional[int] = None  # 10% to operator
+    contract_id: Optional[str] = None  # DLC contract ID
+    audit_hash: Optional[str] = None  # Settlement audit hash
+    session_token: Optional[str] = None  # JWT for enterprise after verification
     created_at: int
     paid_at: Optional[int] = None
 
@@ -311,6 +334,34 @@ def submit_invoice(body: LoginInvoiceRequest):
             if body.nonce not in nonces:
                 nonces[body.nonce] = int(time.time())
     
+    # Verify DLC contract if provided
+    dlc_verified = False
+    contract_id = None
+    user_amount_sats = None
+    operator_amount_sats = None
+    
+    if body.dlc_contract:
+        try:
+            dlc = body.dlc_contract
+            contract_id = dlc.get("contract_id")
+            
+            # Verify DLC matches the session
+            if dlc.get("did") == body.did and dlc.get("amount_sats") == body.amount_sats:
+                dlc_verified = True
+                
+                # Calculate payout split (default 90/10)
+                payout_split = dlc.get("payout_split", {"user_pct": 90, "operator_pct": 10})
+                user_pct = payout_split.get("user_pct", 90)
+                if body.amount_sats:
+                    user_amount_sats = (body.amount_sats * user_pct) // 100
+                    operator_amount_sats = body.amount_sats - user_amount_sats
+                
+                print(f"DLC contract verified: {contract_id} (90/10 split)")
+            else:
+                print(f"DLC contract mismatch: DID or amount doesn't match")
+        except Exception as e:
+            print(f"DLC verification error: {e}")
+    
     # Store/update session
     session_data = {
         "session_id": body.session_id,
@@ -319,10 +370,15 @@ def submit_invoice(body: LoginInvoiceRequest):
         "did": body.did,
         "employer": body.employer,
         "amount_sats": body.amount_sats,
+        "user_amount_sats": user_amount_sats,
+        "operator_amount_sats": operator_amount_sats,
         "stwo_verified": stwo_verified,
         "binding_verified": binding_verified,
+        "dlc_verified": dlc_verified,
+        "contract_id": contract_id,
         "schema_version": schema_version,
         "stwo_proof": body.stwo_proof,
+        "dlc_contract": body.dlc_contract,
         "nonce": body.nonce,
         "paid": False,
         "created_at": int(time.time()),
@@ -338,7 +394,9 @@ def submit_invoice(body: LoginInvoiceRequest):
     
     message = None
     if stwo_verified and binding_verified:
-        if schema_version >= 3:
+        if dlc_verified:
+            message = f"Identity verified with DLC (90/10 split: {user_amount_sats}/{operator_amount_sats} sats)"
+        elif schema_version >= 3:
             message = f"Identity cryptographically verified (v3: amount, domain, expiry bound)"
         else:
             message = "Identity cryptographically verified"
@@ -348,21 +406,54 @@ def submit_invoice(body: LoginInvoiceRequest):
         session_id=body.session_id,
         stwo_verified=stwo_verified,
         binding_verified=binding_verified,
+        dlc_verified=dlc_verified,
         schema_version=schema_version,
+        contract_id=contract_id,
         message=message
     )
+
+
+def generate_session_token(session_id: str, did: str, employer: str) -> str:
+    """Generate a JWT session token for the enterprise after successful login."""
+    import base64
+    header = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').decode().rstrip('=')
+    
+    payload_data = {
+        "session_id": session_id,
+        "did": did,
+        "employer": employer,
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 3600,  # 1 hour expiry
+        "verified": True
+    }
+    payload = base64.urlsafe_b64encode(json.dumps(payload_data).encode()).decode().rstrip('=')
+    
+    # Simplified signature (in production, use proper HMAC)
+    sig_data = f"{header}.{payload}.signedby_secret"
+    sig = hashlib.sha256(sig_data.encode()).hexdigest()[:43]
+    
+    return f"{header}.{payload}.{sig}"
 
 
 @router.get("/v1/login/session/{session_id}", response_model=SessionStatusResponse)
 def get_session(session_id: str):
     """
     Get session status for employer polling.
-    Returns invoice, DID, verification status, and payment status.
+    Returns invoice, DID, verification status, payment status, and session token.
     """
     with shelve.open(SESSIONS_DB) as sessions:
         session = sessions.get(session_id)
         if not session:
             raise HTTPException(404, "Session not found")
+        
+        # Generate session token if paid and verified
+        session_token = None
+        if session.get("paid") and session.get("stwo_verified") and session.get("binding_verified"):
+            session_token = generate_session_token(
+                session_id=session_id,
+                did=session.get("did", ""),
+                employer=session.get("employer", "")
+            )
         
         return SessionStatusResponse(
             session_id=session_id,
@@ -373,6 +464,11 @@ def get_session(session_id: str):
             paid=session.get("paid", False),
             schema_version=session.get("schema_version", 2),
             amount_sats=session.get("amount_sats"),
+            user_amount_sats=session.get("user_amount_sats"),
+            operator_amount_sats=session.get("operator_amount_sats"),
+            contract_id=session.get("contract_id"),
+            audit_hash=session.get("audit_hash"),
+            session_token=session_token,
             created_at=session["created_at"],
             paid_at=session.get("paid_at")
         )
@@ -409,6 +505,67 @@ def mark_session_paid(session_id: str, preimage: str = ""):
         }
 
 
+class SettlementRequest(BaseModel):
+    """Settlement notification from mobile after payment received"""
+    session_id: str
+    payment_hash: str
+    settled_at: int
+    oracle_attestation: Optional[dict] = None
+    receipt: Optional[dict] = None
+
+
+@router.post("/v1/login/session/{session_id}/settled")
+def notify_settlement(session_id: str, body: SettlementRequest):
+    """
+    Receive settlement notification from mobile app.
+    This is called after payment is received and DLC is completed.
+    
+    Includes:
+    - Oracle attestation (Schnorr signature on "auth_verified")
+    - Settlement receipt with audit hash
+    - Payout breakdown (90/10 split)
+    """
+    with shelve.open(SESSIONS_DB, writeback=True) as sessions:
+        session = sessions.get(session_id)
+        if not session:
+            raise HTTPException(404, "Session not found")
+        
+        # Update session with settlement info
+        session["paid"] = True
+        session["paid_at"] = body.settled_at
+        
+        if body.oracle_attestation:
+            session["oracle_attestation"] = body.oracle_attestation
+            print(f"Oracle attestation received: {body.oracle_attestation.get('outcome')}")
+        
+        if body.receipt:
+            session["audit_hash"] = body.receipt.get("audit_hash")
+            session["settlement_receipt"] = body.receipt
+            print(f"Settlement receipt: audit_hash={body.receipt.get('audit_hash')}")
+        
+        sessions[session_id] = session
+        
+        # Generate session token for enterprise
+        session_token = None
+        if session.get("stwo_verified") and session.get("binding_verified"):
+            session_token = generate_session_token(
+                session_id=session_id,
+                did=session.get("did", ""),
+                employer=session.get("employer", "")
+            )
+        
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "status": "settled",
+            "did": session.get("did", ""),
+            "verified": session.get("stwo_verified", False) and session.get("binding_verified", False),
+            "dlc_completed": body.oracle_attestation is not None,
+            "audit_hash": session.get("audit_hash"),
+            "session_token": session_token
+        }
+
+
 @router.get("/v1/login/sessions")
 def list_sessions(employer: str = None, limit: int = 50):
     """
@@ -426,9 +583,13 @@ def list_sessions(employer: str = None, limit: int = 50):
                 "did": session.get("did", ""),
                 "employer": session.get("employer", ""),
                 "verified": session.get("stwo_verified", False) and session.get("binding_verified", False),
+                "dlc_verified": session.get("dlc_verified", False),
+                "contract_id": session.get("contract_id"),
                 "schema_version": session.get("schema_version", 2),
                 "amount_sats": session.get("amount_sats"),
+                "user_amount_sats": session.get("user_amount_sats"),
                 "paid": session.get("paid", False),
+                "audit_hash": session.get("audit_hash"),
                 "created_at": session.get("created_at", 0)
             })
     

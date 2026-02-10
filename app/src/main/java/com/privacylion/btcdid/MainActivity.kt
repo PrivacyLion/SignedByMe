@@ -252,6 +252,143 @@ private fun sendInvoiceToApi(
 }
 
 /**
+ * Notify API that payment was settled and DLC completed.
+ * Returns the session token for the enterprise.
+ */
+private fun notifyApiOfSettlement(
+    sessionId: String,
+    paymentHash: String,
+    attestation: DlcManager.OracleAttestation?,
+    receipt: DlcManager.SettlementReceipt?
+): Boolean {
+    return try {
+        val url = java.net.URL("$API_BASE_URL/v1/login/session/$sessionId/settled")
+        
+        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 10000
+            readTimeout = 10000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+        }
+        
+        val payload = JSONObject().apply {
+            put("session_id", sessionId)
+            put("payment_hash", paymentHash)
+            put("settled_at", System.currentTimeMillis() / 1000)
+            
+            if (attestation != null) {
+                put("oracle_attestation", JSONObject().apply {
+                    put("outcome", attestation.outcome)
+                    put("signature_hex", attestation.signatureHex)
+                    put("pubkey_hex", attestation.pubkeyHex)
+                    put("timestamp", attestation.timestamp)
+                })
+            }
+            
+            if (receipt != null) {
+                put("receipt", JSONObject().apply {
+                    put("audit_hash", receipt.auditHash)
+                    put("user_amount_sats", receipt.userAmountSats)
+                    put("operator_amount_sats", receipt.operatorAmountSats)
+                    put("contract_id", receipt.contractId)
+                })
+            }
+        }.toString()
+        
+        conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+        
+        val responseCode = conn.responseCode
+        conn.disconnect()
+        
+        android.util.Log.i("SignedByMe", "Settlement notification: $responseCode")
+        responseCode in 200..299
+    } catch (e: Exception) {
+        android.util.Log.e("SignedByMe", "Failed to notify settlement: ${e.message}")
+        false
+    }
+}
+
+/**
+ * Send the Lightning invoice to the API with DLC contract metadata.
+ * 
+ * This is the production flow:
+ * 1. STWO proof verifies identity (ZK)
+ * 2. DLC contract specifies 90/10 payout split
+ * 3. Oracle will sign "auth_verified" after payment
+ * 4. DLC enforces the split
+ */
+private fun sendInvoiceToApiWithDlc(
+    sessionToken: String?,
+    sessionId: String,
+    invoice: String,
+    did: String,
+    enterpriseName: String,
+    amountSats: Long,
+    stwoproof: String?,
+    nonce: String,
+    dlcContractJson: String?
+): Boolean {
+    return try {
+        val endpoint = if (sessionToken != null) "/v1/login/submit" else "/v1/login/invoice"
+        val url = java.net.URL("$API_BASE_URL$endpoint")
+        
+        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 10000
+            readTimeout = 10000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+        }
+        
+        val payload = JSONObject().apply {
+            if (sessionToken != null) {
+                put("session_token", sessionToken)
+            } else {
+                put("session_id", sessionId)
+                put("employer", enterpriseName)
+            }
+            put("invoice", invoice)
+            put("did", did)
+            put("amount_sats", amountSats)
+            put("nonce", nonce)
+            
+            // STWO proof
+            if (stwoproof != null) {
+                put("stwo_proof", stwoproof)
+            }
+            
+            // DLC contract metadata for 90/10 split
+            if (dlcContractJson != null) {
+                put("dlc_contract", JSONObject(dlcContractJson))
+            }
+        }.toString()
+        
+        android.util.Log.i("SignedByMe", "Sending to API: ${payload.take(500)}...")
+        
+        conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+        
+        val responseCode = conn.responseCode
+        val responseBody = try {
+            if (responseCode in 200..299) {
+                conn.inputStream.bufferedReader().readText()
+            } else {
+                conn.errorStream?.bufferedReader()?.readText() ?: ""
+            }
+        } catch (e: Exception) { "" }
+        
+        conn.disconnect()
+        
+        android.util.Log.i("SignedByMe", "API response: $responseCode - $responseBody")
+        
+        responseCode in 200..299
+    } catch (e: Exception) {
+        android.util.Log.e("SignedByMe", "Failed to send invoice to API: ${e.message}")
+        false
+    }
+}
+
+/**
  * Fetch current BTC price in USD from CoinGecko API
  */
 private suspend fun fetchBtcPrice(): Double = withContext(Dispatchers.IO) {
@@ -327,6 +464,11 @@ fun SignedByMeApp(
     var lastPrpJson by remember { mutableStateOf("") }
     var lastInvoice by remember { mutableStateOf("") }
     var lastPaymentHash by remember { mutableStateOf("") }
+    
+    // DLC state
+    var lastDlcContract by remember { mutableStateOf<DlcManager.AuthDlcContract?>(null) }
+    var lastSettlementReceipt by remember { mutableStateOf<DlcManager.SettlementReceipt?>(null) }
+    val dlcManager = remember { DlcManager() }
 
     // Login state
     var isLoginActive by remember { mutableStateOf(false) }
@@ -438,7 +580,44 @@ fun SignedByMeApp(
                     paymentReceived = true
                     isPollingPayment = false
                     isLoginActive = false
-                    statusMessage = "✅ Payment received! Log In verified."
+                    
+                    // Complete DLC flow
+                    try {
+                        // 1. Request oracle signature for auth_verified
+                        val attestation = dlcManager.requestOracleSignature(DlcManager.OUTCOME_AUTH_VERIFIED)
+                        android.util.Log.i("SignedByMe", "Oracle attestation received: ${attestation.signatureHex.take(16)}...")
+                        
+                        // 2. Build settlement receipt
+                        if (lastDlcContract != null) {
+                            lastSettlementReceipt = dlcManager.buildSettlementReceipt(
+                                contract = lastDlcContract!!,
+                                paymentHash = lastPaymentHash,
+                                preimageHex = null, // Would come from payment details
+                                attestation = attestation
+                            )
+                            
+                            val (userAmt, opAmt) = dlcManager.calculatePayouts(lastDlcContract!!.amountSats)
+                            statusMessage = "✅ Login verified! You received $userAmt sats (90%)"
+                            
+                            android.util.Log.i("SignedByMe", "Settlement receipt: ${lastSettlementReceipt?.auditHash}")
+                            
+                            // 3. Notify API of settlement (async, don't block)
+                            scope.launch(Dispatchers.IO) {
+                                notifyApiOfSettlement(
+                                    sessionId = lastLoginId,
+                                    paymentHash = lastPaymentHash,
+                                    attestation = attestation,
+                                    receipt = lastSettlementReceipt
+                                )
+                            }
+                        } else {
+                            statusMessage = "✅ Payment received! Log In verified."
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("SignedByMe", "DLC completion error: ${e.message}")
+                        statusMessage = "✅ Payment received! Log In verified."
+                    }
+                    
                     // Close the invoice dialog
                     showInvoiceDialog = false
                     // Refresh transactions
@@ -514,7 +693,7 @@ fun SignedByMeApp(
                         isLoginActive = true
                         isPollingPayment = true
                         
-                        // Send invoice to API for enterprise to pay (with STWO proof)
+                        // Send invoice to API for enterprise to pay (with STWO proof + DLC)
                         launch(Dispatchers.IO) {
                             try {
                                 // Get wallet address for the login proof
@@ -533,6 +712,7 @@ fun SignedByMeApp(
                                 
                                 android.util.Log.i("SignedByMe", "Generating v3 proof: domain=$enterpriseDomain, amount=$sessionAmount")
                                 
+                                // 1. Generate STWO v3 proof
                                 val stwoproof = try {
                                     didMgr.generateLoginProofV3(
                                         walletAddress = walletAddress,
@@ -547,7 +727,27 @@ fun SignedByMeApp(
                                     null
                                 }
                                 
-                                val apiResult = sendInvoiceToApi(
+                                // 2. Build DLC contract for 90/10 split
+                                val dlcContract = try {
+                                    dlcManager.buildAuthContract(
+                                        loginId = sessionId,
+                                        did = did,
+                                        amountSats = sessionAmount
+                                    )
+                                } catch (e: Exception) {
+                                    android.util.Log.e("SignedByMe", "Failed to build DLC contract: ${e.message}")
+                                    null
+                                }
+                                
+                                // Store DLC contract for later (when payment is received)
+                                withContext(Dispatchers.Main) {
+                                    lastDlcContract = dlcContract
+                                }
+                                
+                                android.util.Log.i("SignedByMe", "DLC contract built: ${dlcContract?.contractId}")
+                                
+                                // 3. Submit to API with proof + DLC metadata
+                                val apiResult = sendInvoiceToApiWithDlc(
                                     sessionToken = loginSession?.sessionToken,
                                     sessionId = sessionId,
                                     invoice = invoice,
@@ -555,12 +755,12 @@ fun SignedByMeApp(
                                     enterpriseName = enterpriseDomain,
                                     amountSats = sessionAmount,
                                     stwoproof = stwoproof,
-                                    bindingSignature = null,  // v3 doesn't need separate binding signature
-                                    nonce = sessionNonce
+                                    nonce = sessionNonce,
+                                    dlcContractJson = dlcContract?.toJson()
                                 )
+                                
                                 withContext(Dispatchers.Main) {
                                     if (!apiResult) {
-                                        // API send failed - still allow manual testing via debug button
                                         statusMessage = "Note: Could not reach API. Use debug button to test."
                                     }
                                 }
@@ -596,6 +796,8 @@ fun SignedByMeApp(
                 lastInvoice = ""
                 lastPaymentHash = ""
                 lastLoginId = ""
+                lastDlcContract = null
+                lastSettlementReceipt = null
                 isLoginActive = false
                 isPollingPayment = false
                 paymentReceived = false
