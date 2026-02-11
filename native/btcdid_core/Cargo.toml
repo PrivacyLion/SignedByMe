@@ -49,7 +49,7 @@ serde_json = "1.0"
 
 [features]
 default = []
-real-stwo = ["stwo", "stwo-constraint-framework", "itertools", "num-traits", "tracing", "bincode", "base64"]
+real-stwo = ["stwo", "stwo-constraint-framework", "itertools", "num-traits", "tracing", "bincode"]
 
 [profile.release]
 opt-level = "z"
