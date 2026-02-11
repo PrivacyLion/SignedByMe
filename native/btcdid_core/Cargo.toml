@@ -11,6 +11,10 @@ name = "stwo_verifier"
 path = "src/bin/stwo_verifier.rs"
 required-features = ["real-stwo"]
 
+[[bin]]
+name = "membership_verifier"
+path = "src/bin/membership_verifier.rs"
+
 [dependencies]
 # JNI for Android
 jni = "0.21"

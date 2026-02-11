@@ -363,12 +363,22 @@ def start_login_session(
     )
 
 
+import subprocess
+
+# Path to the membership verifier binary
+MEMBERSHIP_VERIFIER_PATH = Path(__file__).resolve().parents[2] / "bin" / "membership_verifier"
+
+
+def has_membership_verifier() -> bool:
+    """Check if the membership verifier binary is available."""
+    return MEMBERSHIP_VERIFIER_PATH.exists() and os.access(MEMBERSHIP_VERIFIER_PATH, os.X_OK)
+
+
 def verify_membership_proof(
     proof: str,
     root: str,
     binding_hash: bytes,
-    hash_alg: str,
-    depth: int,
+    purpose_id: int,
 ) -> bool:
     """
     Verify Merkle membership proof.
@@ -378,12 +388,48 @@ def verify_membership_proof(
     2. MerkleVerify(leaf, path, root) == true
     3. binding_hash is correctly incorporated
     
-    STUB: Returns False until circuit is implemented.
-    No "accept all" bypass - this is a real verification failure.
+    Calls the Rust membership_verifier binary via subprocess.
     """
-    # TODO: Call Rust verifier when circuit is ready
-    print(f"Membership proof verification stub: returning False (root={root[:20]}...)")
-    return False
+    if not has_membership_verifier():
+        print(f"Membership verifier not found at {MEMBERSHIP_VERIFIER_PATH}, returning False")
+        return False
+    
+    # Build request JSON
+    request_data = {
+        "proof": proof,
+        "root": root,
+        "binding_hash": binding_hash.hex(),
+        "purpose_id": purpose_id,
+    }
+    
+    try:
+        result = subprocess.run(
+            [str(MEMBERSHIP_VERIFIER_PATH)],
+            input=json.dumps(request_data),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+        
+        if result.returncode == 0 and stdout == "VALID":
+            print(f"Membership proof VALID")
+            return True
+        elif result.returncode == 1 and stdout == "INVALID":
+            print(f"Membership proof INVALID")
+            return False
+        else:
+            print(f"Membership verification error: {stderr or stdout}")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        print("Membership verification timed out")
+        return False
+    except Exception as e:
+        print(f"Membership verification exception: {e}")
+        return False
 
 
 @router.post("/v1/login/invoice", response_model=LoginInvoiceResponse)
@@ -545,8 +591,7 @@ def submit_invoice(body: LoginInvoiceRequest):
             proof=body.membership.proof,
             root=canonical_root["root"],
             binding_hash=binding_hash,
-            hash_alg=canonical_root.get("hash_alg", "poseidon"),
-            depth=canonical_root.get("depth", 20),
+            purpose_id=purpose_id,
         )
         
         if membership_verified:
