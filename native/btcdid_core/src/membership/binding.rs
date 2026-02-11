@@ -13,8 +13,8 @@ use sha2::{Sha256, Digest};
 /// Schema version for v4 binding
 pub const SCHEMA_VERSION_V4: u8 = 4;
 
-/// Domain separator (24 bytes)
-pub const DOMAIN_SEPARATOR_V4: &[u8; 24] = b"signedby.me:identity:v4";
+/// Domain separator (23 bytes, will be padded to 24 in hash)
+pub const DOMAIN_SEPARATOR_V4: &[u8] = b"signedby.me:identity:v4";
 
 /// Hash a string field with prefix for domain separation.
 /// Matches Python: hashlib.sha256(f"{prefix}:{value}".encode()).digest()

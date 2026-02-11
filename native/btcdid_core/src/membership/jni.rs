@@ -105,12 +105,14 @@ pub extern "system" fn Java_com_signedby_me_NativeBridge_proveMembership<'local>
     
     match result {
         Ok(data) => {
-            env.byte_array_from_slice(&data)
-                .unwrap_or_else(|_| JObject::null().into_raw())
+            match env.byte_array_from_slice(&data) {
+                Ok(arr) => arr.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            }
         }
         Err(e) => {
             let _ = env.throw_new("java/lang/RuntimeException", e);
-            JObject::null().into_raw()
+            std::ptr::null_mut()
         }
     }
 }
@@ -245,12 +247,14 @@ pub extern "system" fn Java_com_signedby_me_NativeBridge_computeBindingHashV4<'l
     
     match result {
         Ok(hash) => {
-            env.byte_array_from_slice(&hash)
-                .unwrap_or_else(|_| JObject::null().into_raw())
+            match env.byte_array_from_slice(&hash) {
+                Ok(arr) => arr.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            }
         }
         Err(e) => {
             let _ = env.throw_new("java/lang/RuntimeException", e);
-            JObject::null().into_raw()
+            std::ptr::null_mut()
         }
     }
 }
