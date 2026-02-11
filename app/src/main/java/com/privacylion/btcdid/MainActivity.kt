@@ -105,7 +105,8 @@ class MainActivity : FragmentActivity() {
             
             // Legacy flow: separate parameters (for backwards compatibility)
             val sessionId = uri.getQueryParameter("session")
-            val employer = uri.getQueryParameter("employer")  // Keep "employer" param for backwards compat
+            val enterprise = uri.getQueryParameter("enterprise") 
+                ?: uri.getQueryParameter("employer")  // Fallback for old QR codes
             val amountStr = uri.getQueryParameter("amount")
             val amount = amountStr?.toULongOrNull() ?: 100UL
             // v3 parameters
@@ -113,11 +114,11 @@ class MainActivity : FragmentActivity() {
             val expiresStr = uri.getQueryParameter("expires")
             val expiresAt = expiresStr?.toLongOrNull()
             
-            if (sessionId != null && employer != null) {
+            if (sessionId != null && enterprise != null) {
                 return LoginSession(
                     sessionToken = null,
                     sessionId = sessionId,
-                    enterpriseName = employer,  // Map to enterpriseName internally
+                    enterpriseName = enterprise,
                     amountSats = amount,
                     nonce = nonce,
                     expiresAt = expiresAt
@@ -216,7 +217,7 @@ private fun sendInvoiceToApi(
             } else {
                 // Legacy API fallback
                 put("session_id", sessionId)
-                put("employer", enterpriseName)  // API expects "employer" not "enterprise"
+                put("enterprise", enterpriseName)
             }
             put("invoice", invoice)
             put("did", did)
@@ -346,7 +347,7 @@ private fun sendInvoiceToApiWithDlc(
                 put("session_token", sessionToken)
             } else {
                 put("session_id", sessionId)
-                put("employer", enterpriseName)
+                put("enterprise", enterpriseName)
             }
             put("invoice", invoice)
             put("did", did)
@@ -2039,7 +2040,7 @@ fun LoginScreen(
         QrScannerDialog(
             onQrScanned = { qrContent ->
                 showQrScanner = false
-                // Parse the QR content - supports both new (token=) and legacy (session=&employer=) formats
+                // Parse the QR content - supports both new (token=) and legacy (session=&enterprise=) formats
                 try {
                     val uri = android.net.Uri.parse(qrContent)
                     
@@ -2069,9 +2070,10 @@ fun LoginScreen(
                         }
                     }
                     
-                    // Legacy flow: session + employer parameters
+                    // Legacy flow: session + enterprise parameters
                     val sessionId = uri.getQueryParameter("session")
-                    val employer = uri.getQueryParameter("employer")  // Keep "employer" for backwards compat
+                    val enterprise = uri.getQueryParameter("enterprise")
+                        ?: uri.getQueryParameter("employer")  // Fallback for old QR codes
                     val amountStr = uri.getQueryParameter("amount")
                     val amount = amountStr?.toULongOrNull() ?: 100UL
                     // v3 parameters
@@ -2079,11 +2081,11 @@ fun LoginScreen(
                     val expiresStr = uri.getQueryParameter("expires")
                     val expiresAt = expiresStr?.toLongOrNull()
                     
-                    if (sessionId != null && employer != null) {
+                    if (sessionId != null && enterprise != null) {
                         onLoginSessionReceived(LoginSession(
                             sessionToken = null,
                             sessionId = sessionId,
-                            enterpriseName = employer,
+                            enterpriseName = enterprise,
                             amountSats = amount,
                             nonce = nonce,
                             expiresAt = expiresAt

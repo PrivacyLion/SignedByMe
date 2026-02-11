@@ -111,7 +111,7 @@ class LoginInvoiceRequest(BaseModel):
     session_id: str = Field(..., description="Session ID from QR/deep link")
     invoice: str = Field(..., description="BOLT11 Lightning invoice")
     did: str = Field(..., description="User's DID (did:btcr:...)")
-    employer: str = Field(..., description="Employer name/domain (informational)")
+    enterprise: str = Field(..., description="Enterprise name/domain (informational)")
     amount_sats: Optional[int] = Field(None, description="Expected payment amount in sats")
     stwo_proof: Optional[str] = Field(None, description="STWO identity proof JSON")
     binding_signature: Optional[str] = Field(None, description="Signature binding proof to payment (legacy)")
@@ -136,11 +136,11 @@ class LoginInvoiceResponse(BaseModel):
 
 
 class SessionStatusResponse(BaseModel):
-    """Session status for employer polling"""
+    """Session status for enterprise polling"""
     session_id: str
     invoice: Optional[str] = None
     did: Optional[str] = None
-    employer: str
+    enterprise: str
     verified: bool  # STWO + binding verified
     paid: bool
     schema_version: int = 2
@@ -152,7 +152,7 @@ class SessionStatusResponse(BaseModel):
     session_token: Optional[str] = None  # JWT for enterprise after verification
     created_at: int
     paid_at: Optional[int] = None
-    # NEW: Membership status (exposed to employer)
+    # NEW: Membership status (exposed to enterprise)
     membership_verified: bool = False
     membership_purpose: Optional[str] = None
     membership_root_id: Optional[str] = None
@@ -160,7 +160,7 @@ class SessionStatusResponse(BaseModel):
 
 class LoginStartRequest(BaseModel):
     """Request to start a new login session"""
-    employer: str = Field(..., description="Employer name/domain")
+    enterprise: str = Field(..., description="Enterprise name/domain")
     amount_sats: int = Field(500, description="Payment amount in sats")
     expiry_minutes: int = Field(5, description="Session expiry in minutes")
     # NEW: Optional required membership
@@ -171,7 +171,7 @@ class LoginStartResponse(BaseModel):
     """Response with session details for QR/deep link"""
     session_id: str
     nonce: str  # 16 bytes hex (32 chars)
-    employer: str
+    enterprise: str
     # NEW: Required membership info (if any)
     required_root_id: Optional[str] = None
     amount_sats: int
@@ -316,7 +316,7 @@ def start_login_session(
     # Build deep link URL
     qr_parts = [
         f"signedby.me://login?session={session_id}",
-        f"employer={body.employer}",
+        f"enterprise={body.enterprise}",
         f"amount={body.amount_sats}",
         f"nonce={nonce}",
         f"expires={expires_at}",
@@ -330,7 +330,7 @@ def start_login_session(
         "session_id": session_id,
         "client_id": client_id,  # Track which enterprise owns this session
         "nonce": nonce,
-        "employer": body.employer,
+        "enterprise": body.enterprise,
         "amount_sats": body.amount_sats,
         "expires_at": expires_at,
         "required_root_id": required_root_id,  # NEW: Required membership root
@@ -356,7 +356,7 @@ def start_login_session(
         session_id=session_id,
         nonce=nonce,
         required_root_id=required_root_id,
-        employer=body.employer,
+        enterprise=body.enterprise,
         amount_sats=body.amount_sats,
         expires_at=expires_at,
         qr_data=qr_data,
@@ -445,11 +445,11 @@ def submit_invoice(body: LoginInvoiceRequest):
     - nonce (prevents replay attacks)
     
     For v4+ with membership:
-    - client_id binding (prevents cross-employer replay)
+    - client_id binding (prevents cross-enterprise replay)
     - session_id binding (prevents cross-session replay)
     - root_id binding (ties membership to session)
     
-    The employer will poll /v1/login/session/{session_id} to get the invoice
+    The enterprise will poll /v1/login/session/{session_id} to get the invoice
     and check verification/payment status.
     """
     stwo_verified = False
@@ -484,7 +484,7 @@ def submit_invoice(body: LoginInvoiceRequest):
     if server_client_id:
         clients = load_clients()
         client_config = clients.get(server_client_id, {})
-    server_ea_domain = client_config.get("ea_domain", body.employer)
+    server_ea_domain = client_config.get("ea_domain", body.enterprise)
     
     # === Membership Setup ===
     purpose_id = PURPOSE_NONE
@@ -492,7 +492,7 @@ def submit_invoice(body: LoginInvoiceRequest):
     canonical_root = None
     
     if body.membership:
-        # Check if employer required a specific root
+        # Check if enterprise required a specific root
         if required_root_id and body.membership.root_id != required_root_id:
             raise HTTPException(
                 400, 
@@ -520,7 +520,7 @@ def submit_invoice(body: LoginInvoiceRequest):
         root_id_for_hash = body.membership.root_id
     
     elif required_root_id:
-        # Employer required membership but user didn't provide it
+        # Enterprise required membership but user didn't provide it
         raise HTTPException(400, f"Membership proof required for root_id: {required_root_id}")
     
     # Extract payment hash from invoice
@@ -636,7 +636,7 @@ def submit_invoice(body: LoginInvoiceRequest):
         "invoice": body.invoice,
         "payment_hash": payment_hash,
         "did": body.did,
-        "employer": body.employer,
+        "enterprise": body.enterprise,
         "amount_sats": body.amount_sats,
         "user_amount_sats": user_amount_sats,
         "operator_amount_sats": operator_amount_sats,
@@ -690,7 +690,7 @@ def submit_invoice(body: LoginInvoiceRequest):
     )
 
 
-def generate_session_token(session_id: str, did: str, employer: str) -> str:
+def generate_session_token(session_id: str, did: str, enterprise: str) -> str:
     """Generate a JWT session token for the enterprise after successful login."""
     import base64
     header = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').decode().rstrip('=')
@@ -698,7 +698,7 @@ def generate_session_token(session_id: str, did: str, employer: str) -> str:
     payload_data = {
         "session_id": session_id,
         "did": did,
-        "employer": employer,
+        "enterprise": enterprise,
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600,  # 1 hour expiry
         "verified": True
@@ -718,7 +718,7 @@ def get_session(
     x_api_key: str = Header(..., alias="X-API-Key")
 ):
     """
-    Get session status for employer polling.
+    Get session status for enterprise polling.
     Returns invoice, DID, verification status, payment status.
     
     Requires X-API-Key header. Only returns data to the enterprise that created the session.
@@ -748,7 +748,7 @@ def get_session(
             session_id=session_id,
             invoice=invoice,  # Only populated if verified
             did=session.get("did", ""),
-            employer=session["employer"],
+            enterprise=session["enterprise"],
             verified=session.get("stwo_verified", False) and session.get("binding_verified", False),
             paid=session.get("paid", False),
             schema_version=session.get("schema_version", 2),
@@ -975,21 +975,21 @@ def confirm_payment(
 
 
 @router.get("/v1/login/sessions")
-def list_sessions(employer: str = None, limit: int = 50):
+def list_sessions(enterprise: str = None, limit: int = 50):
     """
     List recent login sessions (admin/debug endpoint).
-    Optionally filter by employer.
+    Optionally filter by enterprise.
     """
     results = []
     with shelve.open(SESSIONS_DB) as sessions:
         for key in list(sessions.keys())[-limit:]:
             session = sessions[key]
-            if employer and session.get("employer") != employer:
+            if enterprise and session.get("enterprise") != enterprise:
                 continue
             results.append({
                 "session_id": key,
                 "did": session.get("did", ""),
-                "employer": session.get("employer", ""),
+                "enterprise": session.get("enterprise", ""),
                 "verified": session.get("stwo_verified", False) and session.get("binding_verified", False),
                 "dlc_verified": session.get("dlc_verified", False),
                 "contract_id": session.get("contract_id"),

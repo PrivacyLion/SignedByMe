@@ -392,7 +392,7 @@ class DidWalletManager(private val context: Context) {
      * - Expiry timestamp bound into hash (prevents extension)
      * 
      * @param walletAddress The user's wallet address
-     * @param paymentHashHex The payment hash from the employer's invoice (32 bytes hex)
+     * @param paymentHashHex The payment hash from the enterprise's invoice (32 bytes hex)
      * @param amountSats The payment amount in satoshis
      * @param eaDomain The enterprise/RP domain (e.g., "acmecorp.com")
      * @param nonceHex Session nonce from QR/deep link (16 bytes hex = 32 chars)
@@ -455,7 +455,7 @@ class DidWalletManager(private val context: Context) {
      * Use generateLoginProofV3 for new deployments with full security bindings.
      * 
      * @param walletAddress The user's wallet address
-     * @param paymentHashHex The payment hash from the employer's invoice (32 bytes hex)
+     * @param paymentHashHex The payment hash from the enterprise's invoice (32 bytes hex)
      * @param expiryDays How many days until the proof expires (default: 1 for login)
      * @return JSON with the real STWO proof, or falls back to mock if real STWO unavailable
      */
