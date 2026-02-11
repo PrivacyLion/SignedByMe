@@ -14,6 +14,7 @@ pub mod dlc_builder;
 pub mod stwo_prover;
 pub mod lightning;
 pub mod dlc_oracle; // Keep for backwards compatibility
+pub mod membership; // Merkle membership proofs
 
 // Real STWO module (only when feature enabled)
 #[cfg(feature = "real-stwo")]
