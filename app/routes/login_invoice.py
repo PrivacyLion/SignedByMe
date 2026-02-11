@@ -120,8 +120,8 @@ class LoginInvoiceResponse(BaseModel):
 class SessionStatusResponse(BaseModel):
     """Session status for employer polling"""
     session_id: str
-    invoice: str
-    did: str
+    invoice: Optional[str] = None
+    did: Optional[str] = None
     employer: str
     verified: bool  # STWO + binding verified
     paid: bool
