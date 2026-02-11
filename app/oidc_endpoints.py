@@ -224,6 +224,11 @@ async def oidc_token_code_grant(
     
     # Check if this is a SignedByMe login flow
     if rec.get("signedby"):
+        # Build AMR (authentication methods reference)
+        amr = ["did_sig", "stwo_proof", "ln_payment"]
+        if rec.get("membership_verified"):
+            amr.append("merkle")
+        
         # SignedByMe flow: use DID as subject, include payment claims
         claims = {
             "iss": ISSUER,
@@ -233,13 +238,20 @@ async def oidc_token_code_grant(
             "exp": exp,
             "nonce": rec.get("nonce", ""),
             "sid": rec.get("signedby_session_id", ""),
-            "amr": ["did_sig", "stwo_proof", "ln_payment"],
+            "amr": amr,
             # SignedByMe-specific claims (namespaced)
             "https://signedby.me/claims/attestation_hash": rec.get("audit_hash", ""),
             "https://signedby.me/claims/payment_verified": True,
             "https://signedby.me/claims/payment_hash": rec.get("payment_hash", ""),
             "https://signedby.me/claims/amount_sats": rec.get("amount_sats", 0),
+            # Membership claims (only if verified)
+            "https://signedby.me/claims/membership_verified": rec.get("membership_verified", False),
         }
+        
+        # Add membership details only if verified
+        if rec.get("membership_verified"):
+            claims["https://signedby.me/claims/membership_purpose"] = rec.get("membership_purpose")
+            claims["https://signedby.me/claims/membership_root_id"] = rec.get("membership_root_id")
     else:
         # Standard OIDC flow (existing behavior)
         sub_material = f"{rec['client_id']}|{rec.get('rp_domain', '')}|{rec['nonce']}".encode()
