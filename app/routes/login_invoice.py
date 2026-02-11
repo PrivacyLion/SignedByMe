@@ -882,6 +882,10 @@ def confirm_payment(
         if session.get("client_id") != client_id:
             raise HTTPException(403, "Not authorized to confirm this session")
         
+        # Verify session not expired
+        if session.get("expires_at", 0) > 0 and int(time.time()) > session["expires_at"]:
+            raise HTTPException(400, "Session expired")
+        
         # Verify session is verified (STWO proof passed)
         if not (session.get("stwo_verified") and session.get("binding_verified")):
             raise HTTPException(400, "Session not verified - waiting for user proof")
