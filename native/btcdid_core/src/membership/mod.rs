@@ -15,6 +15,7 @@ pub mod binding;
 pub mod poseidon;
 pub mod merkle;
 pub mod proof;
+pub mod jni;
 
 pub use binding::{compute_binding_hash_v4, hash_field, SCHEMA_VERSION_V4, DOMAIN_SEPARATOR_V4};
 pub use poseidon::{poseidon_hash_pair, poseidon_hash_bytes, PoseidonHasher};
