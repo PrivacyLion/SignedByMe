@@ -1,14 +1,18 @@
 """
 Membership enrollment and tree management.
 
-Model C (Hybrid):
-- allowlist (purpose=1): Enterprise-managed, scoped to client_id
-- issuer_batch (purpose=2): SignedByMe-managed, global
-- revocation (purpose=3): Issuer-managed
+NOTE: These endpoints are GATED behind INTERNAL_ADMIN_ONLY flag.
+Production architecture is "enterprise-built trees" where:
+- Enterprises collect commitments directly from users
+- Enterprises build trees locally with CLI
+- Enterprises publish only roots to /v1/roots
 
-Privacy principle: Never store leaf_commitment long-term as a queryable identifier.
-We store commitments only in the "pending" phase, then they go into the tree and 
-the pending record is deleted. The tree itself doesn't expose which leaf is which user.
+These endpoints exist for:
+- Internal testing
+- Dev/debug workflows  
+- Potential future "managed mode"
+
+Set SBM_INTERNAL_ADMIN=true to enable these endpoints.
 """
 
 import os
@@ -23,6 +27,9 @@ from pydantic import BaseModel, Field
 
 router = APIRouter(tags=["membership"])
 
+# Feature flag - these endpoints are internal-only by default
+INTERNAL_ADMIN_ONLY = os.getenv("SBM_INTERNAL_ADMIN", "").lower() in ("true", "1", "yes")
+
 # Storage paths
 DATA_DIR = Path(__file__).resolve().parents[2]
 ENROLLMENTS_FILE = DATA_DIR / "enrollments.json"
@@ -30,6 +37,16 @@ ROOTS_FILE = DATA_DIR / "roots.json"
 
 # Admin API key (separate from enterprise keys)
 ADMIN_API_KEY = os.getenv("SBM_ADMIN_KEY", "sbm_admin_dev_key")
+
+
+def require_internal_enabled():
+    """Check if internal admin endpoints are enabled."""
+    if not INTERNAL_ADMIN_ONLY:
+        raise HTTPException(
+            403, 
+            "Internal admin endpoints disabled. Set SBM_INTERNAL_ADMIN=true to enable. "
+            "Production architecture uses enterprise-built trees."
+        )
 
 
 def load_enrollments() -> dict:
@@ -154,11 +171,11 @@ def enroll_member(body: EnrollRequest):
     """
     Submit a leaf commitment for membership enrollment.
     
-    For allowlist purpose: Goes to pending queue, requires enterprise admin approval.
-    For issuer_batch: Auto-approved (SignedByMe controls issuance).
-    
-    Privacy: Commitment is stored temporarily until tree is built, then deleted.
+    GATED: Requires SBM_INTERNAL_ADMIN=true.
+    Production uses enterprise-built trees (commitments collected by enterprise, not SBM).
     """
+    require_internal_enabled()
+    
     # Validate commitment format
     try:
         commitment_bytes = bytes.fromhex(body.leaf_commitment)
@@ -216,10 +233,9 @@ def list_enrollments(
     """
     List enrollments (admin only).
     
-    Optional filters:
-    - purpose: Filter by purpose (allowlist, issuer_batch, revocation)
-    - status: Filter by status (pending, approved)
+    GATED: Requires SBM_INTERNAL_ADMIN=true.
     """
+    require_internal_enabled()
     validate_admin_key(x_admin_key)
     
     data = load_enrollments()
@@ -248,8 +264,9 @@ def approve_enrollments(
     """
     Approve pending enrollments (admin only).
     
-    Moves enrollments from pending to approved queue.
+    GATED: Requires SBM_INTERNAL_ADMIN=true.
     """
+    require_internal_enabled()
     validate_admin_key(x_admin_key)
     
     data = load_enrollments()
@@ -340,11 +357,10 @@ def build_tree(
     """
     Build a Merkle tree from approved enrollments and publish the root.
     
-    For allowlist: Requires client_id to scope the tree to an enterprise.
-    For issuer_batch: Global tree (no client_id).
-    
-    This consumes approved enrollments (deletes them after tree is built).
+    GATED: Requires SBM_INTERNAL_ADMIN=true.
+    Production uses enterprise-built trees (CLI tool).
     """
+    require_internal_enabled()
     validate_admin_key(x_admin_key)
     
     # Validate purpose
@@ -447,7 +463,12 @@ def delete_enrollment(
     enrollment_id: str,
     x_admin_key: str = Header(..., alias="X-Admin-Key")
 ):
-    """Delete a pending or approved enrollment (admin only)."""
+    """
+    Delete a pending or approved enrollment (admin only).
+    
+    GATED: Requires SBM_INTERNAL_ADMIN=true.
+    """
+    require_internal_enabled()
     validate_admin_key(x_admin_key)
     
     data = load_enrollments()

@@ -172,8 +172,10 @@ class LoginStartResponse(BaseModel):
     session_id: str
     nonce: str  # 16 bytes hex (32 chars)
     enterprise: str
-    # NEW: Required membership info (if any)
-    required_root_id: Optional[str] = None
+    client_id: str  # For mobile to fetch correct roots
+    # Membership info (always present for Pattern A)
+    required_root_id: Optional[str] = None  # The specific root to prove against
+    purpose_id: int = 0  # 0=none, 1=allowlist, 2=issuer_batch, 3=revocation
     amount_sats: int
     expires_at: int
     qr_data: str  # Deep link URL
@@ -313,16 +315,29 @@ def start_login_session(
     # Determine required root (explicit > client default > none)
     required_root_id = body.required_root_id or client_config.get("default_root_id")
     
-    # Build deep link URL
+    # Resolve purpose_id from root (Pattern A: always provide required_root_id)
+    purpose_id = 0
+    if required_root_id:
+        from .roots import get_canonical_root
+        root_info = get_canonical_root(required_root_id, client_id)
+        if root_info:
+            purpose_id = root_info.get("purpose_id", 0)
+        else:
+            # Root not found or doesn't belong to this client
+            raise HTTPException(400, f"Invalid or inaccessible root_id: {required_root_id}")
+    
+    # Build deep link URL (always include client_id for mobile root fetching)
     qr_parts = [
         f"signedby.me://login?session={session_id}",
         f"enterprise={body.enterprise}",
+        f"client_id={client_id}",  # For mobile to fetch correct roots
         f"amount={body.amount_sats}",
         f"nonce={nonce}",
         f"expires={expires_at}",
     ]
     if required_root_id:
         qr_parts.append(f"root_id={required_root_id}")
+        qr_parts.append(f"purpose_id={purpose_id}")
     qr_data = "&".join(qr_parts)
     
     # Store session (pre-create for polling)
@@ -333,16 +348,17 @@ def start_login_session(
         "enterprise": body.enterprise,
         "amount_sats": body.amount_sats,
         "expires_at": expires_at,
-        "required_root_id": required_root_id,  # NEW: Required membership root
+        "required_root_id": required_root_id,  # Required membership root
+        "required_purpose_id": purpose_id,     # Purpose ID for the required root
         "invoice": None,
         "payment_hash": None,
         "did": None,
         "stwo_verified": False,
         "binding_verified": False,
-        "membership_verified": False,  # NEW
-        "membership_purpose": None,    # NEW
-        "membership_root_id": None,    # NEW
-        "schema_version": 4,  # Updated to v4
+        "membership_verified": False,
+        "membership_purpose": None,
+        "membership_root_id": None,
+        "schema_version": 4,  # v4 binding hash
         "stwo_proof": None,
         "paid": False,
         "created_at": int(time.time()),
@@ -356,7 +372,9 @@ def start_login_session(
         session_id=session_id,
         nonce=nonce,
         required_root_id=required_root_id,
+        purpose_id=purpose_id,
         enterprise=body.enterprise,
+        client_id=client_id,  # For mobile root fetching
         amount_sats=body.amount_sats,
         expires_at=expires_at,
         qr_data=qr_data,
