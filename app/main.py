@@ -32,13 +32,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# v1 routes
+# v1 routes - login_router FIRST to avoid auth.py /login/start conflict
+app.include_router(login_router)  # Login invoice + DLC routes (has /v1 prefix in routes)
+app.include_router(roots_router)  # Merkle root registry
 app.include_router(auth_router, prefix="/v1")
 app.include_router(unlock_router, prefix="/v1")
 app.include_router(claims_router, prefix="/v1")
 app.include_router(enterprise_router)  # Stateless enterprise login (routes have /v1 prefix)
-app.include_router(login_router)  # Login invoice + DLC routes
-app.include_router(roots_router)  # Merkle root registry
 
 @app.get("/healthz")
 def health():
