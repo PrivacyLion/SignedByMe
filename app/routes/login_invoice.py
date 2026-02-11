@@ -24,6 +24,8 @@ import os
 from pathlib import Path
 import shelve
 
+from .roots import get_canonical_root, get_purpose_id, PURPOSE_NONE
+
 router = APIRouter(tags=["login"])
 
 # Storage
@@ -92,17 +94,31 @@ class DlcContractModel(BaseModel):
     script_hash_hex: Optional[str] = None
 
 
+class MembershipBundle(BaseModel):
+    """
+    Membership proof bundle.
+    Client sends root_id only - server looks up canonical root.
+    """
+    purpose: str = Field(..., description="Membership purpose: 'allowlist' | 'issuer_batch'")
+    root_id: str = Field(..., description="Root identifier (server looks up canonical root)")
+    proof: str = Field(..., description="Membership proof (base64-encoded)")
+    # NOTE: No 'root' field - server is authoritative
+    # NOTE: No 'leaf_commitment' - never exposed
+
+
 class LoginInvoiceRequest(BaseModel):
     """Request to submit a login invoice with STWO proof"""
     session_id: str = Field(..., description="Session ID from QR/deep link")
     invoice: str = Field(..., description="BOLT11 Lightning invoice")
     did: str = Field(..., description="User's DID (did:btcr:...)")
-    employer: str = Field(..., description="Employer name/domain")
-    amount_sats: Optional[int] = Field(None, description="Expected payment amount in sats (v3)")
+    employer: str = Field(..., description="Employer name/domain (informational)")
+    amount_sats: Optional[int] = Field(None, description="Expected payment amount in sats")
     stwo_proof: Optional[str] = Field(None, description="STWO identity proof JSON")
     binding_signature: Optional[str] = Field(None, description="Signature binding proof to payment (legacy)")
-    nonce: Optional[str] = Field(None, description="Nonce for replay protection (16 bytes hex for v3)")
+    nonce: Optional[str] = Field(None, description="Nonce for replay protection (16 bytes hex)")
     dlc_contract: Optional[dict] = Field(None, description="DLC contract for 90/10 split")
+    # NEW: Optional membership proof
+    membership: Optional[MembershipBundle] = Field(None, description="Optional membership proof bundle")
 
 
 class LoginInvoiceResponse(BaseModel):
@@ -115,6 +131,8 @@ class LoginInvoiceResponse(BaseModel):
     schema_version: int = 2
     contract_id: Optional[str] = None
     message: Optional[str] = None
+    # NEW: Membership verification result
+    membership_verified: bool = False
 
 
 class SessionStatusResponse(BaseModel):
@@ -134,6 +152,10 @@ class SessionStatusResponse(BaseModel):
     session_token: Optional[str] = None  # JWT for enterprise after verification
     created_at: int
     paid_at: Optional[int] = None
+    # NEW: Membership status (exposed to employer)
+    membership_verified: bool = False
+    membership_purpose: Optional[str] = None
+    membership_root_id: Optional[str] = None
 
 
 class LoginStartRequest(BaseModel):
@@ -141,6 +163,8 @@ class LoginStartRequest(BaseModel):
     employer: str = Field(..., description="Employer name/domain")
     amount_sats: int = Field(500, description="Payment amount in sats")
     expiry_minutes: int = Field(5, description="Session expiry in minutes")
+    # NEW: Optional required membership
+    required_root_id: Optional[str] = Field(None, description="If set, user MUST prove membership against this root")
 
 
 class LoginStartResponse(BaseModel):
@@ -148,6 +172,8 @@ class LoginStartResponse(BaseModel):
     session_id: str
     nonce: str  # 16 bytes hex (32 chars)
     employer: str
+    # NEW: Required membership info (if any)
+    required_root_id: Optional[str] = None
     amount_sats: int
     expires_at: int
     qr_data: str  # Deep link URL
@@ -284,8 +310,20 @@ def start_login_session(
     nonce = generate_nonce()  # 16 bytes hex = 32 chars
     expires_at = int(time.time()) + (body.expiry_minutes * 60)
     
+    # Determine required root (explicit > client default > none)
+    required_root_id = body.required_root_id or client_config.get("default_root_id")
+    
     # Build deep link URL
-    qr_data = f"signedby.me://login?session={session_id}&employer={body.employer}&amount={body.amount_sats}&nonce={nonce}&expires={expires_at}"
+    qr_parts = [
+        f"signedby.me://login?session={session_id}",
+        f"employer={body.employer}",
+        f"amount={body.amount_sats}",
+        f"nonce={nonce}",
+        f"expires={expires_at}",
+    ]
+    if required_root_id:
+        qr_parts.append(f"root_id={required_root_id}")
+    qr_data = "&".join(qr_parts)
     
     # Store session (pre-create for polling)
     session_data = {
@@ -295,12 +333,16 @@ def start_login_session(
         "employer": body.employer,
         "amount_sats": body.amount_sats,
         "expires_at": expires_at,
+        "required_root_id": required_root_id,  # NEW: Required membership root
         "invoice": None,
         "payment_hash": None,
         "did": None,
         "stwo_verified": False,
         "binding_verified": False,
-        "schema_version": 2,
+        "membership_verified": False,  # NEW
+        "membership_purpose": None,    # NEW
+        "membership_root_id": None,    # NEW
+        "schema_version": 4,  # Updated to v4
         "stwo_proof": None,
         "paid": False,
         "created_at": int(time.time()),
@@ -313,6 +355,7 @@ def start_login_session(
     return LoginStartResponse(
         session_id=session_id,
         nonce=nonce,
+        required_root_id=required_root_id,
         employer=body.employer,
         amount_sats=body.amount_sats,
         expires_at=expires_at,
@@ -320,17 +363,45 @@ def start_login_session(
     )
 
 
+def verify_membership_proof(
+    proof: str,
+    root: str,
+    binding_hash: bytes,
+    hash_alg: str,
+    depth: int,
+) -> bool:
+    """
+    Verify Merkle membership proof.
+    
+    The proof must assert:
+    1. Prover knows leaf_secret such that leaf = H(leaf_secret || ...)
+    2. MerkleVerify(leaf, path, root) == true
+    3. binding_hash is correctly incorporated
+    
+    STUB: Returns False until circuit is implemented.
+    No "accept all" bypass - this is a real verification failure.
+    """
+    # TODO: Call Rust verifier when circuit is ready
+    print(f"Membership proof verification stub: returning False (root={root[:20]}...)")
+    return False
+
+
 @router.post("/v1/login/invoice", response_model=LoginInvoiceResponse)
 def submit_invoice(body: LoginInvoiceRequest):
     """
-    Submit a login invoice with STWO proof.
+    Submit a login invoice with STWO proof and optional membership proof.
     
-    For v3 proofs, verifies:
+    For v3+ proofs, verifies:
     - Binding hash integrity (catches any tampering)
     - expires_at (prevents expiry extension)
     - ea_domain (prevents cross-RP replay)
     - amount_sats (prevents payment substitution)
     - nonce (prevents replay attacks)
+    
+    For v4+ with membership:
+    - client_id binding (prevents cross-employer replay)
+    - session_id binding (prevents cross-session replay)
+    - root_id binding (ties membership to session)
     
     The employer will poll /v1/login/session/{session_id} to get the invoice
     and check verification/payment status.
@@ -338,18 +409,73 @@ def submit_invoice(body: LoginInvoiceRequest):
     stwo_verified = False
     binding_verified = False
     schema_version = 2
+    membership_verified = False
+    membership_purpose: Optional[str] = None
+    membership_root_id: Optional[str] = None
     
-    # Load existing session if it exists (from /start)
+    # Load existing session (required for v4)
     with shelve.open(SESSIONS_DB) as sessions:
         existing = sessions.get(body.session_id)
-        if existing:
-            # Verify session hasn't expired
-            if existing.get("expires_at", 0) > 0 and int(time.time()) > existing["expires_at"]:
-                raise HTTPException(400, "Session expired")
-            
-            # Use stored nonce if not provided in request
-            if not body.nonce and existing.get("nonce"):
-                body.nonce = existing["nonce"]
+        if not existing:
+            raise HTTPException(404, "Session not found")
+        
+        # Verify session hasn't expired
+        if existing.get("expires_at", 0) > 0 and int(time.time()) > existing["expires_at"]:
+            raise HTTPException(400, "Session expired")
+        
+        # Use stored nonce if not provided in request
+        if not body.nonce and existing.get("nonce"):
+            body.nonce = existing["nonce"]
+    
+    # Server-authoritative values
+    server_client_id = existing.get("client_id", "")
+    server_nonce = existing.get("nonce", "")
+    server_expires_at = existing.get("expires_at", 0)
+    required_root_id = existing.get("required_root_id")
+    
+    # Get client config for ea_domain (server-derived, not client-supplied)
+    client_config = {}
+    if server_client_id:
+        clients = load_clients()
+        client_config = clients.get(server_client_id, {})
+    server_ea_domain = client_config.get("ea_domain", body.employer)
+    
+    # === Membership Setup ===
+    purpose_id = PURPOSE_NONE
+    root_id_for_hash = ""
+    canonical_root = None
+    
+    if body.membership:
+        # Check if employer required a specific root
+        if required_root_id and body.membership.root_id != required_root_id:
+            raise HTTPException(
+                400, 
+                f"Required root_id is {required_root_id}, got {body.membership.root_id}"
+            )
+        
+        # Server-authoritative root lookup
+        canonical_root = get_canonical_root(body.membership.root_id)
+        if not canonical_root:
+            raise HTTPException(400, f"Unknown or expired root_id: {body.membership.root_id}")
+        
+        # Validate purpose matches
+        if canonical_root["purpose"] != body.membership.purpose:
+            raise HTTPException(
+                400, 
+                f"Purpose mismatch: root expects '{canonical_root['purpose']}', got '{body.membership.purpose}'"
+            )
+        
+        # Check allowed purposes for this client
+        allowed = client_config.get("allowed_purposes", [])
+        if allowed and body.membership.purpose not in allowed:
+            raise HTTPException(400, f"Purpose '{body.membership.purpose}' not allowed for this client")
+        
+        purpose_id = get_purpose_id(body.membership.purpose)
+        root_id_for_hash = body.membership.root_id
+    
+    elif required_root_id:
+        # Employer required membership but user didn't provide it
+        raise HTTPException(400, f"Membership proof required for root_id: {required_root_id}")
     
     # Extract payment hash from invoice
     payment_hash = extract_payment_hash(body.invoice)
@@ -359,8 +485,8 @@ def submit_invoice(body: LoginInvoiceRequest):
         stwo_verified, schema_version, verify_msg = verify_stwo_proof(
             body.stwo_proof,
             body.did,
-            expected_domain=body.employer,  # Pass employer as expected domain
-            expected_amount=body.amount_sats,  # Pass expected amount if provided
+            expected_domain=server_ea_domain,  # Use server-derived domain
+            expected_amount=body.amount_sats,
         )
         
         if stwo_verified:
@@ -387,11 +513,48 @@ def submit_invoice(body: LoginInvoiceRequest):
             did=body.did
         )
     
-    # For v3 proofs, mark nonce as used if binding verified
+    # For v3+ proofs, mark nonce as used if binding verified
     if schema_version >= 3 and binding_verified and body.nonce:
         with shelve.open(NONCES_DB) as nonces:
             if body.nonce not in nonces:
                 nonces[body.nonce] = int(time.time())
+    
+    # === Verify membership proof (if present and STWO passed) ===
+    if body.membership and stwo_verified and binding_verified and canonical_root:
+        # Compute v4 binding hash for membership verification
+        from ..lib.stwo_verify import compute_binding_hash_v4
+        
+        did_pubkey_hex = body.did.replace("did:btcr:", "")
+        did_pubkey = bytes.fromhex(did_pubkey_hex) if did_pubkey_hex else b""
+        
+        binding_hash = compute_binding_hash_v4(
+            did_pubkey=did_pubkey,
+            wallet_address=body.did,
+            client_id=server_client_id,
+            session_id=body.session_id,
+            payment_hash=bytes.fromhex(payment_hash),
+            amount_sats=body.amount_sats or 0,
+            expires_at=server_expires_at,
+            nonce=bytes.fromhex(server_nonce) if server_nonce else b"",
+            ea_domain=server_ea_domain,
+            purpose_id=purpose_id,
+            root_id=root_id_for_hash,
+        )
+        
+        membership_verified = verify_membership_proof(
+            proof=body.membership.proof,
+            root=canonical_root["root"],
+            binding_hash=binding_hash,
+            hash_alg=canonical_root.get("hash_alg", "poseidon"),
+            depth=canonical_root.get("depth", 20),
+        )
+        
+        if membership_verified:
+            membership_purpose = body.membership.purpose
+            membership_root_id = body.membership.root_id
+            print(f"Membership verified: purpose={membership_purpose}, root={membership_root_id}")
+        else:
+            print(f"Membership proof failed for session {body.session_id}")
     
     # Verify DLC contract if provided
     dlc_verified = False
@@ -424,6 +587,7 @@ def submit_invoice(body: LoginInvoiceRequest):
     # Store/update session
     session_data = {
         "session_id": body.session_id,
+        "client_id": server_client_id,
         "invoice": body.invoice,
         "payment_hash": payment_hash,
         "did": body.did,
@@ -433,6 +597,9 @@ def submit_invoice(body: LoginInvoiceRequest):
         "operator_amount_sats": operator_amount_sats,
         "stwo_verified": stwo_verified,
         "binding_verified": binding_verified,
+        "membership_verified": membership_verified,
+        "membership_purpose": membership_purpose,
+        "membership_root_id": membership_root_id,
         "dlc_verified": dlc_verified,
         "contract_id": contract_id,
         "schema_version": schema_version,
@@ -444,17 +611,22 @@ def submit_invoice(body: LoginInvoiceRequest):
         "paid_at": None
     }
     
-    with shelve.open(SESSIONS_DB) as sessions:
-        # Preserve expires_at if session was pre-created
-        existing = sessions.get(body.session_id)
-        if existing and existing.get("expires_at"):
-            session_data["expires_at"] = existing["expires_at"]
+    with shelve.open(SESSIONS_DB, writeback=True) as sessions:
+        # Preserve fields from pre-created session
+        if existing:
+            session_data["expires_at"] = existing.get("expires_at")
+            session_data["required_root_id"] = existing.get("required_root_id")
         sessions[body.session_id] = session_data
     
+    # Build response message
     message = None
     if stwo_verified and binding_verified:
-        if dlc_verified:
+        if membership_verified:
+            message = f"Identity verified with membership (purpose: {membership_purpose})"
+        elif dlc_verified:
             message = f"Identity verified with DLC (90/10 split: {user_amount_sats}/{operator_amount_sats} sats)"
+        elif schema_version >= 4:
+            message = f"Identity cryptographically verified (v4: session/client bound)"
         elif schema_version >= 3:
             message = f"Identity cryptographically verified (v3: amount, domain, expiry bound)"
         else:
@@ -468,7 +640,8 @@ def submit_invoice(body: LoginInvoiceRequest):
         dlc_verified=dlc_verified,
         schema_version=schema_version,
         contract_id=contract_id,
-        message=message
+        message=message,
+        membership_verified=membership_verified,
     )
 
 
@@ -541,7 +714,11 @@ def get_session(
             audit_hash=session.get("audit_hash"),
             session_token=session_token,
             created_at=session["created_at"],
-            paid_at=session.get("paid_at")
+            paid_at=session.get("paid_at"),
+            # NEW: Membership fields
+            membership_verified=session.get("membership_verified", False),
+            membership_purpose=session.get("membership_purpose"),
+            membership_root_id=session.get("membership_root_id"),
         )
 
 
@@ -649,7 +826,7 @@ def confirm_payment(
     Requires X-API-Key header. Only the enterprise that created the session can confirm.
     """
     # Validate API key and get client_id
-    client_id, _ = validate_api_key(x_api_key)
+    client_id, client_config = validate_api_key(x_api_key)
     
     with shelve.open(SESSIONS_DB, writeback=True) as sessions:
         session = sessions.get(session_id)
@@ -663,6 +840,21 @@ def confirm_payment(
         # Verify session is verified (STWO proof passed)
         if not (session.get("stwo_verified") and session.get("binding_verified")):
             raise HTTPException(400, "Session not verified - waiting for user proof")
+        
+        # === NEW: Enforce membership policy ===
+        if client_config.get("require_membership", False):
+            if not session.get("membership_verified"):
+                raise HTTPException(
+                    400, 
+                    "Membership verification required but not provided"
+                )
+            
+            allowed = client_config.get("allowed_purposes", [])
+            if allowed and session.get("membership_purpose") not in allowed:
+                raise HTTPException(
+                    400, 
+                    f"Membership purpose '{session.get('membership_purpose')}' not allowed"
+                )
         
         # Verify session not already paid
         if session.get("paid"):
@@ -714,6 +906,10 @@ def confirm_payment(
             "payment_hash": session.get("payment_hash", ""),
             "amount_sats": session.get("amount_sats"),
             "audit_hash": audit_hash,
+            # NEW: Membership fields
+            "membership_verified": session.get("membership_verified", False),
+            "membership_purpose": session.get("membership_purpose"),
+            "membership_root_id": session.get("membership_root_id"),
         }
     
     print(f"Payment confirmed for session {session_id}: auth_code issued")
