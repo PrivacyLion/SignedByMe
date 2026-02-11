@@ -15,9 +15,12 @@ from typing import Tuple, Optional
 VERIFIER_PATH = Path(__file__).resolve().parents[2] / "bin" / "stwo_verifier"
 
 # Schema version constants
+SCHEMA_VERSION_V2 = 2
 SCHEMA_VERSION_V3 = 3
-DOMAIN_SEPARATOR_V3 = b"signedby.me:identity:v3"
+SCHEMA_VERSION_V4 = 4
 DOMAIN_SEPARATOR_V2 = b"signedby.me:identity:v2"
+DOMAIN_SEPARATOR_V3 = b"signedby.me:identity:v3"
+DOMAIN_SEPARATOR_V4 = b"signedby.me:identity:v4"
 
 
 def has_real_verifier() -> bool:
@@ -104,6 +107,99 @@ def compute_binding_hash_v2(
     hasher.update(wallet_address.encode('utf-8'))
     hasher.update(payment_hash)
     hasher.update(timestamp.to_bytes(8, 'little'))
+    return hasher.digest()
+
+
+def hash_field(prefix: str, value: str) -> bytes:
+    """Hash a string field with prefix for domain separation."""
+    return hashlib.sha256(f"{prefix}:{value}".encode()).digest()
+
+
+def compute_binding_hash_v4(
+    did_pubkey: bytes,
+    wallet_address: str,
+    client_id: str,
+    session_id: str,
+    payment_hash: bytes,
+    amount_sats: int,
+    expires_at: int,
+    nonce: bytes,
+    ea_domain: str,
+    purpose_id: int,
+    root_id: str,
+) -> bytes:
+    """
+    Compute v4 binding hash (circuit-friendly, all fixed-size fields).
+    
+    This is THE canonical binding that:
+    - STWO proof must commit to
+    - Membership proof must commit to
+    - Prevents all replay attacks
+    
+    Layout (283 bytes fixed input):
+        schema_version: u8           = 4                              // 1 byte
+        domain_sep: [u8; 24]         = "signedby.me:identity:v4"      // 24 bytes
+        did_pubkey: [u8; 33]         = compressed secp256k1 pubkey    // 33 bytes
+        wallet_hash: [u8; 32]        = H("wallet:" || wallet_addr)    // 32 bytes
+        client_id_hash: [u8; 32]     = H("client_id:" || client_id)   // 32 bytes
+        session_id_hash: [u8; 32]    = H("session_id:" || session_id) // 32 bytes
+        payment_hash: [u8; 32]       = from invoice                   // 32 bytes
+        amount_sats: u64 LE          = payment amount                 // 8 bytes
+        expires_at: u64 LE           = session expiry                 // 8 bytes
+        nonce: [u8; 16]              = session nonce                  // 16 bytes
+        ea_domain_hash: [u8; 32]     = H("ea_domain:" || domain)      // 32 bytes
+        purpose_id: u8               = 0/1/2/3 enum                   // 1 byte
+        root_id_hash: [u8; 32]       = H("root_id:" || root_id)       // 32 bytes
+                                       or zeros if no membership
+    """
+    hasher = hashlib.sha256()
+    
+    # Schema version (1 byte)
+    hasher.update(bytes([SCHEMA_VERSION_V4]))
+    
+    # Domain separator (24 bytes, padded)
+    domain_sep = DOMAIN_SEPARATOR_V4.ljust(24, b'\x00')[:24]
+    hasher.update(domain_sep)
+    
+    # DID pubkey (33 bytes, padded)
+    did_padded = (did_pubkey + b'\x00' * 33)[:33]
+    hasher.update(did_padded)
+    
+    # Wallet address hash (32 bytes)
+    hasher.update(hash_field("wallet", wallet_address))
+    
+    # Client ID hash (32 bytes)
+    hasher.update(hash_field("client_id", client_id))
+    
+    # Session ID hash (32 bytes)
+    hasher.update(hash_field("session_id", session_id))
+    
+    # Payment hash (32 bytes)
+    payment_padded = (payment_hash + b'\x00' * 32)[:32]
+    hasher.update(payment_padded)
+    
+    # Amount sats (8 bytes LE)
+    hasher.update(amount_sats.to_bytes(8, 'little'))
+    
+    # Expires at (8 bytes LE)
+    hasher.update(expires_at.to_bytes(8, 'little'))
+    
+    # Nonce (16 bytes)
+    nonce_padded = (nonce + b'\x00' * 16)[:16]
+    hasher.update(nonce_padded)
+    
+    # EA domain hash (32 bytes)
+    hasher.update(hash_field("ea_domain", ea_domain))
+    
+    # Purpose ID (1 byte)
+    hasher.update(bytes([purpose_id]))
+    
+    # Root ID hash (32 bytes, zeros if no membership)
+    if root_id:
+        hasher.update(hash_field("root_id", root_id))
+    else:
+        hasher.update(b'\x00' * 32)
+    
     return hasher.digest()
 
 
