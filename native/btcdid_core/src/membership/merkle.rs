@@ -249,4 +249,38 @@ mod tests {
         let wrong_leaf = FieldElement::from_u64(999);
         assert!(!verify_merkle_path(&wrong_leaf, &path, &tree.root));
     }
+
+    #[test]
+    fn test_witness_spec_vector() {
+        // Canonical test vector for WITNESS_SPEC.md
+        // 2 leaves padded to depth 20
+        
+        let leaf_0 = FieldElement::from_u64(1);
+        let leaf_1 = FieldElement::from_u64(2);
+        
+        let tree = MerkleTree::new(vec![leaf_0, leaf_1]);
+        let path = tree.get_path(0);
+        
+        println!("\n=== WITNESS_SPEC Test Vector ===");
+        println!("leaf_0: 0x{:064x}", leaf_0.to_bytes_be().iter().fold(0u128, |acc, &b| (acc << 8) | b as u128));
+        println!("leaf_1: 0x{:064x}", leaf_1.to_bytes_be().iter().fold(0u128, |acc, &b| (acc << 8) | b as u128));
+        println!("root: 0x{:064x}", tree.root.to_bytes_be().iter().fold(0u128, |acc, &b| (acc << 8) | b as u128));
+        println!("depth: {}", path.siblings.len());
+        
+        println!("\nsiblings (leaf→root):");
+        for (i, s) in path.siblings.iter().enumerate() {
+            let bytes = s.hash.to_bytes_be();
+            print!("  [{}]: 0x", i);
+            for b in &bytes { print!("{:02x}", b); }
+            println!(" (is_right={})", s.is_right as u8);
+        }
+        
+        println!("\npath_bits: {:?}", 
+            path.siblings.iter().map(|s| s.is_right as u8).collect::<Vec<_>>()
+        );
+        
+        // Verify
+        assert!(verify_merkle_path(&leaf_0, &path, &tree.root));
+        println!("\n✓ Verification passed");
+    }
 }

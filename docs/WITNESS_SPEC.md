@@ -174,11 +174,73 @@ If `required_root_id` is missing but membership is optional, mobile may:
 
 ## Test Vector
 
-**TODO:** Add a concrete test vector with:
-- `leaf_secret`
-- `leaf_commitment`
-- Small tree (e.g., 4 leaves, padded to 2^20)
-- Full witness JSON
-- Expected root
+### Minimal Tree (2 leaves, padded to depth 20)
 
-This allows CLI/mobile/verifier to independently verify correctness.
+To generate a canonical test vector, run:
+
+```bash
+cd native/btcdid_core
+cargo test test_witness_spec_vector -- --nocapture
+```
+
+**Test Setup:**
+```
+leaf_0 = FieldElement::from_u64(1)  // 0x0000...0001
+leaf_1 = FieldElement::from_u64(2)  // 0x0000...0002
+padding = FieldElement::ZERO        // 0x0000...0000
+
+Tree has 2 real leaves + padding to 2^20 leaves
+```
+
+**Verification Algorithm (pseudocode):**
+```python
+def verify_witness(leaf, siblings, path_bits, expected_root):
+    curr = leaf
+    for i in range(20):
+        if path_bits[i] == 1:  # sibling is RIGHT
+            curr = poseidon(curr, siblings[i])
+        else:                   # sibling is LEFT
+            curr = poseidon(siblings[i], curr)
+    return curr == expected_root
+```
+
+**Self-Test Script:**
+
+Create `scripts/verify_witness.py`:
+```python
+#!/usr/bin/env python3
+"""Verify a witness against a root using the spec's algorithm."""
+import json
+import sys
+
+def verify(witness_path, leaf_commitment_hex):
+    with open(witness_path) as f:
+        w = json.load(f)
+    
+    # Your Poseidon implementation here
+    # curr = leaf_commitment
+    # for i in range(20):
+    #     if w["path_bits"][i] == 1:
+    #         curr = poseidon(curr, w["siblings"][i])
+    #     else:
+    #         curr = poseidon(w["siblings"][i], curr)
+    # return curr == expected_root
+    pass
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print("Usage: verify_witness.py <witness.json> <leaf_commitment_hex>")
+        sys.exit(1)
+    verify(sys.argv[1], sys.argv[2])
+```
+
+### Interop Test
+
+Before mobile release, run this end-to-end check:
+
+1. **CLI:** Generate tree with 3 test commitments → `root.json` + `witnesses/`
+2. **Server:** Publish root via `POST /v1/roots`
+3. **Rust:** Load witness, call `verify_merkle_path()` → must return true
+4. **Mobile (emulator):** Load same witness, call JNI `verifyMembership()` → must return true
+
+All four must agree on the same root.
