@@ -9,7 +9,8 @@
       "depth": 20,
       "not_before": 0,
       "expires_at": 2000000000,
-      "description": "Development allowlist"
+      "description": "Development allowlist",
+      "client_id": "acme"
     }
   ]
 }
