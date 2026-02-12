@@ -315,6 +315,13 @@ def start_login_session(
     # Determine required root (explicit > client default > none)
     required_root_id = body.required_root_id or client_config.get("default_root_id")
     
+    # INVARIANT: If client requires membership, a root MUST be resolvable
+    if client_config.get("require_membership", False) and not required_root_id:
+        raise HTTPException(
+            400, 
+            f"Client {client_id} has require_membership=true but no root_id provided and no default_root_id configured"
+        )
+    
     # Resolve purpose_id from root (Pattern A: always provide required_root_id)
     purpose_id = 0
     if required_root_id:
@@ -517,10 +524,10 @@ def submit_invoice(body: LoginInvoiceRequest):
                 f"Required root_id is {required_root_id}, got {body.membership.root_id}"
             )
         
-        # Server-authoritative root lookup
-        canonical_root = get_canonical_root(body.membership.root_id)
+        # Server-authoritative root lookup (scoped to session's client_id to prevent cross-client confusion)
+        canonical_root = get_canonical_root(body.membership.root_id, server_client_id)
         if not canonical_root:
-            raise HTTPException(400, f"Unknown or expired root_id: {body.membership.root_id}")
+            raise HTTPException(400, f"Unknown or inaccessible root_id: {body.membership.root_id}")
         
         # Validate purpose matches
         if canonical_root["purpose"] != body.membership.purpose:

@@ -287,7 +287,13 @@ def add_root_admin(body: RootEntry):
     
     Requires X-Admin-Key header. Use for dev/testing.
     This endpoint allows specifying client_id directly.
+    
+    INVARIANT: depth must be 20 (standardized).
     """
+    # Enforce depth=20 standard (same as enterprise endpoint)
+    if body.depth != 20:
+        raise HTTPException(400, f"depth must be 20 (got {body.depth}). Pad tree with zero leaves if needed.")
+    
     roots = load_roots()
     
     # Check for duplicate
