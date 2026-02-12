@@ -18,7 +18,7 @@ pub mod proof;
 pub mod jni;
 
 pub use binding::{compute_binding_hash_v4, hash_field, SCHEMA_VERSION_V4, DOMAIN_SEPARATOR_V4};
-pub use poseidon::{poseidon_hash_pair, poseidon_hash_bytes, PoseidonHasher};
+pub use poseidon::{poseidon_hash_pair, poseidon_hash_bytes, PoseidonHasher, FieldElement};
 pub use merkle::{MerkleTree, MerklePath, PathSibling, verify_merkle_path};
 pub use proof::{MembershipProof, MembershipPublicInputs, MembershipWitness, prove_membership, verify_membership};
 

@@ -113,14 +113,26 @@ pub struct MerkleTree {
 }
 
 impl MerkleTree {
-    /// Build tree from leaf values
+    /// Build tree from leaf values (pads to next power of 2)
     pub fn new(leaves: Vec<FieldElement>) -> Self {
-        assert!(!leaves.is_empty(), "cannot build empty tree");
-        
-        // Pad to power of 2
         let size = leaves.len().next_power_of_two();
+        Self::with_size(leaves, size)
+    }
+    
+    /// Build tree with specific depth (pads to 2^depth leaves)
+    pub fn with_depth(leaves: Vec<FieldElement>, depth: usize) -> Self {
+        let size = 1usize << depth;
+        Self::with_size(leaves, size)
+    }
+    
+    /// Build tree with specific target size
+    fn with_size(leaves: Vec<FieldElement>, target_size: usize) -> Self {
+        assert!(!leaves.is_empty(), "cannot build empty tree");
+        assert!(leaves.len() <= target_size, "too many leaves for target size");
+        
+        // Pad to target size
         let mut padded = leaves.clone();
-        padded.resize(size, FieldElement::ZERO);
+        padded.resize(target_size, FieldElement::ZERO);
         
         // Build layers bottom-up
         let mut layers = vec![padded];

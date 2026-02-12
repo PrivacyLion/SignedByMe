@@ -15,7 +15,13 @@ required-features = ["real-stwo"]
 name = "membership_verifier"
 path = "src/bin/membership_verifier.rs"
 
+[[bin]]
+name = "sbm_tree"
+path = "src/bin/sbm_tree.rs"
+
 [dependencies]
+# CLI argument parsing
+clap = { version = "4.4", features = ["derive"] }
 # JNI for Android
 jni = "0.21"
 anyhow = "1"
