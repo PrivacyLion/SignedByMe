@@ -175,7 +175,7 @@ data class LoginSession(
 )
 
 // API Configuration
-private const val API_BASE_URL = "https://api.beta.privacy-lion.com"
+private const val API_BASE_URL = "http://134.199.198.192:8000"
 
 /**
  * Send the Lightning invoice to the API (stateless flow).
