@@ -5,31 +5,55 @@ Enterprise Merkle tree builder for SignedByMe.
 Builds a Poseidon Merkle tree from leaf commitments and outputs:
 - `root.json` — Publishable to `/v1/roots` API
 - `witnesses/*.json` — One per member, distribute to users
+- `mapping.json` — Maps commitments to witness files (enterprise reference only)
 
-## Usage
+## Implementations
 
-### Build a tree
+| Version | Use Case | Performance |
+|---------|----------|-------------|
+| **Rust** (`native/btcdid_core/src/bin/sbm_tree.rs`) | Production | ~5 sec for depth=20 |
+| **Python** (`tools/sbm-tree/sbm_tree.py`) | Demo/pilot only | Too slow for depth=20 |
 
+⚠️ **For production cohorts (depth=20), use the Rust CLI.**
+
+## Usage (Rust)
+
+Build:
 ```bash
-python3 sbm_tree.py build \
+cd native/btcdid_core
+cargo build --release --bin sbm_tree
+```
+
+Build a tree:
+```bash
+./target/release/sbm_tree build \
     --client-id acme_corp \
-    --purpose allowlist \
+    --purpose issuer_batch \
     --commitments commitments.csv \
     --output ./output
 ```
 
-### Verify a witness
+Verify a witness:
+```bash
+./target/release/sbm_tree verify \
+    --witness witnesses/witness_000000.json \
+    --commitment 0x1234...
+```
+
+## Usage (Python — demo only)
 
 ```bash
-python3 sbm_tree.py verify \
-    --witness witnesses/witness_000000.json \
-    --commitment 0x1234... \
-    --root 0x5678...
+python3 sbm_tree.py build \
+    --client-id acme_corp \
+    --purpose issuer_batch \
+    --commitments commitments.csv \
+    --output ./output \
+    --depth 4  # Use small depth for testing
 ```
 
 ## Input Format
 
-`commitments.csv` — one hex commitment per line:
+`commitments.csv` — one hex commitment per line (enterprise collects these from users):
 
 ```
 # Comments start with #
@@ -44,16 +68,16 @@ python3 sbm_tree.py verify \
 
 ```json
 {
-  "root_id": "acme_corp-allowlist-1770925719",
+  "root_id": "acme_corp-issuer_batch-1770925719",
   "client_id": "acme_corp",
-  "purpose": "allowlist",
-  "purpose_id": 1,
+  "purpose": "issuer_batch",
+  "purpose_id": 2,
   "root": "0x...",
   "hash_alg": "poseidon",
   "depth": 20,
   "not_before": 1770925719,
   "expires_at": 1802461719,
-  "description": "allowlist tree with 3 members",
+  "description": "issuer_batch tree with 3 members",
   "member_count": 3
 }
 ```
@@ -64,40 +88,37 @@ python3 sbm_tree.py verify \
 {
   "version": 1,
   "client_id": "acme_corp",
-  "root_id": "acme_corp-allowlist-1770925719",
-  "purpose_id": 1,
+  "root_id": "acme_corp-issuer_batch-1770925719",
+  "purpose_id": 2,
   "hash_alg": "poseidon",
   "depth": 20,
   "not_before": 1770925719,
   "expires_at": 1802461719,
-  "leaf_index": 0,
   "siblings": ["0x...", "0x...", ...],
   "path_bits": [1, 0, 1, ...]
 }
 ```
 
-## Testing
+Note: `leaf_index` is intentionally omitted from witnesses (privacy). 
+Use `mapping.json` for enterprise-side correlation.
 
-Use `--depth` for faster testing (production requires depth=20):
+### mapping.json
 
-```bash
-python3 sbm_tree.py build \
-    --client-id test \
-    --purpose allowlist \
-    --commitments test_commitments.csv \
-    --output ./test_output \
-    --depth 4
+```json
+[
+  {"leaf_index": 0, "commitment": "0x...", "witness_file": "witness_000000.json"},
+  {"leaf_index": 1, "commitment": "0x...", "witness_file": "witness_000001.json"}
+]
 ```
-
-⚠️ Roots with depth ≠ 20 will be **rejected** by the API.
 
 ## Workflow
 
-1. **Collect commitments** — User generates `leaf_commitment = Poseidon(domain_sep || leaf_secret)` during enrollment
-2. **Build tree** — Run `sbm_tree.py build` with all commitments
-3. **Publish root** — POST `root.json` to `/v1/roots`
-4. **Distribute witnesses** — Give each user their `witness_NNNNNN.json`
-5. **User proves** — Mobile app uses witness + `leaf_secret` to generate membership proof
+1. **Enterprise collects commitments** — Users generate `leaf_commitment = Poseidon(domain_sep || leaf_secret)` during enrollment and submit to enterprise
+2. **Enterprise ingests commitments** — Compile into `commitments.csv`
+3. **Build tree** — Run `sbm_tree build` to generate root + witnesses
+4. **Publish root** — POST `root.json` to `/v1/roots` API
+5. **Distribute witnesses** — Enterprise gives each user their witness file (out-of-band)
+6. **User proves membership** — Mobile app uses witness + `leaf_secret` to generate membership proof at login
 
 ## Spec Compliance
 

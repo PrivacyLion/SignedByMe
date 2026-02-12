@@ -99,7 +99,8 @@ struct WitnessJson {
     depth: usize,
     not_before: u64,
     expires_at: u64,
-    leaf_index: usize,
+    // Note: leaf_index intentionally omitted from witness (privacy)
+    // It's in mapping.json for enterprise reference only
     siblings: Vec<String>,
     path_bits: Vec<u8>,
 }
@@ -259,7 +260,6 @@ fn build_tree(
             depth,
             not_before: root_json.not_before,
             expires_at: root_json.expires_at,
-            leaf_index: i,
             siblings: path.siblings.iter().map(|s| fe_to_hex(&s.hash)).collect(),
             path_bits: path.siblings.iter().map(|s| if s.is_right { 1 } else { 0 }).collect(),
         };

@@ -49,7 +49,6 @@ This spec defines the Merkle witness format consumed by:
   "depth": 20,
   "not_before": 1770843306,
   "expires_at": 1802379306,
-  "leaf_index": 42,
   "siblings": [
     "0x1234...64hex...",
     "0x5678...64hex...",
@@ -58,6 +57,9 @@ This spec defines the Merkle witness format consumed by:
   "path_bits": [1, 0, 1, 0, ...]
 }
 ```
+
+**Note:** `leaf_index` is intentionally omitted from witnesses (privacy concern — 
+could enable correlation). Enterprise tracks index→commitment mapping separately.
 
 ---
 
@@ -73,7 +75,6 @@ This spec defines the Merkle witness format consumed by:
 | `depth` | int | Must be `20` |
 | `not_before` | int | Unix timestamp (seconds) |
 | `expires_at` | int | Unix timestamp (seconds) |
-| `leaf_index` | int | 0-based index of leaf in tree (for debugging) |
 | `siblings` | array | Exactly 20 elements |
 | `path_bits` | array | Exactly 20 elements (0 or 1) |
 
@@ -166,7 +167,7 @@ If `required_root_id` is missing but membership is optional, mobile may:
 
 ## Implementation Notes
 
-1. `leaf_index` is included for debugging/audit but not cryptographically verified
+1. `leaf_index` is intentionally omitted from witnesses (privacy) — use `mapping.json` for enterprise correlation
 2. If path_bits packing is added later, add `path_bits_encoding` field and bump version
 3. This spec matches `btcdid_core/src/membership/merkle.rs` — do not change one without the other
 

@@ -355,7 +355,7 @@ def build_tree(args):
             "depth": depth,
             "not_before": root_json["not_before"],
             "expires_at": root_json["expires_at"],
-            "leaf_index": i,
+            # Note: leaf_index intentionally omitted (privacy)
             "siblings": [s.hash.to_hex() for s in path.siblings],
             "path_bits": [1 if s.is_right else 0 for s in path.siblings]
         }
