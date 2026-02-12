@@ -119,6 +119,8 @@ class LoginInvoiceRequest(BaseModel):
     dlc_contract: Optional[dict] = Field(None, description="DLC contract for 90/10 split")
     # NEW: Optional membership proof
     membership: Optional[MembershipBundle] = Field(None, description="Optional membership proof bundle")
+    # DEV-ONLY: Override payment hash for testing (requires SBM_ALLOW_TEST_PAYMENT_HASH=1)
+    payment_hash_hex: Optional[str] = Field(None, description="DEV ONLY: Override payment hash (64 hex chars)")
 
 
 class LoginInvoiceResponse(BaseModel):
@@ -548,8 +550,22 @@ def submit_invoice(body: LoginInvoiceRequest):
         # Enterprise required membership but user didn't provide it
         raise HTTPException(400, f"Membership proof required for root_id: {required_root_id}")
     
-    # Extract payment hash from invoice
-    payment_hash = extract_payment_hash(body.invoice)
+    # Extract payment hash from invoice (or use dev override if enabled)
+    if body.payment_hash_hex and os.environ.get("SBM_ALLOW_TEST_PAYMENT_HASH") == "1":
+        # DEV ONLY: Use provided payment hash for testing
+        if len(body.payment_hash_hex) != 64:
+            raise HTTPException(400, "payment_hash_hex must be exactly 64 hex chars")
+        try:
+            bytes.fromhex(body.payment_hash_hex)  # Validate hex
+        except ValueError:
+            raise HTTPException(400, "payment_hash_hex must be valid hex")
+        payment_hash = body.payment_hash_hex
+        print(f"DEV: Using test payment_hash override: {payment_hash[:16]}...")
+    elif body.payment_hash_hex:
+        # Env flag not set but payment_hash_hex provided - ignore silently
+        payment_hash = extract_payment_hash(body.invoice)
+    else:
+        payment_hash = extract_payment_hash(body.invoice)
     
     # Verify STWO proof if provided
     if body.stwo_proof:
