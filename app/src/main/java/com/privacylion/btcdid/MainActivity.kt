@@ -1737,9 +1737,10 @@ fun LoginScreen(
                                 Spacer(modifier = Modifier.height(16.dp))
 
                                 // Demo button for testing - calls real API
+                                val demoScope = rememberCoroutineScope()
                                 OutlinedButton(
                                     onClick = {
-                                        scope.launch(Dispatchers.IO) {
+                                        demoScope.launch(Dispatchers.IO) {
                                             try {
                                                 val url = java.net.URL("$API_BASE_URL/v1/login/start")
                                                 val conn = url.openConnection() as java.net.HttpURLConnection
