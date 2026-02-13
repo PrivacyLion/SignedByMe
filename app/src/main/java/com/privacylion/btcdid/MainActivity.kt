@@ -697,6 +697,7 @@ fun SignedByMeApp(
             loginSession = loginSession,
             onLoginSessionReceived = { session ->
                 loginSession = session
+                android.util.Log.i("SignedByMe", "Session received: id=${session.sessionId}, client=${session.clientId}, root=${session.requiredRootId}")
             },
             onStartLogin = {
                 scope.launch {
@@ -1854,19 +1855,23 @@ fun LoginScreen(
                                                 conn.setRequestProperty("Content-Type", "application/json")
                                                 conn.setRequestProperty("X-API-Key", "acme-test-key-2026")
                                                 conn.doOutput = true
-                                                conn.outputStream.write("""{"enterprise":"AcmeCorp","amount_sats":100}""".toByteArray())
+                                                conn.outputStream.write("""{"client_id":"acme","enterprise":"Acme Corp","amount_sats":100}""".toByteArray())
                                                 val response = conn.inputStream.bufferedReader().readText()
                                                 val json = org.json.JSONObject(response)
                                                 withContext(Dispatchers.Main) {
                                                     onLoginSessionReceived(LoginSession(
                                                         sessionToken = null,
                                                         sessionId = json.getString("session_id"),
-                                                        enterpriseName = "Acme Corp",
+                                                        enterpriseName = json.optString("enterprise", "Acme Corp"),
                                                         amountSats = json.getLong("amount_sats").toULong(),
-                                                        nonce = json.optString("nonce", "")
+                                                        nonce = json.optString("nonce", ""),
+                                                        clientId = if (json.has("client_id") && !json.isNull("client_id")) json.getString("client_id") else null,
+                                                        requiredRootId = if (json.has("required_root_id") && !json.isNull("required_root_id")) json.getString("required_root_id") else null,
+                                                        purposeId = json.optInt("purpose_id", 0),
+                                                        expiresAt = if (json.has("expires_at")) json.getLong("expires_at") else null
                                                     ))
                                                 }
-                                                android.util.Log.i("SignedByMe", "Demo session created: ${json.getString("session_id")}")
+                                                android.util.Log.i("SignedByMe", "Demo session created: ${json.getString("session_id")} (client=${json.optString("client_id")}, root=${json.optString("required_root_id")})")
                                             } catch (e: Exception) {
                                                 android.util.Log.e("SignedByMe", "Failed to create demo session: ${e.message}")
                                             }
