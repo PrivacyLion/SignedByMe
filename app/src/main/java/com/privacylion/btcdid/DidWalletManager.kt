@@ -818,8 +818,8 @@ class DidWalletManager(private val context: Context) {
                     pathBitsArr.getInt(i).toByte()
                 }
                 
-                // Root might be in witness or fetched separately
-                val rootHex = obj.optString("root", "")
+                // Root hash from witness file
+                val rootHex = obj.optString("root_hash", "")
                 
                 return WitnessData(
                     version = obj.getInt("version"),
