@@ -251,4 +251,76 @@ object NativeBridge {
         payeeLnAddress: String,
         expirySecs: Long
     ): String
+
+    // ============================================================================
+    // Membership Proofs (Merkle Tree)
+    // ============================================================================
+
+    /**
+     * Generate a Merkle membership proof.
+     * 
+     * @param leafSecret 32-byte secret (user's private membership credential)
+     * @param merklePath Array of 20 siblings (each 32 bytes, leaf→root order)
+     * @param pathIndices 20 bytes: 0=sibling is left, 1=sibling is right
+     * @param root 32-byte Merkle root (from server/witness)
+     * @param bindingHash 32-byte V4 binding hash (computed via computeBindingHashV4)
+     * @param purposeId 0=none, 1=allowlist, 2=issuer_batch, 3=revocation
+     * @return Membership proof bytes (base64-encode for API submission)
+     */
+    @JvmStatic external fun proveMembership(
+        leafSecret: ByteArray,
+        merklePath: Array<ByteArray>,
+        pathIndices: ByteArray,
+        root: ByteArray,
+        bindingHash: ByteArray,
+        purposeId: Int
+    ): ByteArray
+
+    /**
+     * Verify a membership proof locally.
+     * Note: Server is authoritative — this is for optional client-side validation.
+     * 
+     * @param proof Proof bytes from proveMembership
+     * @param root 32-byte Merkle root
+     * @param bindingHash 32-byte V4 binding hash
+     * @param purposeId Purpose ID (must match proof)
+     * @return true if valid
+     */
+    @JvmStatic external fun verifyMembership(
+        proof: ByteArray,
+        root: ByteArray,
+        bindingHash: ByteArray,
+        purposeId: Int
+    ): Boolean
+
+    /**
+     * Compute V4 binding hash for membership proofs.
+     * Must match server's computation exactly.
+     * 
+     * @param didPubkey DID public key bytes
+     * @param walletAddress Wallet address string
+     * @param clientId Enterprise client ID (from session)
+     * @param sessionId Session ID (from QR/deep link)
+     * @param paymentHash 32-byte Lightning payment hash (from invoice)
+     * @param amountSats Payment amount in satoshis
+     * @param expiresAt Unix timestamp when proof expires
+     * @param nonce 16-byte session nonce (from session)
+     * @param eaDomain Enterprise domain (from session)
+     * @param purposeId Membership purpose ID
+     * @param rootId Root ID (from session's required_root_id)
+     * @return 32-byte binding hash
+     */
+    @JvmStatic external fun computeBindingHashV4(
+        didPubkey: ByteArray,
+        walletAddress: String,
+        clientId: String,
+        sessionId: String,
+        paymentHash: ByteArray,
+        amountSats: Long,
+        expiresAt: Long,
+        nonce: ByteArray,
+        eaDomain: String,
+        purposeId: Int,
+        rootId: String
+    ): ByteArray
 }
