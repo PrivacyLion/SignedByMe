@@ -23,7 +23,7 @@ use super::proof::{prove_membership, verify_membership, MembershipProof};
 ///     purposeId: Int
 /// ) -> ByteArray (proof)
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_signedby_me_NativeBridge_proveMembership<'local>(
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_proveMembership<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     leaf_secret: JByteArray<'local>,
@@ -126,7 +126,7 @@ pub extern "system" fn Java_com_signedby_me_NativeBridge_proveMembership<'local>
 ///     purposeId: Int
 /// ) -> Boolean
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_signedby_me_NativeBridge_verifyMembership<'local>(
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_verifyMembership<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     proof: JByteArray<'local>,
@@ -182,7 +182,7 @@ pub extern "system" fn Java_com_signedby_me_NativeBridge_verifyMembership<'local
 /// This allows the app to compute the binding hash client-side
 /// to include in proof generation.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_signedby_me_NativeBridge_computeBindingHashV4<'local>(
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_computeBindingHashV4<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     did_pubkey: JByteArray<'local>,
