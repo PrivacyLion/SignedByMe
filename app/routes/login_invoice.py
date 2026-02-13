@@ -569,6 +569,7 @@ def submit_invoice(body: LoginInvoiceRequest):
     
     # Verify STWO proof if provided
     if body.stwo_proof:
+        print(f"DEBUG STWO proof received (first 500 chars): {body.stwo_proof[:500]}")
         stwo_verified, schema_version, verify_msg = verify_stwo_proof(
             body.stwo_proof,
             body.did,
