@@ -942,6 +942,77 @@ class DidWalletManager(private val context: Context) {
         3 -> "revocation"
         else -> "none"
     }
+
+    // ============================================================================
+    // DEV HELPER: Leaf Commitment Export (DEBUG only)
+    // ============================================================================
+
+    /**
+     * DEV ONLY: Generate leaf secret and log the commitment for sbm-tree.
+     * 
+     * This function:
+     * 1. Generates a 32-byte leaf secret (or uses existing)
+     * 2. Stores it encrypted (same as other secrets)
+     * 3. Computes leaf_commitment = Poseidon(leaf_secret || "sbm:membership:v")
+     * 4. Logs ONLY the commitment (64 hex chars, no 0x prefix)
+     * 5. NEVER logs the leaf secret
+     * 
+     * The logged commitment can be used with sbm-tree to build a test tree.
+     * 
+     * @param clientId The client ID for the witness filename (e.g., "acme")
+     * @param rootId The root ID for the witness filename (e.g., "test-root-001")
+     * @param forceRegenerate If true, generates a new secret even if one exists
+     * @return The leaf commitment as 64 hex chars, or null on error
+     */
+    fun devExportLeafCommitment(
+        clientId: String,
+        rootId: String,
+        forceRegenerate: Boolean = false
+    ): String? {
+        // HARD DEV GATE
+        if (!BuildConfig.DEBUG) {
+            android.util.Log.e("SignedByMe", "devExportLeafCommitment: NOT ALLOWED in release builds")
+            return null
+        }
+        
+        return try {
+            // Generate or load leaf secret
+            val leafSecret = if (forceRegenerate || !hasLeafSecret()) {
+                android.util.Log.i("SignedByMe", "[DEV] Generating new leaf secret...")
+                generateLeafSecret()
+            } else {
+                android.util.Log.i("SignedByMe", "[DEV] Using existing leaf secret")
+                loadLeafSecret() ?: throw Exception("Failed to load leaf secret")
+            }
+            
+            // Compute commitment via JNI (matches sbm-tree exactly)
+            val commitmentBytes = NativeBridge.computeLeafCommitment(leafSecret)
+            
+            // Zeroize secret immediately
+            java.util.Arrays.fill(leafSecret, 0.toByte())
+            
+            // Convert to hex (no 0x prefix)
+            val commitmentHex = commitmentBytes.joinToString("") { "%02x".format(it) }
+            
+            // Log the commitment and witness filename info
+            android.util.Log.i("SignedByMe", "═══════════════════════════════════════════════════════════════")
+            android.util.Log.i("SignedByMe", "[DEV] LEAF COMMITMENT EXPORT")
+            android.util.Log.i("SignedByMe", "═══════════════════════════════════════════════════════════════")
+            android.util.Log.i("SignedByMe", "[DEV] commitment: $commitmentHex")
+            android.util.Log.i("SignedByMe", "[DEV] client_id:  $clientId")
+            android.util.Log.i("SignedByMe", "[DEV] root_id:    $rootId")
+            android.util.Log.i("SignedByMe", "[DEV] witness filename: ${clientId}_${rootId}.json")
+            android.util.Log.i("SignedByMe", "═══════════════════════════════════════════════════════════════")
+            android.util.Log.i("SignedByMe", "[DEV] Use this commitment with sbm-tree to build the Merkle tree.")
+            android.util.Log.i("SignedByMe", "[DEV] Push resulting witness JSON to device app_witnesses/ directory.")
+            android.util.Log.i("SignedByMe", "═══════════════════════════════════════════════════════════════")
+            
+            commitmentHex
+        } catch (e: Exception) {
+            android.util.Log.e("SignedByMe", "[DEV] Failed to export leaf commitment: ${e.message}")
+            null
+        }
+    }
 }
 
 

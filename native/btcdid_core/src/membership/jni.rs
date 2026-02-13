@@ -258,3 +258,50 @@ pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_computeBindingHa
         }
     }
 }
+
+/// Compute leaf commitment from leaf secret (called from Kotlin)
+///
+/// Uses the same computation as sbm-tree and the membership verifier:
+/// leaf_commitment = Poseidon(leaf_secret || LEAF_DOMAIN_SEP)
+/// where LEAF_DOMAIN_SEP = "sbm:membership:v" (16 bytes)
+///
+/// Signature: (leafSecret: ByteArray) -> ByteArray (32 bytes)
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_computeLeafCommitment<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    leaf_secret: JByteArray<'local>,
+) -> jbyteArray {
+    use super::poseidon::poseidon_hash_bytes;
+    use super::proof::LEAF_DOMAIN_SEP;
+    
+    let result = (|| -> Result<[u8; 32], String> {
+        // Parse leaf_secret
+        let leaf_secret_vec = env.convert_byte_array(&leaf_secret)
+            .map_err(|e| e.to_string())?;
+        if leaf_secret_vec.len() != 32 {
+            return Err("leaf_secret must be 32 bytes".into());
+        }
+        
+        // Compute: Poseidon(leaf_secret || domain_sep)
+        let mut data = Vec::with_capacity(48);
+        data.extend_from_slice(&leaf_secret_vec);
+        data.extend_from_slice(LEAF_DOMAIN_SEP);
+        
+        let commitment = poseidon_hash_bytes(&data);
+        Ok(commitment.to_bytes_be())
+    })();
+    
+    match result {
+        Ok(hash) => {
+            match env.byte_array_from_slice(&hash) {
+                Ok(arr) => arr.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            }
+        }
+        Err(e) => {
+            let _ = env.throw_new("java/lang/RuntimeException", e);
+            std::ptr::null_mut()
+        }
+    }
+}

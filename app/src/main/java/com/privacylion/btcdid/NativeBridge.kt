@@ -323,4 +323,14 @@ object NativeBridge {
         purposeId: Int,
         rootId: String
     ): ByteArray
+
+    /**
+     * Compute leaf commitment from leaf secret.
+     * Uses: Poseidon(leaf_secret || "sbm:membership:v")
+     * Must match sbm-tree and membership verifier exactly.
+     * 
+     * @param leafSecret 32-byte secret (NEVER log or transmit this)
+     * @return 32-byte leaf commitment (safe to share with enterprise for tree building)
+     */
+    @JvmStatic external fun computeLeafCommitment(leafSecret: ByteArray): ByteArray
 }

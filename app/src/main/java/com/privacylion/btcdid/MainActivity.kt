@@ -895,6 +895,20 @@ fun SignedByMeApp(
                 }
                 context.startActivity(Intent.createChooser(sendIntent, "Share VCC"))
             },
+            // DEV: Export leaf commitment for membership testing
+            onDevExportLeafCommitment = if (BuildConfig.DEBUG) {
+                {
+                    // Use test client_id and root_id for now
+                    val testClientId = "acme"
+                    val testRootId = "test-membership-001"
+                    val commitment = didMgr.devExportLeafCommitment(testClientId, testRootId)
+                    if (commitment != null) {
+                        Toast.makeText(context, "Leaf commitment exported to logcat", Toast.LENGTH_LONG).show()
+                    } else {
+                        Toast.makeText(context, "Failed to export commitment", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } else null,
             // Wallet Section parameters
             btcPriceUsd = btcPriceUsd,
             transactions = transactions,
@@ -1505,6 +1519,8 @@ fun LoginScreen(
     onResetLogin: () -> Unit,
     onCopyVcc: () -> Unit,
     onShareVcc: () -> Unit,
+    // DEV: Leaf commitment export for membership testing
+    onDevExportLeafCommitment: (() -> Unit)? = null,
     // Wallet Section parameters
     btcPriceUsd: Double,
     transactions: List<Payment>,
@@ -1733,6 +1749,19 @@ fun LoginScreen(
                                     )
                                 ) {
                                     Text("View Invoice (Debug)", fontSize = 12.sp)
+                                }
+                                
+                                // Debug-only: Export leaf commitment for membership testing
+                                if (onDevExportLeafCommitment != null) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    OutlinedButton(
+                                        onClick = onDevExportLeafCommitment,
+                                        colors = ButtonDefaults.outlinedButtonColors(
+                                            contentColor = Color.Gray
+                                        )
+                                    ) {
+                                        Text("Export Leaf Commitment (Debug)", fontSize = 12.sp)
+                                    }
                                 }
                             }
 
