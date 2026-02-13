@@ -71,6 +71,7 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val didMgr = DidWalletManager(applicationContext)
+        didMgr.copyWitnessesFromAssets()  // Copy bundled test witnesses (debug only)
         val breezMgr = BreezWalletManager(applicationContext)
         
         // Parse deep link from intent

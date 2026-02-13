@@ -766,6 +766,31 @@ class DidWalletManager(private val context: Context) {
     private val leafSecretFile = "leaf_secret.bin"
     
     /**
+     * Copy bundled witness files from assets to app_witnesses directory.
+     * Called on startup for debug builds to enable E2E testing.
+     */
+    fun copyWitnessesFromAssets() {
+        if (!BuildConfig.DEBUG) return
+        try {
+            val assetList = context.assets.list("witnesses") ?: return
+            val dir = context.getDir(witnessDir, Context.MODE_PRIVATE)
+            for (filename in assetList) {
+                if (!filename.endsWith(".json")) continue
+                val destFile = java.io.File(dir, filename)
+                if (destFile.exists()) continue  // Don't overwrite existing
+                context.assets.open("witnesses/$filename").use { input ->
+                    destFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                android.util.Log.i("DidWalletManager", "Copied witness from assets: $filename")
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("DidWalletManager", "Failed to copy witnesses from assets: ${e.message}")
+        }
+    }
+    
+    /**
      * Witness data parsed from JSON file.
      * Matches WITNESS_SPEC.md v1 format.
      */
