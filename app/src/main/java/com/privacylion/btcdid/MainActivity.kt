@@ -1736,16 +1736,34 @@ fun LoginScreen(
 
                                 Spacer(modifier = Modifier.height(16.dp))
 
-                                // Demo button for testing
+                                // Demo button for testing - calls real API
                                 OutlinedButton(
                                     onClick = {
-                                        // Demo: simulate receiving a login session with 100 sats
-                                        onLoginSessionReceived(LoginSession(
-                                            sessionToken = null,  // No token for demo
-                                            sessionId = "demo_${System.currentTimeMillis()}",
-                                            enterpriseName = "Acme Corp",
-                                            amountSats = 100UL
-                                        ))
+                                        scope.launch(Dispatchers.IO) {
+                                            try {
+                                                val url = java.net.URL("$API_BASE_URL/v1/login/start")
+                                                val conn = url.openConnection() as java.net.HttpURLConnection
+                                                conn.requestMethod = "POST"
+                                                conn.setRequestProperty("Content-Type", "application/json")
+                                                conn.setRequestProperty("X-API-Key", "acme_sk_test_abc123")
+                                                conn.doOutput = true
+                                                conn.outputStream.write("""{"enterprise":"AcmeCorp","amount_sats":100}""".toByteArray())
+                                                val response = conn.inputStream.bufferedReader().readText()
+                                                val json = org.json.JSONObject(response)
+                                                withContext(Dispatchers.Main) {
+                                                    onLoginSessionReceived(LoginSession(
+                                                        sessionToken = null,
+                                                        sessionId = json.getString("session_id"),
+                                                        enterpriseName = "Acme Corp",
+                                                        amountSats = json.getLong("amount_sats").toULong(),
+                                                        nonce = json.optString("nonce", "")
+                                                    ))
+                                                }
+                                                android.util.Log.i("SignedByMe", "Demo session created: ${json.getString("session_id")}")
+                                            } catch (e: Exception) {
+                                                android.util.Log.e("SignedByMe", "Failed to create demo session: ${e.message}")
+                                            }
+                                        }
                                     }
                                 ) {
                                     Text("Demo: Acme Corp Log In (100 sats)", fontSize = 12.sp)
