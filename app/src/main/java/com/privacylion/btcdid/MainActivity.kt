@@ -2293,6 +2293,7 @@ fun QrScannerDialog(
     subtitle: String = "Point your camera at the QR Code on your computer screen"
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     var hasCameraPermission by remember {
         mutableStateOf(
             androidx.core.content.ContextCompat.checkSelfPermission(
@@ -2300,6 +2301,9 @@ fun QrScannerDialog(
             ) == android.content.pm.PackageManager.PERMISSION_GRANTED
         )
     }
+    
+    // Track camera provider for cleanup
+    var cameraProviderRef by remember { mutableStateOf<androidx.camera.lifecycle.ProcessCameraProvider?>(null) }
     
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
@@ -2310,6 +2314,13 @@ fun QrScannerDialog(
     LaunchedEffect(Unit) {
         if (!hasCameraPermission) {
             permissionLauncher.launch(android.Manifest.permission.CAMERA)
+        }
+    }
+    
+    // Cleanup camera on dismiss
+    DisposableEffect(Unit) {
+        onDispose {
+            cameraProviderRef?.unbindAll()
         }
     }
     
@@ -2400,8 +2411,9 @@ fun QrScannerDialog(
                                     
                                     try {
                                         cameraProvider.unbindAll()
+                                        cameraProviderRef = cameraProvider
                                         cameraProvider.bindToLifecycle(
-                                            ctx as androidx.lifecycle.LifecycleOwner,
+                                            lifecycleOwner,
                                             androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA,
                                             preview,
                                             imageAnalysis
