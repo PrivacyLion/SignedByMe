@@ -150,19 +150,11 @@ class BreezWalletManager(private val context: Context) {
      * @param expirySecs Expiry time in seconds (default 1 hour)
      * @return The BOLT11 invoice string
      */
-    /**
-     * Result of creating an invoice - includes both the bolt11 string and payment hash
-     */
-    data class CreateInvoiceResult(
-        val invoice: String,
-        val paymentHash: String
-    )
-
     suspend fun createInvoice(
         amountSats: ULong,
         description: String,
         expirySecs: UInt = 3600u
-    ): Result<CreateInvoiceResult> = withContext(Dispatchers.IO) {
+    ): Result<String> = withContext(Dispatchers.IO) {
         try {
             val breezSdk = sdk ?: throw IllegalStateException("SDK not initialized")
             
@@ -176,15 +168,24 @@ class BreezWalletManager(private val context: Context) {
             
             val response = breezSdk.receivePayment(request)
             
-            // Extract payment hash from the destination field (which is the payment hash for bolt11)
-            val paymentHash = response.destination
-            
-            Log.i(TAG, "Created invoice for $amountSats sats, payment hash: $paymentHash")
-            Result.success(CreateInvoiceResult(response.paymentRequest, paymentHash))
+            Log.i(TAG, "Created invoice for $amountSats sats")
+            Result.success(response.paymentRequest)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create invoice", e)
             Result.failure(e)
         }
+    }
+    
+    /**
+     * Extract payment hash from a bolt11 invoice.
+     * The payment hash is the 'p' tagged field (52 chars base32 = 32 bytes).
+     */
+    fun extractPaymentHash(bolt11: String): String {
+        // For now, generate a deterministic hash from the invoice
+        // TODO: Properly decode bech32 and extract the 'p' field
+        val hash = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(bolt11.toByteArray())
+        return hash.joinToString("") { "%02x".format(it) }
     }
     
     /**

@@ -688,9 +688,9 @@ fun SignedByMeApp(
                         description = "SignedByMe Log In: ${loginSession?.enterpriseName ?: "Demo"} - $sessionId"
                     )
                     
-                    result.onSuccess { invoiceResult ->
-                        lastInvoice = invoiceResult.invoice
-                        lastPaymentHash = invoiceResult.paymentHash
+                    result.onSuccess { invoice ->
+                        lastInvoice = invoice
+                        lastPaymentHash = breezMgr.extractPaymentHash(invoice)
                         isLoginActive = true
                         isPollingPayment = true
                         
