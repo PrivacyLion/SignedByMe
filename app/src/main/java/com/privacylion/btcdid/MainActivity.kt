@@ -688,9 +688,9 @@ fun SignedByMeApp(
                         description = "SignedByMe Log In: ${loginSession?.enterpriseName ?: "Demo"} - $sessionId"
                     )
                     
-                    result.onSuccess { invoice ->
-                        lastInvoice = invoice
-                        lastPaymentHash = invoice.takeLast(64)
+                    result.onSuccess { invoiceResult ->
+                        lastInvoice = invoiceResult.invoice
+                        lastPaymentHash = invoiceResult.paymentHash
                         isLoginActive = true
                         isPollingPayment = true
                         

@@ -150,11 +150,19 @@ class BreezWalletManager(private val context: Context) {
      * @param expirySecs Expiry time in seconds (default 1 hour)
      * @return The BOLT11 invoice string
      */
+    /**
+     * Result of creating an invoice - includes both the bolt11 string and payment hash
+     */
+    data class CreateInvoiceResult(
+        val invoice: String,
+        val paymentHash: String
+    )
+
     suspend fun createInvoice(
         amountSats: ULong,
         description: String,
         expirySecs: UInt = 3600u
-    ): Result<String> = withContext(Dispatchers.IO) {
+    ): Result<CreateInvoiceResult> = withContext(Dispatchers.IO) {
         try {
             val breezSdk = sdk ?: throw IllegalStateException("SDK not initialized")
             
@@ -168,8 +176,11 @@ class BreezWalletManager(private val context: Context) {
             
             val response = breezSdk.receivePayment(request)
             
-            Log.i(TAG, "Created invoice for $amountSats sats")
-            Result.success(response.paymentRequest)
+            // Extract payment hash from the destination field (which is the payment hash for bolt11)
+            val paymentHash = response.destination
+            
+            Log.i(TAG, "Created invoice for $amountSats sats, payment hash: $paymentHash")
+            Result.success(CreateInvoiceResult(response.paymentRequest, paymentHash))
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create invoice", e)
             Result.failure(e)
