@@ -119,6 +119,8 @@ class LoginInvoiceRequest(BaseModel):
     dlc_contract: Optional[dict] = Field(None, description="DLC contract for 90/10 split")
     # NEW: Optional membership proof
     membership: Optional[MembershipBundle] = Field(None, description="Optional membership proof bundle")
+    # Wallet address for binding hash (Lightning address, e.g., spark1pgss9...)
+    wallet_address: Optional[str] = Field(None, description="Lightning wallet address for binding hash")
     # DEV-ONLY: Override payment hash for testing (requires SBM_ALLOW_TEST_PAYMENT_HASH=1)
     payment_hash_hex: Optional[str] = Field(None, description="DEV ONLY: Override payment hash (64 hex chars)")
 
@@ -615,9 +617,12 @@ def submit_invoice(body: LoginInvoiceRequest):
         did_pubkey_hex = body.did.replace("did:btcr:", "")
         did_pubkey = bytes.fromhex(did_pubkey_hex) if did_pubkey_hex else b""
         
+        # Use wallet_address if provided, fall back to did for backwards compat
+        wallet_addr_for_hash = body.wallet_address or body.did
+        
         binding_hash = compute_binding_hash_v4(
             did_pubkey=did_pubkey,
-            wallet_address=body.did,
+            wallet_address=wallet_addr_for_hash,
             client_id=server_client_id,
             session_id=body.session_id,
             payment_hash=bytes.fromhex(payment_hash),

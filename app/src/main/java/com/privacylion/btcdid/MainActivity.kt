@@ -347,7 +347,8 @@ private fun sendInvoiceToApiWithDlc(
     stwoproof: String?,
     nonce: String,
     dlcContractJson: String?,
-    membership: MembershipBundle? = null
+    membership: MembershipBundle? = null,
+    walletAddress: String? = null
 ): Boolean {
     return try {
         val endpoint = if (sessionToken != null) "/v1/login/submit" else "/v1/login/invoice"
@@ -372,6 +373,11 @@ private fun sendInvoiceToApiWithDlc(
             put("did", did)
             put("amount_sats", amountSats)
             put("nonce", nonce)
+            
+            // Wallet address for binding hash (critical for membership proof)
+            if (walletAddress != null) {
+                put("wallet_address", walletAddress)
+            }
             
             // STWO proof
             if (stwoproof != null) {
@@ -835,7 +841,8 @@ fun SignedByMeApp(
                                     stwoproof = stwoproof,
                                     nonce = sessionNonce,
                                     dlcContractJson = dlcContract?.toJson(),
-                                    membership = membershipBundle
+                                    membership = membershipBundle,
+                                    walletAddress = walletAddress
                                 )
                                 
                                 withContext(Dispatchers.Main) {
