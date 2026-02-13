@@ -755,6 +755,193 @@ class DidWalletManager(private val context: Context) {
         }
         return prp.toString()
     }
+
+    // ============================================================================
+    // Membership Proofs (Merkle Tree)
+    // ============================================================================
+    
+    private val witnessDir = "witnesses"
+    private val leafSecretFile = "leaf_secret.bin"
+    
+    /**
+     * Witness data parsed from JSON file.
+     * Matches WITNESS_SPEC.md v1 format.
+     */
+    data class WitnessData(
+        val version: Int,
+        val clientId: String,
+        val rootId: String,
+        val purposeId: Int,
+        val depth: Int,
+        val siblings: List<ByteArray>,  // 20 x 32-byte arrays
+        val pathBits: ByteArray,        // 20 bytes (0 or 1 each)
+        val rootHex: String             // Root hash for verification
+    ) {
+        companion object {
+            fun fromJson(json: String): WitnessData {
+                val obj = org.json.JSONObject(json)
+                val siblingsArr = obj.getJSONArray("siblings")
+                val pathBitsArr = obj.getJSONArray("path_bits")
+                
+                val siblings = (0 until siblingsArr.length()).map { i ->
+                    hexToBytes(siblingsArr.getString(i))
+                }
+                
+                val pathBits = ByteArray(pathBitsArr.length()) { i ->
+                    pathBitsArr.getInt(i).toByte()
+                }
+                
+                // Root might be in witness or fetched separately
+                val rootHex = obj.optString("root", "")
+                
+                return WitnessData(
+                    version = obj.getInt("version"),
+                    clientId = obj.getString("client_id"),
+                    rootId = obj.getString("root_id"),
+                    purposeId = obj.getInt("purpose_id"),
+                    depth = obj.getInt("depth"),
+                    siblings = siblings,
+                    pathBits = pathBits,
+                    rootHex = rootHex
+                )
+            }
+            
+            private fun hexToBytes(hex: String): ByteArray {
+                val cleanHex = if (hex.startsWith("0x")) hex.drop(2) else hex
+                return cleanHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+            }
+        }
+        
+        fun toSiblingsArray(): Array<ByteArray> = siblings.toTypedArray()
+    }
+    
+    /**
+     * Store a witness JSON file for later use.
+     * Key: "{clientId}_{rootId}.json"
+     */
+    fun storeWitness(witnessJson: String) {
+        val witness = WitnessData.fromJson(witnessJson)
+        val filename = "${witness.clientId}_${witness.rootId}.json"
+        val dir = context.getDir(witnessDir, Context.MODE_PRIVATE)
+        java.io.File(dir, filename).writeText(witnessJson)
+    }
+    
+    /**
+     * Load a witness for a specific client + root.
+     * Returns null if not found.
+     */
+    fun loadWitness(clientId: String, rootId: String): WitnessData? {
+        val filename = "${clientId}_${rootId}.json"
+        val dir = context.getDir(witnessDir, Context.MODE_PRIVATE)
+        val file = java.io.File(dir, filename)
+        return if (file.exists()) {
+            WitnessData.fromJson(file.readText())
+        } else null
+    }
+    
+    /**
+     * List all stored witnesses.
+     */
+    fun listWitnesses(): List<Pair<String, String>> {
+        val dir = context.getDir(witnessDir, Context.MODE_PRIVATE)
+        return dir.listFiles()?.mapNotNull { f ->
+            val parts = f.nameWithoutExtension.split("_", limit = 2)
+            if (parts.size == 2) parts[0] to parts[1] else null
+        } ?: emptyList()
+    }
+    
+    /**
+     * Generate and store leaf secret for membership.
+     * Called once when user joins a membership group.
+     * Returns the leaf secret (caller should zeroize after use).
+     */
+    fun generateLeafSecret(): ByteArray {
+        ensureKeystoreKey()
+        val secret = ByteArray(32).also { rng.nextBytes(it) }
+        val wrapped = wrapPrivateKey(secret)
+        context.openFileOutput(leafSecretFile, Context.MODE_PRIVATE).use { it.write(wrapped) }
+        return secret.copyOf() // Return copy, original can be zeroized
+    }
+    
+    /**
+     * Load leaf secret for membership proof generation.
+     * Returns null if not set up yet.
+     */
+    fun loadLeafSecret(): ByteArray? {
+        return try {
+            val wrapped = context.openFileInput(leafSecretFile).use { it.readBytes() }
+            unwrapPrivateKey(wrapped)
+        } catch (_: Throwable) { null }
+    }
+    
+    /**
+     * Check if leaf secret exists.
+     */
+    fun hasLeafSecret(): Boolean {
+        return try {
+            context.openFileInput(leafSecretFile).use { it.readBytes().isNotEmpty() }
+        } catch (_: Throwable) { false }
+    }
+    
+    /**
+     * Generate a membership proof.
+     * 
+     * @param witness The loaded witness data
+     * @param bindingHash 32-byte V4 binding hash
+     * @return Base64-encoded proof bytes, or null on error
+     */
+    fun generateMembershipProof(
+        witness: WitnessData,
+        bindingHash: ByteArray
+    ): String? {
+        val leafSecret = loadLeafSecret() ?: run {
+            android.util.Log.e("SignedByMe", "No leaf secret found for membership proof")
+            return null
+        }
+        
+        // Parse root from witness
+        val rootBytes = if (witness.rootHex.isNotEmpty()) {
+            hexToBytes(witness.rootHex)
+        } else {
+            android.util.Log.e("SignedByMe", "Witness missing root hash")
+            java.util.Arrays.fill(leafSecret, 0.toByte())
+            return null
+        }
+        
+        return try {
+            val proofBytes = NativeBridge.proveMembership(
+                leafSecret = leafSecret,
+                merklePath = witness.toSiblingsArray(),
+                pathIndices = witness.pathBits,
+                root = rootBytes,
+                bindingHash = bindingHash,
+                purposeId = witness.purposeId
+            )
+            
+            // Base64 encode for API
+            android.util.Base64.encodeToString(proofBytes, android.util.Base64.NO_WRAP)
+        } catch (e: Exception) {
+            android.util.Log.e("SignedByMe", "Failed to generate membership proof: ${e.message}")
+            null
+        } finally {
+            java.util.Arrays.fill(leafSecret, 0.toByte())
+        }
+    }
+    
+    private fun hexToBytes(hex: String): ByteArray {
+        val cleanHex = if (hex.startsWith("0x")) hex.drop(2) else hex
+        return cleanHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+    }
+    
+    /**
+     * Get the purpose string from purpose ID.
+     */
+    fun purposeIdToString(purposeId: Int): String = when (purposeId) {
+        1 -> "allowlist"
+        2 -> "issuer_batch"
+        3 -> "revocation"
+        else -> "none"
+    }
 }
 
 

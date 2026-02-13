@@ -155,7 +155,11 @@ class MainActivity : FragmentActivity() {
                 enterpriseName = payload.optString("enterprise_name", "Unknown"),
                 amountSats = payload.optLong("amount_sats", 100).toULong(),
                 nonce = payload.optString("nonce", null),
-                expiresAt = if (payload.has("expires_at")) payload.optLong("expires_at") else null
+                expiresAt = if (payload.has("expires_at")) payload.optLong("expires_at") else null,
+                // Membership fields (v4)
+                clientId = payload.optString("client_id", null),
+                requiredRootId = payload.optString("required_root_id", null),
+                purposeId = payload.optInt("purpose_id", 0)
             )
         } catch (e: Exception) {
             android.util.Log.e("SignedByMe", "Failed to parse session token: ${e.message}")
@@ -171,7 +175,11 @@ data class LoginSession(
     val enterpriseName: String,
     val amountSats: ULong = 100UL,
     val nonce: String? = null,       // v3: 16-byte session nonce (32 hex chars)
-    val expiresAt: Long? = null      // v3: Unix timestamp when session expires
+    val expiresAt: Long? = null,     // v3: Unix timestamp when session expires
+    // Membership fields (v4)
+    val clientId: String? = null,         // Enterprise client ID for root lookup
+    val requiredRootId: String? = null,   // If set, user MUST prove membership
+    val purposeId: Int = 0                // 0=none, 1=allowlist, 2=issuer_batch, 3=revocation
 )
 
 // API Configuration
@@ -319,6 +327,15 @@ private fun notifyApiOfSettlement(
  * 3. Oracle will sign "auth_verified" after payment
  * 4. DLC enforces the split
  */
+/**
+ * Membership proof bundle for API submission.
+ */
+data class MembershipBundle(
+    val rootId: String,
+    val purpose: String,
+    val proofBase64: String
+)
+
 private fun sendInvoiceToApiWithDlc(
     sessionToken: String?,
     sessionId: String,
@@ -328,7 +345,8 @@ private fun sendInvoiceToApiWithDlc(
     amountSats: Long,
     stwoproof: String?,
     nonce: String,
-    dlcContractJson: String?
+    dlcContractJson: String?,
+    membership: MembershipBundle? = null
 ): Boolean {
     return try {
         val endpoint = if (sessionToken != null) "/v1/login/submit" else "/v1/login/invoice"
@@ -362,6 +380,15 @@ private fun sendInvoiceToApiWithDlc(
             // DLC contract metadata for 90/10 split
             if (dlcContractJson != null) {
                 put("dlc_contract", JSONObject(dlcContractJson))
+            }
+            
+            // Membership proof bundle (v4)
+            if (membership != null) {
+                put("membership", JSONObject().apply {
+                    put("root_id", membership.rootId)
+                    put("purpose", membership.purpose)
+                    put("proof", membership.proofBase64)
+                })
             }
         }.toString()
         
@@ -747,7 +774,55 @@ fun SignedByMeApp(
                                 
                                 android.util.Log.i("SignedByMe", "DLC contract built: ${dlcContract?.contractId}")
                                 
-                                // 3. Submit to API with proof + DLC metadata
+                                // 2.5. Generate membership proof if required
+                                var membershipBundle: MembershipBundle? = null
+                                val requiredRootId = loginSession?.requiredRootId
+                                val clientId = loginSession?.clientId
+                                
+                                if (requiredRootId != null && clientId != null) {
+                                    android.util.Log.i("SignedByMe", "Membership required: client=$clientId, root=$requiredRootId")
+                                    
+                                    val witness = didMgr.loadWitness(clientId, requiredRootId)
+                                    if (witness != null) {
+                                        // Get DID pubkey bytes for binding hash
+                                        val didPubkeyHex = did.removePrefix("did:btcr:")
+                                        val didPubkeyBytes = didPubkeyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+                                        val paymentHashBytes = lastPaymentHash.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+                                        val nonceBytes = sessionNonce.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+                                        
+                                        // Compute V4 binding hash (must match server)
+                                        val bindingHash = NativeBridge.computeBindingHashV4(
+                                            didPubkey = didPubkeyBytes,
+                                            walletAddress = walletAddress,
+                                            clientId = clientId,
+                                            sessionId = sessionId,
+                                            paymentHash = paymentHashBytes,
+                                            amountSats = sessionAmount,
+                                            expiresAt = loginSession?.expiresAt ?: (System.currentTimeMillis() / 1000 + 300),
+                                            nonce = nonceBytes,
+                                            eaDomain = enterpriseDomain,
+                                            purposeId = witness.purposeId,
+                                            rootId = requiredRootId
+                                        )
+                                        
+                                        // Generate membership proof
+                                        val proofBase64 = didMgr.generateMembershipProof(witness, bindingHash)
+                                        if (proofBase64 != null) {
+                                            membershipBundle = MembershipBundle(
+                                                rootId = requiredRootId,
+                                                purpose = didMgr.purposeIdToString(witness.purposeId),
+                                                proofBase64 = proofBase64
+                                            )
+                                            android.util.Log.i("SignedByMe", "Membership proof generated successfully")
+                                        } else {
+                                            android.util.Log.w("SignedByMe", "Failed to generate membership proof")
+                                        }
+                                    } else {
+                                        android.util.Log.w("SignedByMe", "No witness found for client=$clientId, root=$requiredRootId")
+                                    }
+                                }
+                                
+                                // 3. Submit to API with proof + DLC metadata + membership
                                 val apiResult = sendInvoiceToApiWithDlc(
                                     sessionToken = loginSession?.sessionToken,
                                     sessionId = sessionId,
@@ -757,7 +832,8 @@ fun SignedByMeApp(
                                     amountSats = sessionAmount,
                                     stwoproof = stwoproof,
                                     nonce = sessionNonce,
-                                    dlcContractJson = dlcContract?.toJson()
+                                    dlcContractJson = dlcContract?.toJson(),
+                                    membership = membershipBundle
                                 )
                                 
                                 withContext(Dispatchers.Main) {
