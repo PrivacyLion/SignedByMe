@@ -1852,7 +1852,7 @@ fun LoginScreen(
                                                 val conn = url.openConnection() as java.net.HttpURLConnection
                                                 conn.requestMethod = "POST"
                                                 conn.setRequestProperty("Content-Type", "application/json")
-                                                conn.setRequestProperty("X-API-Key", "acme_sk_test_abc123")
+                                                conn.setRequestProperty("X-API-Key", "acme-test-key-2026")
                                                 conn.doOutput = true
                                                 conn.outputStream.write("""{"enterprise":"AcmeCorp","amount_sats":100}""".toByteArray())
                                                 val response = conn.inputStream.bufferedReader().readText()
