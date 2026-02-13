@@ -777,7 +777,7 @@ class DidWalletManager(private val context: Context) {
             for (filename in assetList) {
                 if (!filename.endsWith(".json")) continue
                 val destFile = java.io.File(dir, filename)
-                if (destFile.exists()) continue  // Don't overwrite existing
+                // Always overwrite in debug mode to pick up fixed witnesses
                 context.assets.open("witnesses/$filename").use { input ->
                     destFile.outputStream().use { output ->
                         input.copyTo(output)
