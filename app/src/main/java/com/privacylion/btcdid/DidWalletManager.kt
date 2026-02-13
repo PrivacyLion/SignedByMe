@@ -528,8 +528,10 @@ class DidWalletManager(private val context: Context) {
         }
     }
 
-    private fun hexToBytes(hex: String): ByteArray =
-        hex.trim().chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+    private fun hexToBytes(hex: String): ByteArray {
+        val cleanHex = hex.trim().let { if (it.startsWith("0x")) it.drop(2) else it }
+        return cleanHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+    }
 
     private fun bytesToHex(b: ByteArray): String =
         b.joinToString("") { "%02x".format(it) }
@@ -926,11 +928,6 @@ class DidWalletManager(private val context: Context) {
         } finally {
             java.util.Arrays.fill(leafSecret, 0.toByte())
         }
-    }
-    
-    private fun hexToBytes(hex: String): ByteArray {
-        val cleanHex = if (hex.startsWith("0x")) hex.drop(2) else hex
-        return cleanHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
     }
     
     /**
