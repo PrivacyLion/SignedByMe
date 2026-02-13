@@ -2,6 +2,7 @@
   "version": 1,
   "client_id": "acme",
   "root_id": "acme-allowlist-1771011349",
+  "root_hash": "0x000000000000000000000000000000000000000000000000ec379e949062268e",
   "purpose_id": 1,
   "hash_alg": "poseidon",
   "depth": 20,
