@@ -930,14 +930,18 @@ fun SignedByMeApp(
             // DEV: Export leaf commitment for membership testing
             onDevExportLeafCommitment = if (BuildConfig.DEBUG) {
                 {
-                    // Use test client_id and root_id for now
-                    val testClientId = "acme"
-                    val testRootId = "test-membership-001"
-                    val commitment = didMgr.devExportLeafCommitment(testClientId, testRootId)
-                    if (commitment != null) {
-                        Toast.makeText(context, "Leaf commitment exported to logcat", Toast.LENGTH_LONG).show()
+                    // Use real session values if available, otherwise show error
+                    val clientId = loginSession?.clientId
+                    val rootId = loginSession?.requiredRootId
+                    if (clientId != null && rootId != null) {
+                        val commitment = didMgr.devExportLeafCommitment(clientId, rootId)
+                        if (commitment != null) {
+                            Toast.makeText(context, "Leaf commitment exported to logcat", Toast.LENGTH_LONG).show()
+                        } else {
+                            Toast.makeText(context, "Failed to export commitment", Toast.LENGTH_SHORT).show()
+                        }
                     } else {
-                        Toast.makeText(context, "Failed to export commitment", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "No active session - scan a QR first", Toast.LENGTH_SHORT).show()
                     }
                 }
             } else null,
@@ -2325,9 +2329,10 @@ fun QrScannerDialog(
         )
     }
     
-    // Track camera provider and executor for cleanup
+    // Track camera provider, executor, and scanner for cleanup
     var cameraProviderRef by remember { mutableStateOf<androidx.camera.lifecycle.ProcessCameraProvider?>(null) }
     val analysisExecutor = remember { java.util.concurrent.Executors.newSingleThreadExecutor() }
+    val barcodeScanner = remember { com.google.mlkit.vision.barcode.BarcodeScanning.getClient() }
     var isDisposed by remember { mutableStateOf(false) }
     
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -2342,12 +2347,13 @@ fun QrScannerDialog(
         }
     }
     
-    // Cleanup camera and executor on dismiss
+    // Cleanup camera, executor, and scanner on dismiss
     DisposableEffect(Unit) {
         onDispose {
             isDisposed = true
             cameraProviderRef?.unbindAll()
             analysisExecutor.shutdown()
+            barcodeScanner.close()
         }
     }
     
@@ -2414,8 +2420,7 @@ fun QrScannerDialog(
                                                         mediaImage, imageProxy.imageInfo.rotationDegrees
                                                     )
                                                     
-                                                    val scanner = com.google.mlkit.vision.barcode.BarcodeScanning.getClient()
-                                                    scanner.process(inputImage)
+                                                    barcodeScanner.process(inputImage)
                                                         .addOnSuccessListener { barcodes ->
                                                             if (isDisposed) return@addOnSuccessListener
                                                             for (barcode in barcodes) {
@@ -2428,7 +2433,6 @@ fun QrScannerDialog(
                                                         }
                                                         .addOnCompleteListener {
                                                             imageProxy.close()
-                                                            scanner.close() // Release scanner resources
                                                         }
                                                 } else {
                                                     imageProxy.close()
