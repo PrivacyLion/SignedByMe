@@ -2302,8 +2302,10 @@ fun QrScannerDialog(
         )
     }
     
-    // Track camera provider for cleanup
+    // Track camera provider and executor for cleanup
     var cameraProviderRef by remember { mutableStateOf<androidx.camera.lifecycle.ProcessCameraProvider?>(null) }
+    val analysisExecutor = remember { java.util.concurrent.Executors.newSingleThreadExecutor() }
+    var isDisposed by remember { mutableStateOf(false) }
     
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
@@ -2317,10 +2319,12 @@ fun QrScannerDialog(
         }
     }
     
-    // Cleanup camera on dismiss
+    // Cleanup camera and executor on dismiss
     DisposableEffect(Unit) {
         onDispose {
+            isDisposed = true
             cameraProviderRef?.unbindAll()
+            analysisExecutor.shutdown()
         }
     }
     
@@ -2379,9 +2383,7 @@ fun QrScannerDialog(
                                         .setBackpressureStrategy(androidx.camera.core.ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                                         .build()
                                         .also { analysis ->
-                                            analysis.setAnalyzer(
-                                                java.util.concurrent.Executors.newSingleThreadExecutor()
-                                            ) { imageProxy ->
+                                            analysis.setAnalyzer(analysisExecutor) { imageProxy ->
                                                 @androidx.camera.core.ExperimentalGetImage
                                                 val mediaImage = imageProxy.image
                                                 if (mediaImage != null) {
@@ -2392,6 +2394,7 @@ fun QrScannerDialog(
                                                     val scanner = com.google.mlkit.vision.barcode.BarcodeScanning.getClient()
                                                     scanner.process(inputImage)
                                                         .addOnSuccessListener { barcodes ->
+                                                            if (isDisposed) return@addOnSuccessListener
                                                             for (barcode in barcodes) {
                                                                 barcode.rawValue?.let { value ->
                                                                     if (value.contains("session=") && value.contains("enterprise=")) {
@@ -2402,12 +2405,16 @@ fun QrScannerDialog(
                                                         }
                                                         .addOnCompleteListener {
                                                             imageProxy.close()
+                                                            scanner.close() // Release scanner resources
                                                         }
                                                 } else {
                                                     imageProxy.close()
                                                 }
                                             }
                                         }
+                                    
+                                    // Guard against binding after disposal
+                                    if (isDisposed) return@addListener
                                     
                                     try {
                                         cameraProvider.unbindAll()
