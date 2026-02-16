@@ -54,6 +54,7 @@ import breez_sdk_spark.PaymentStatus
 import breez_sdk_spark.PaymentDetails
 import com.privacylion.btcdid.ui.theme.BTC_DIDTheme
 import kotlinx.coroutines.*
+import androidx.lifecycle.lifecycleScope
 import org.json.JSONObject
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
@@ -90,7 +91,10 @@ class MainActivity : FragmentActivity() {
         }
         
         val didMgr = DidWalletManager(applicationContext)
-        didMgr.copyWitnessesFromAssets()  // Copy bundled test witnesses (debug only)
+        // Copy bundled test witnesses asynchronously (debug only)
+        lifecycleScope.launch(Dispatchers.IO) {
+            didMgr.copyWitnessesFromAssets()
+        }
         val breezMgr = BreezWalletManager(applicationContext)
         
         // Parse deep link from intent
@@ -596,7 +600,14 @@ fun SignedByMeApp(
     var backupPasswordConfirm by remember { mutableStateOf("") }
     var isBackingUp by remember { mutableStateOf(false) }
     var backupError by remember { mutableStateOf("") }
-    var isGoogleSignedIn by remember { mutableStateOf(googleDriveManager.isSignedIn()) }
+    var isGoogleSignedIn by remember { mutableStateOf<Boolean?>(null) }
+    
+    // Load Google Sign-In state asynchronously to avoid disk I/O on main thread
+    LaunchedEffect(Unit) {
+        isGoogleSignedIn = withContext(Dispatchers.IO) {
+            googleDriveManager.isSignedIn()
+        }
+    }
     
     // Google Sign-In launcher
     val googleSignInLauncher = rememberLauncherForActivityResult(
@@ -1209,14 +1220,14 @@ fun SignedByMeApp(
                 Toast.makeText(context, "Seed words copied!", Toast.LENGTH_SHORT).show()
             },
             onBackupToCloud = {
-                if (isGoogleSignedIn) {
+                if (isGoogleSignedIn == true) {
                     // Already signed in, show password dialog
                     backupPassword = ""
                     backupPasswordConfirm = ""
                     backupError = ""
                     showBackupPasswordDialog = true
                 } else {
-                    // Need to sign in first
+                    // Need to sign in first (or still checking)
                     googleSignInLauncher.launch(googleDriveManager.getSignInIntent())
                 }
             }
