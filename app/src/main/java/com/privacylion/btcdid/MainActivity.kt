@@ -2437,8 +2437,15 @@ fun QrScannerDialog(
     // Track camera provider, executor, and scanner for cleanup
     var cameraProviderRef by remember { mutableStateOf<androidx.camera.lifecycle.ProcessCameraProvider?>(null) }
     val analysisExecutor = remember { java.util.concurrent.Executors.newSingleThreadExecutor() }
-    val barcodeScanner = remember { com.google.mlkit.vision.barcode.BarcodeScanning.getClient() }
+    var barcodeScanner by remember { mutableStateOf<com.google.mlkit.vision.barcode.BarcodeScanner?>(null) }
     var isDisposed by remember { mutableStateOf(false) }
+    
+    // Initialize barcode scanner off the main thread to avoid StrictMode disk I/O
+    LaunchedEffect(Unit) {
+        barcodeScanner = withContext(Dispatchers.IO) {
+            com.google.mlkit.vision.barcode.BarcodeScanning.getClient()
+        }
+    }
     
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
@@ -2458,7 +2465,7 @@ fun QrScannerDialog(
             isDisposed = true
             cameraProviderRef?.unbindAll()
             analysisExecutor.shutdown()
-            barcodeScanner.close()
+            barcodeScanner?.close()
         }
     }
     
@@ -2520,12 +2527,13 @@ fun QrScannerDialog(
                                             analysis.setAnalyzer(analysisExecutor) { imageProxy ->
                                                 @androidx.camera.core.ExperimentalGetImage
                                                 val mediaImage = imageProxy.image
-                                                if (mediaImage != null) {
+                                                val scanner = barcodeScanner
+                                                if (mediaImage != null && scanner != null) {
                                                     val inputImage = com.google.mlkit.vision.common.InputImage.fromMediaImage(
                                                         mediaImage, imageProxy.imageInfo.rotationDegrees
                                                     )
                                                     
-                                                    barcodeScanner.process(inputImage)
+                                                    scanner.process(inputImage)
                                                         .addOnSuccessListener { barcodes ->
                                                             if (isDisposed) return@addOnSuccessListener
                                                             for (barcode in barcodes) {
