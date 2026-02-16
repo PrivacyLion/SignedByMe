@@ -1070,11 +1070,15 @@ fun SignedByMeApp(
                     val clientId = loginSession?.clientId
                     val rootId = loginSession?.requiredRootId
                     if (clientId != null && rootId != null) {
-                        val commitment = didMgr.devExportLeafCommitment(clientId, rootId)
-                        if (commitment != null) {
-                            Toast.makeText(context, "Leaf commitment exported to logcat", Toast.LENGTH_LONG).show()
-                        } else {
-                            Toast.makeText(context, "Failed to export commitment", Toast.LENGTH_SHORT).show()
+                        scope.launch {
+                            val commitment = withContext(Dispatchers.IO) {
+                                didMgr.devExportLeafCommitment(clientId, rootId)
+                            }
+                            if (commitment != null) {
+                                Toast.makeText(context, "Leaf commitment exported to logcat", Toast.LENGTH_LONG).show()
+                            } else {
+                                Toast.makeText(context, "Failed to export commitment", Toast.LENGTH_SHORT).show()
+                            }
                         }
                     } else {
                         Toast.makeText(context, "No active session - scan a QR first", Toast.LENGTH_SHORT).show()
