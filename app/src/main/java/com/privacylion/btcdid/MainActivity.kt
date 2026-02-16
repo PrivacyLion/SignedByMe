@@ -337,6 +337,11 @@ data class MembershipBundle(
     val proofBase64: String
 )
 
+/**
+ * Result of API call - success flag + optional error message
+ */
+data class ApiResult(val success: Boolean, val errorMessage: String? = null, val responseBody: String? = null)
+
 private fun sendInvoiceToApiWithDlc(
     sessionToken: String?,
     sessionId: String,
@@ -349,7 +354,7 @@ private fun sendInvoiceToApiWithDlc(
     dlcContractJson: String?,
     membership: MembershipBundle? = null,
     walletAddress: String? = null
-): Boolean {
+): ApiResult {
     return try {
         val endpoint = if (sessionToken != null) "/v1/login/submit" else "/v1/login/invoice"
         val url = java.net.URL("$API_BASE_URL$endpoint")
@@ -416,10 +421,20 @@ private fun sendInvoiceToApiWithDlc(
         
         android.util.Log.i("SignedByMe", "API response: $responseCode - $responseBody")
         
-        responseCode in 200..299
+        if (responseCode in 200..299) {
+            ApiResult(success = true, responseBody = responseBody)
+        } else {
+            // Parse error detail from JSON response
+            val errorDetail = try {
+                JSONObject(responseBody).optString("detail", "Request failed ($responseCode)")
+            } catch (e: Exception) {
+                "Request failed ($responseCode)"
+            }
+            ApiResult(success = false, errorMessage = errorDetail)
+        }
     } catch (e: Exception) {
         android.util.Log.e("SignedByMe", "Failed to send invoice to API: ${e.message}")
-        false
+        ApiResult(success = false, errorMessage = "Network error: ${e.message}")
     }
 }
 
@@ -823,10 +838,18 @@ fun SignedByMeApp(
                                             )
                                             android.util.Log.i("SignedByMe", "Membership proof generated successfully")
                                         } else {
-                                            android.util.Log.w("SignedByMe", "Failed to generate membership proof")
+                                            android.util.Log.e("SignedByMe", "Failed to generate membership proof")
+                                            withContext(Dispatchers.Main) {
+                                                statusMessage = "Error: Could not generate membership proof. Please re-enroll with this employer."
+                                            }
+                                            return@launch
                                         }
                                     } else {
-                                        android.util.Log.w("SignedByMe", "No witness found for client=$clientId, root=$requiredRootId")
+                                        android.util.Log.e("SignedByMe", "No witness found for client=$clientId, root=$requiredRootId")
+                                        withContext(Dispatchers.Main) {
+                                            statusMessage = "Error: Not enrolled with this employer. Contact your admin."
+                                        }
+                                        return@launch
                                     }
                                 }
                                 
@@ -846,8 +869,8 @@ fun SignedByMeApp(
                                 )
                                 
                                 withContext(Dispatchers.Main) {
-                                    if (!apiResult) {
-                                        statusMessage = "Note: Could not reach API. Use debug button to test."
+                                    if (!apiResult.success) {
+                                        statusMessage = "Error: ${apiResult.errorMessage ?: "Could not reach API"}"
                                     }
                                 }
                             } catch (e: Exception) {
