@@ -240,8 +240,15 @@ fn escape_json_str(s: &str) -> String {
 
 // --- JNI-facing functions ---
 
-/// Get the local oracle's x-only public key (hex)
+/// Get the local oracle's compressed public key (hex) - 33 bytes
+/// Used by DLC builder which expects compressed format
 pub fn oracle_pubkey_hex() -> String {
+    Oracle::local().pubkey_hex()
+}
+
+/// Get the local oracle's x-only public key (hex) - 32 bytes
+/// Used for BIP340 Schnorr signature verification
+pub fn oracle_x_only_pubkey_hex() -> String {
     Oracle::local().x_only_pubkey_hex()
 }
 
