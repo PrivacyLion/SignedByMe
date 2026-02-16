@@ -507,8 +507,25 @@ fun SignedByMeApp(
     val scope = rememberCoroutineScope()
 
     // ===== State =====
-    var did by remember { mutableStateOf(didMgr.getPublicDID() ?: "") }
-    var step1Complete by remember { mutableStateOf(did.isNotEmpty()) }
+    // DID loaded async to avoid blocking main thread
+    var did by remember { mutableStateOf<String?>(null) }
+    var didErr by remember { mutableStateOf<String?>(null) }
+    var step1Complete by remember { mutableStateOf(false) }
+    
+    // Load DID on IO thread
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            runCatching { didMgr.getPublicDID() }
+                .onSuccess { loadedDid ->
+                    did = loadedDid ?: ""
+                    step1Complete = loadedDid?.isNotEmpty() == true
+                }
+                .onFailure { e ->
+                    didErr = e.message ?: "Failed to load DID"
+                    did = ""  // Mark as loaded (empty)
+                }
+        }
+    }
     val walletState by breezMgr.walletState.collectAsState()
     var step2Complete by remember { mutableStateOf(walletState is BreezWalletManager.WalletState.Connected) }
     var step3Complete by remember { mutableStateOf(false) }
@@ -720,10 +737,67 @@ fun SignedByMeApp(
     }
 
     // ===== Screen Routing =====
-    if (showLoginScreen) {
+    // Gate on DID loading state
+    if (did == null && didErr == null) {
+        // Loading state - show minimal placeholder
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(48.dp),
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("Loading…", style = MaterialTheme.typography.bodyLarge)
+            }
+        }
+    } else if (didErr != null) {
+        // Error state - show retry option
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = "Failed to load identity",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.error
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = didErr ?: "Unknown error",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(onClick = {
+                    // Retry loading DID
+                    didErr = null
+                    did = null
+                    scope.launch(Dispatchers.IO) {
+                        runCatching { didMgr.getPublicDID() }
+                            .onSuccess { loadedDid ->
+                                did = loadedDid ?: ""
+                                step1Complete = loadedDid?.isNotEmpty() == true
+                            }
+                            .onFailure { e ->
+                                didErr = e.message ?: "Failed to load DID"
+                                did = ""
+                            }
+                    }
+                }) {
+                    Icon(Icons.Default.Refresh, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Retry")
+                }
+            }
+        }
+    } else if (showLoginScreen) {
         // Show Login Screen
         LoginScreen(
-            did = did,
+            did = did!!,
             balanceSats = balanceSats,
             vccId = vccId,
             vccResult = vccResult,
@@ -833,7 +907,7 @@ fun SignedByMeApp(
                                 val dlcContract = try {
                                     dlcManager.buildAuthContract(
                                         loginId = sessionId,
-                                        did = did,
+                                        did = did!!,
                                         amountSats = sessionAmount
                                     )
                                 } catch (e: Exception) {
@@ -859,7 +933,7 @@ fun SignedByMeApp(
                                     val witness = didMgr.loadWitness(clientId, requiredRootId)
                                     if (witness != null) {
                                         // Get DID pubkey bytes for binding hash
-                                        val didPubkeyHex = did.removePrefix("did:btcr:")
+                                        val didPubkeyHex = did!!.removePrefix("did:btcr:")
                                         val didPubkeyBytes = didPubkeyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
                                         val paymentHashBytes = lastPaymentHash.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
                                         val nonceBytes = sessionNonce.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
@@ -909,7 +983,7 @@ fun SignedByMeApp(
                                     sessionToken = loginSession?.sessionToken,
                                     sessionId = sessionId,
                                     invoice = invoice,
-                                    did = did,
+                                    did = did!!,
                                     enterpriseName = enterpriseDomain,
                                     amountSats = sessionAmount,
                                     stwoproof = stwoproof,
@@ -1189,7 +1263,7 @@ fun SignedByMeApp(
     } else {
         // Show Onboarding Screen
         OnboardingScreen(
-            did = did,
+            did = did!!,
             step1Complete = step1Complete,
             step2Complete = step2Complete,
             step3Complete = step3Complete,
@@ -1217,7 +1291,7 @@ fun SignedByMeApp(
             },
             onCopyDid = {
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("DID", did))
+                clipboard.setPrimaryClip(ClipData.newPlainText("DID", did!!))
                 Toast.makeText(context, "Copied!", Toast.LENGTH_SHORT).show()
             },
             onSetupWallet = {
@@ -1250,7 +1324,7 @@ fun SignedByMeApp(
                         }
 
                         val claimJson = didMgr.buildOwnershipClaimJson(
-                            did = did,
+                            did = did!!,
                             nonce = lastNonce.ifEmpty { "android-${System.currentTimeMillis()}" },
                             walletType = "breez",
                             withdrawTo = walletSparkAddress.ifEmpty { "lightning-wallet" },
@@ -1265,7 +1339,7 @@ fun SignedByMeApp(
 
                         val prpJson = didMgr.buildPrpJson(
                             loginId = lastLoginId.ifEmpty { "android-${System.currentTimeMillis()}" },
-                            did = did,
+                            did = did!!,
                             preimageSha256Hex = preShaHex
                         )
                         
@@ -1276,11 +1350,11 @@ fun SignedByMeApp(
                         )
                         val stwoproofHash = didMgr.getIdentityProofHash() ?: "none"
 
-                        val generatedVccId = "vcc_${System.currentTimeMillis()}_${did.takeLast(8)}"
+                        val generatedVccId = "vcc_${System.currentTimeMillis()}_${did!!.takeLast(8)}"
                         val vcc = JSONObject().apply {
                             put("schema", "signedby.me/vcc/2")  // Updated schema with STWO
                             put("id", generatedVccId)
-                            put("did", did)
+                            put("did", did!!)
                             put("wallet_address", walletSparkAddress)
                             put("content_hash", "sha256_demo_${System.currentTimeMillis()}")
                             put("proof_hash", preShaHex)
@@ -1565,7 +1639,7 @@ fun OnboardingScreen(
     // Dialogs
     if (showIdDialog) {
         DIDInfoDialog(
-            did = did,
+            did = did!!,
             onDismiss = onDismissIdDialog,
             onRegenerate = onRegenerateDid,
             onCopy = onCopyDid
