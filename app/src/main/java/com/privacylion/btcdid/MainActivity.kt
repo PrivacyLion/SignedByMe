@@ -1358,6 +1358,7 @@ fun SignedByMeApp(
             walletState = walletState,
             balanceSats = balanceSats,
             isWalletInitializing = isWalletInitializing,
+            isRestoring = isRestoring || isCheckingBackup,
             walletSparkAddress = walletSparkAddress,
             isLoading = isLoading,
             statusMessage = statusMessage,
@@ -1390,6 +1391,30 @@ fun SignedByMeApp(
                     result.onFailure { e ->
                         statusMessage = "Error: ${e.message}"
                     }
+                }
+            },
+            onRestoreWallet = {
+                if (isGoogleSignedIn == true) {
+                    // Already signed in, check for backup
+                    scope.launch {
+                        isCheckingBackup = true
+                        val hasBackup = withContext(Dispatchers.IO) {
+                            googleDriveManager.hasBackup()
+                        }
+                        isCheckingBackup = false
+                        hasCloudBackup = hasBackup
+                        if (hasBackup) {
+                            restorePassword = ""
+                            restoreError = ""
+                            showRestorePasswordDialog = true
+                        } else {
+                            Toast.makeText(context, "No backup found for this Google account", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                } else {
+                    // Need to sign in first
+                    restoreMode = true
+                    googleSignInLauncher.launch(googleDriveManager.getSignInIntent())
                 }
             },
             onShowWalletInfoDialog = { showWalletInfoDialog = true },
@@ -1522,6 +1547,7 @@ fun OnboardingScreen(
     walletState: BreezWalletManager.WalletState,
     balanceSats: Long,
     isWalletInitializing: Boolean,
+    isRestoring: Boolean,
     walletSparkAddress: String,
     isLoading: Boolean,
     statusMessage: String,
@@ -1535,6 +1561,7 @@ fun OnboardingScreen(
     onRegenerateDid: () -> Unit,
     onCopyDid: () -> Unit,
     onSetupWallet: () -> Unit,
+    onRestoreWallet: () -> Unit,
     onShowWalletInfoDialog: () -> Unit,
     onDismissWalletInfoDialog: () -> Unit,
     onCopySparkAddress: () -> Unit,
@@ -1640,7 +1667,7 @@ fun OnboardingScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    if (isWalletInitializing || isRestoring || isCheckingBackup) {
+                    if (isWalletInitializing || isRestoring) {
                         Column(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalAlignment = Alignment.CenterHorizontally
@@ -1651,11 +1678,7 @@ fun OnboardingScreen(
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
-                                when {
-                                    isRestoring -> "Restoring wallet..."
-                                    isCheckingBackup -> "Checking for backup..."
-                                    else -> "Setting up wallet..."
-                                },
+                                if (isRestoring) "Restoring wallet..." else "Setting up wallet...",
                                 fontSize = 14.sp,
                                 color = Color.Gray
                             )
@@ -1675,30 +1698,7 @@ fun OnboardingScreen(
                             
                             // Restore from backup button
                             OutlinedButton(
-                                onClick = {
-                                    if (isGoogleSignedIn == true) {
-                                        // Already signed in, check for backup
-                                        scope.launch {
-                                            isCheckingBackup = true
-                                            val hasBackup = withContext(Dispatchers.IO) {
-                                                googleDriveManager.hasBackup()
-                                            }
-                                            isCheckingBackup = false
-                                            hasCloudBackup = hasBackup
-                                            if (hasBackup) {
-                                                restorePassword = ""
-                                                restoreError = ""
-                                                showRestorePasswordDialog = true
-                                            } else {
-                                                Toast.makeText(context, "No backup found for this Google account", Toast.LENGTH_LONG).show()
-                                            }
-                                        }
-                                    } else {
-                                        // Need to sign in first
-                                        restoreMode = true
-                                        googleSignInLauncher.launch(googleDriveManager.getSignInIntent())
-                                    }
-                                },
+                                onClick = onRestoreWallet,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(50.dp),
