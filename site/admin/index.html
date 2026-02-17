@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SignedByMe Admin</title>
+    <style>
+        :root {
+            --primary: #1a56db;
+            --primary-dark: #1e40af;
+            --success: #059669;
+            --warning: #d97706;
+            --error: #dc2626;
+            --text: #111827;
+            --text-muted: #6b7280;
+            --bg: #f3f4f6;
+            --white: #ffffff;
+            --border: #e5e7eb;
+        }
+        
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+        }
+        
+        .header {
+            background: var(--white);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header h1 {
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .header h1 span { color: var(--primary); }
+        
+        .client-badge {
+            background: var(--primary);
+            color: var(--white);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 13px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+        
+        /* Auth Modal */
+        .auth-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+        
+        .auth-modal.hidden { display: none; }
+        
+        .auth-box {
+            background: var(--white);
+            padding: 32px;
+            border-radius: 12px;
+            width: 100%;
+            max-width: 360px;
+        }
+        
+        .auth-box h2 {
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        .auth-box input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 14px;
+            margin-bottom: 16px;
+        }
+        
+        .auth-box button {
+            width: 100%;
+            padding: 12px;
+            background: var(--primary);
+            color: var(--white);
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        
+        .auth-box button:hover { background: var(--primary-dark); }
+        
+        .auth-error {
+            color: var(--error);
+            font-size: 13px;
+            margin-bottom: 12px;
+            text-align: center;
+        }
+        
+        .auth-error.hidden { display: none; }
+        
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        
+        .stat-card {
+            background: var(--white);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+        
+        .stat-card .label {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+        
+        .stat-card .value {
+            font-size: 28px;
+            font-weight: 700;
+        }
+        
+        .stat-card .value.success { color: var(--success); }
+        .stat-card .value.warning { color: var(--warning); }
+        
+        /* Tables */
+        .card {
+            background: var(--white);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            margin-bottom: 24px;
+            overflow: hidden;
+        }
+        
+        .card-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .card-header h2 {
+            font-size: 16px;
+        }
+        
+        .refresh-btn {
+            background: none;
+            border: 1px solid var(--border);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .refresh-btn:hover { background: var(--bg); }
+        
+        .auto-refresh {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th, td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        th {
+            background: var(--bg);
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+        }
+        
+        td { font-size: 14px; }
+        
+        tr:last-child td { border-bottom: none; }
+        
+        .did-cell {
+            font-family: monospace;
+            font-size: 12px;
+            max-width: 150px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        
+        .status-badge.success {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        
+        .status-badge.failed {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        
+        .status-badge.skipped {
+            background: #f3f4f6;
+            color: #6b7280;
+        }
+        
+        .time-cell {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+        
+        .empty-state {
+            padding: 40px;
+            text-align: center;
+            color: var(--text-muted);
+        }
+        
+        /* Loading */
+        .loading {
+            display: flex;
+            justify-content: center;
+            padding: 40px;
+        }
+        
+        .spinner {
+            width: 24px;
+            height: 24px;
+            border: 2px solid var(--border);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin { to { transform: rotate(360deg); } }
+        
+        /* Config Section */
+        .config-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 12px;
+            padding: 16px;
+        }
+        
+        .config-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 12px;
+            background: var(--bg);
+            border-radius: 6px;
+            font-size: 13px;
+        }
+        
+        .config-item .key { color: var(--text-muted); }
+        .config-item .val { font-weight: 500; }
+    </style>
+</head>
+<body>
+    <!-- Auth Modal -->
+    <div class="auth-modal" id="auth-modal">
+        <div class="auth-box">
+            <h2>🔐 Admin Login</h2>
+            <div class="auth-error hidden" id="auth-error">Invalid password</div>
+            <input type="password" id="password" placeholder="Admin password" autofocus>
+            <button onclick="authenticate()">Sign In</button>
+        </div>
+    </div>
+    
+    <div id="main-content" style="display: none;">
+        <div class="header">
+            <h1><span>⚡</span> SignedByMe Admin</h1>
+            <span class="client-badge" id="client-name">Loading...</span>
+        </div>
+        
+        <div class="container">
+            <!-- Stats -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="label">Strike Status</div>
+                    <div class="value" id="strike-status">--</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Strike Balance</div>
+                    <div class="value success" id="strike-balance">--</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Login Events</div>
+                    <div class="value" id="total-events">--</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Payout Attempts</div>
+                    <div class="value" id="total-payouts">--</div>
+                </div>
+            </div>
+            
+            <!-- Recent Logins -->
+            <div class="card">
+                <div class="card-header">
+                    <h2>📋 Recent Logins</h2>
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <span class="auto-refresh">Auto-refresh: 10s</span>
+                        <button class="refresh-btn" onclick="loadEvents()">
+                            🔄 Refresh
+                        </button>
+                    </div>
+                </div>
+                <div id="events-container">
+                    <div class="loading"><div class="spinner"></div></div>
+                </div>
+            </div>
+            
+            <!-- Recent Payouts -->
+            <div class="card">
+                <div class="card-header">
+                    <h2>💸 Recent Payouts</h2>
+                    <button class="refresh-btn" onclick="loadPayouts()">
+                        🔄 Refresh
+                    </button>
+                </div>
+                <div id="payouts-container">
+                    <div class="loading"><div class="spinner"></div></div>
+                </div>
+            </div>
+            
+            <!-- Config -->
+            <div class="card">
+                <div class="card-header">
+                    <h2>⚙️ Configuration (Read-Only)</h2>
+                </div>
+                <div id="config-container" class="config-grid">
+                    <div class="loading"><div class="spinner"></div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = '';  // Same origin
+        let authHeader = '';
+        
+        // Check for stored auth
+        const storedAuth = sessionStorage.getItem('sbm_admin_auth');
+        if (storedAuth) {
+            authHeader = storedAuth;
+            showMain();
+        }
+        
+        document.getElementById('password').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') authenticate();
+        });
+        
+        async function authenticate() {
+            const password = document.getElementById('password').value;
+            authHeader = 'Basic ' + btoa('admin:' + password);
+            
+            try {
+                const res = await fetch(`${API_BASE}/v1/admin/status`, {
+                    headers: { 'Authorization': authHeader }
+                });
+                
+                if (res.ok) {
+                    sessionStorage.setItem('sbm_admin_auth', authHeader);
+                    showMain();
+                } else {
+                    document.getElementById('auth-error').classList.remove('hidden');
+                }
+            } catch (e) {
+                document.getElementById('auth-error').textContent = 'Connection error';
+                document.getElementById('auth-error').classList.remove('hidden');
+            }
+        }
+        
+        function showMain() {
+            document.getElementById('auth-modal').classList.add('hidden');
+            document.getElementById('main-content').style.display = 'block';
+            loadAll();
+            setInterval(loadAll, 10000);  // Auto-refresh every 10s
+        }
+        
+        async function loadAll() {
+            await Promise.all([loadStatus(), loadEvents(), loadPayouts(), loadConfig()]);
+        }
+        
+        async function loadStatus() {
+            try {
+                const res = await fetch(`${API_BASE}/v1/admin/status`, {
+                    headers: { 'Authorization': authHeader }
+                });
+                const data = await res.json();
+                
+                document.getElementById('strike-status').textContent = 
+                    data.strike_configured ? '✓ Connected' : '✗ Not configured';
+                document.getElementById('strike-status').className = 
+                    'value ' + (data.strike_configured ? 'success' : 'warning');
+                
+                if (data.strike_balance) {
+                    const btc = data.strike_balance.find(b => b.currency === 'BTC');
+                    document.getElementById('strike-balance').textContent = 
+                        btc ? `${Math.round(btc.available * 100000000)} sats` : '--';
+                } else {
+                    document.getElementById('strike-balance').textContent = '--';
+                }
+                
+                document.getElementById('total-events').textContent = data.total_login_events;
+                document.getElementById('total-payouts').textContent = data.total_payout_attempts;
+                
+            } catch (e) {
+                console.error('Status error:', e);
+            }
+        }
+        
+        async function loadEvents() {
+            try {
+                const res = await fetch(`${API_BASE}/v1/admin/events?limit=20`, {
+                    headers: { 'Authorization': authHeader }
+                });
+                const data = await res.json();
+                
+                if (data.events.length === 0) {
+                    document.getElementById('events-container').innerHTML = 
+                        '<div class="empty-state">No login events yet</div>';
+                    return;
+                }
+                
+                let html = `<table>
+                    <tr>
+                        <th>Time</th>
+                        <th>Client</th>
+                        <th>DID</th>
+                        <th>Payout</th>
+                    </tr>`;
+                
+                for (const e of data.events) {
+                    const time = new Date(e.timestamp).toLocaleString();
+                    const did = e.did.substring(0, 12) + '...' + e.did.slice(-8);
+                    const payout = e.payout 
+                        ? `<span class="status-badge ${e.payout.status}">${e.payout.status === 'success' ? '✓ ' + e.payout.amount_sats + ' sats' : e.payout.status}</span>`
+                        : '<span class="status-badge skipped">--</span>';
+                    
+                    html += `<tr>
+                        <td class="time-cell">${time}</td>
+                        <td>${e.client_id}</td>
+                        <td class="did-cell" title="${e.did}">${did}</td>
+                        <td>${payout}</td>
+                    </tr>`;
+                }
+                
+                html += '</table>';
+                document.getElementById('events-container').innerHTML = html;
+                
+            } catch (e) {
+                console.error('Events error:', e);
+            }
+        }
+        
+        async function loadPayouts() {
+            try {
+                const res = await fetch(`${API_BASE}/v1/admin/payments?limit=20`, {
+                    headers: { 'Authorization': authHeader }
+                });
+                const data = await res.json();
+                
+                if (data.attempts.length === 0) {
+                    document.getElementById('payouts-container').innerHTML = 
+                        '<div class="empty-state">No payout attempts yet</div>';
+                    return;
+                }
+                
+                let html = `<table>
+                    <tr>
+                        <th>Time</th>
+                        <th>Client</th>
+                        <th>Invoice</th>
+                        <th>Status</th>
+                    </tr>`;
+                
+                for (const p of data.attempts) {
+                    const time = new Date(p.timestamp).toLocaleString();
+                    const status = p.result.status;
+                    const badge = `<span class="status-badge ${status}">${status === 'success' ? '✓ ' + (p.result.amount_sats || '--') + ' sats' : status}</span>`;
+                    
+                    html += `<tr>
+                        <td class="time-cell">${time}</td>
+                        <td>${p.client_id}</td>
+                        <td class="did-cell">${p.invoice_prefix}</td>
+                        <td>${badge}</td>
+                    </tr>`;
+                }
+                
+                html += '</table>';
+                document.getElementById('payouts-container').innerHTML = html;
+                
+            } catch (e) {
+                console.error('Payouts error:', e);
+            }
+        }
+        
+        async function loadConfig() {
+            try {
+                const res = await fetch(`${API_BASE}/v1/admin/clients`, {
+                    headers: { 'Authorization': authHeader }
+                });
+                const data = await res.json();
+                
+                if (data.clients.length === 0) {
+                    document.getElementById('config-container').innerHTML = 
+                        '<div class="empty-state">No clients configured</div>';
+                    return;
+                }
+                
+                // Update header badge
+                document.getElementById('client-name').textContent = 
+                    data.clients.map(c => c.name).join(', ');
+                
+                let html = '';
+                for (const c of data.clients) {
+                    html += `
+                        <div class="config-item">
+                            <span class="key">Client ID</span>
+                            <span class="val">${c.client_id}</span>
+                        </div>
+                        <div class="config-item">
+                            <span class="key">Name</span>
+                            <span class="val">${c.name}</span>
+                        </div>
+                        <div class="config-item">
+                            <span class="key">Reward</span>
+                            <span class="val">${c.reward_enabled ? c.reward_amount_sats + ' sats' : 'Disabled'}</span>
+                        </div>
+                        <div class="config-item">
+                            <span class="key">Provider</span>
+                            <span class="val">${c.reward_provider || '--'}</span>
+                        </div>
+                        <div class="config-item">
+                            <span class="key">Membership</span>
+                            <span class="val">${c.require_membership ? 'Required' : 'Optional'}</span>
+                        </div>
+                    `;
+                }
+                
+                document.getElementById('config-container').innerHTML = html;
+                document.getElementById('config-container').className = 'config-grid';
+                
+            } catch (e) {
+                console.error('Config error:', e);
+            }
+        }
+    </script>
+</body>
+</html>

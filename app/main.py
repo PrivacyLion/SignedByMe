@@ -11,6 +11,8 @@ from .routes.enterprise import router as enterprise_router
 from .routes.login_invoice import router as login_router
 from .routes.roots import router as roots_router
 from .routes.membership import router as membership_router
+from .routes.session import router as session_router
+from .routes.admin import router as admin_router
 
 from app.oidc_discovery import router as oidc_router
 from app.oidc_endpoints import router as oidc_endpoints_router
@@ -35,6 +37,8 @@ app.add_middleware(
 
 # v1 routes - login_router FIRST to avoid auth.py /login/start conflict
 app.include_router(login_router)  # Login invoice + DLC routes (has /v1 prefix in routes)
+app.include_router(session_router)  # Canonical session start/poll endpoints
+app.include_router(admin_router)  # Read-only admin dashboard API
 app.include_router(roots_router)  # Merkle root registry
 app.include_router(membership_router)  # Enrollment + tree building
 app.include_router(auth_router, prefix="/v1")

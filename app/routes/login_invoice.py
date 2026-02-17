@@ -25,8 +25,97 @@ from pathlib import Path
 import shelve
 
 from .roots import get_canonical_root, get_purpose_id, PURPOSE_NONE
+from . import session as session_module
+from ..lib import strike
 
 router = APIRouter(tags=["login"])
+
+
+async def process_payout_if_enabled(
+    session_id: str,
+    client_id: str,
+    invoice: str,
+    did: str
+) -> Optional[dict]:
+    """
+    Process payout if enabled for this client.
+    
+    Non-blocking: login succeeds even if payout fails.
+    Idempotent: uses session_id as idempotency key.
+    Server-authoritative: amount comes from clients.json, not request.
+    
+    Returns payout result dict or None if payout not enabled.
+    """
+    # Get client config
+    clients = load_clients()
+    client_config = clients.get(client_id, {})
+    reward_policy = client_config.get("reward_policy", {})
+    
+    # Check if payout is enabled for this client
+    if not reward_policy.get("enabled"):
+        print(f"Payout skipped: reward not enabled for client {client_id}")
+        return None
+    
+    provider = reward_policy.get("provider")
+    if provider != "strike":
+        print(f"Payout skipped: unknown provider '{provider}' for client {client_id}")
+        return {"status": "skipped", "reason": f"unknown provider: {provider}"}
+    
+    # Get amount from SERVER config (never trust client-provided amount)
+    amount_sats = reward_policy.get("amount_sats", 0)
+    if amount_sats <= 0:
+        print(f"Payout skipped: amount_sats is {amount_sats} for client {client_id}")
+        return {"status": "skipped", "reason": "amount_sats not configured"}
+    
+    # Call Strike (non-blocking, idempotent)
+    try:
+        result = await strike.pay_invoice(
+            bolt11=invoice,
+            idempotency_key=session_id,  # Prevents double-pay on retries
+            amount_sats=amount_sats,
+            description=f"SignedByMe login reward for {client_id}"
+        )
+        
+        payout_result = result.to_dict()
+        
+        # Log payout attempt for admin dashboard
+        session_module.log_payout_attempt(
+            session_id=session_id,
+            client_id=client_id,
+            invoice=invoice,
+            result=payout_result
+        )
+        
+        # Update canonical session (if it exists in the new session store)
+        session_module.complete_session(
+            session_id=session_id,
+            did=did,
+            payout_result=payout_result
+        )
+        
+        print(f"Payout result for session {session_id}: {payout_result}")
+        return payout_result
+        
+    except Exception as e:
+        error_result = {"status": "failed", "error": str(e)}
+        print(f"Payout error for session {session_id}: {e}")
+        
+        # Log failure
+        session_module.log_payout_attempt(
+            session_id=session_id,
+            client_id=client_id,
+            invoice=invoice,
+            result=error_result
+        )
+        
+        # Still complete the session (login succeeded, payout failed)
+        session_module.complete_session(
+            session_id=session_id,
+            did=did,
+            payout_result=error_result
+        )
+        
+        return error_result
 
 # Storage
 VAR_DIR = Path(__file__).resolve().parents[2] / "var"
@@ -137,6 +226,8 @@ class LoginInvoiceResponse(BaseModel):
     message: Optional[str] = None
     # NEW: Membership verification result
     membership_verified: bool = False
+    # NEW: Payout result (optional, only if reward enabled)
+    payout: Optional[dict] = None
 
 
 class SessionStatusResponse(BaseModel):
@@ -462,7 +553,7 @@ def verify_membership_proof(
 
 
 @router.post("/v1/login/invoice", response_model=LoginInvoiceResponse)
-def submit_invoice(body: LoginInvoiceRequest):
+async def submit_invoice(body: LoginInvoiceRequest):
     """
     Submit a login invoice with STWO proof and optional membership proof.
     
@@ -724,6 +815,16 @@ def submit_invoice(body: LoginInvoiceRequest):
         else:
             message = "Identity cryptographically verified"
     
+    # === Payout Logic (non-blocking) ===
+    payout_result = None
+    if stwo_verified and binding_verified:
+        payout_result = await process_payout_if_enabled(
+            session_id=body.session_id,
+            client_id=server_client_id,
+            invoice=body.invoice,
+            did=body.did
+        )
+    
     return LoginInvoiceResponse(
         ok=True,
         session_id=body.session_id,
@@ -734,6 +835,7 @@ def submit_invoice(body: LoginInvoiceRequest):
         contract_id=contract_id,
         message=message,
         membership_verified=membership_verified,
+        payout=payout_result,
     )
 
 

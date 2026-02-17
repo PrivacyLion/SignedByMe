@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Acme Corp - Employee Portal</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- Login View -->
+        <div id="login-view" class="card">
+            <div class="logo">
+                <div class="logo-icon">A</div>
+                <h1>Acme Corp</h1>
+            </div>
+            <p class="subtitle">Employee Portal</p>
+            
+            <div class="login-options">
+                <button class="oauth-btn apple" disabled>
+                    <span class="icon">🍎</span>
+                    Sign in with Apple
+                </button>
+                <button class="oauth-btn facebook" disabled>
+                    <span class="icon">f</span>
+                    Sign in with Facebook
+                </button>
+                <button class="oauth-btn google" disabled>
+                    <span class="icon">G</span>
+                    Sign in with Google
+                </button>
+                
+                <div class="divider">
+                    <span>or</span>
+                </div>
+                
+                <button class="oauth-btn signedby" id="signedby-btn">
+                    <span class="icon">⚡</span>
+                    <div class="btn-text">
+                        Sign in with SignedByMe
+                        <span class="reward-badge">GET PAID TO LOG IN</span>
+                    </div>
+                </button>
+            </div>
+            
+            <p class="footer-text">
+                By signing in, you agree to our Terms of Service and Privacy Policy.
+            </p>
+        </div>
+        
+        <!-- QR View -->
+        <div id="qr-view" class="card hidden">
+            <button class="back-btn" id="back-btn">← Back</button>
+            
+            <h2>Scan with SignedByMe</h2>
+            <p class="qr-subtitle">Open the SignedByMe app and scan this code</p>
+            
+            <div id="qr-container">
+                <canvas id="qr-code"></canvas>
+            </div>
+            
+            <div class="reward-info">
+                <span class="lightning-icon">⚡</span>
+                <span>You'll receive <strong id="reward-amount">100</strong> sats</span>
+            </div>
+            
+            <div class="status-container">
+                <div class="spinner" id="spinner"></div>
+                <p id="status-text">Waiting for scan...</p>
+            </div>
+            
+            <p class="expire-text">Session expires in <span id="expire-timer">5:00</span></p>
+        </div>
+        
+        <!-- Success View -->
+        <div id="success-view" class="card hidden">
+            <div class="success-icon">✓</div>
+            <h2>Welcome to Acme Corp!</h2>
+            <p class="success-did" id="success-did"></p>
+            
+            <div class="payout-info" id="payout-info">
+                <span class="lightning-icon">⚡</span>
+                <span><strong id="payout-amount">100</strong> sats sent to your wallet!</span>
+            </div>
+            
+            <div class="payout-error hidden" id="payout-error">
+                <span>⚠️</span>
+                <span>Payout pending: <span id="payout-error-msg"></span></span>
+            </div>
+            
+            <button class="primary-btn" onclick="location.reload()">
+                Continue to Dashboard
+            </button>
+        </div>
+    </div>
+    
+    <script src="js/app.js"></script>
+</body>
+</html>
