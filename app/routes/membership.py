@@ -665,9 +665,9 @@ def enroll_member(
     except Exception as e:
         raise HTTPException(400, f"Invalid leaf_commitment: {e}")
     
-    # Validate DID format
-    if not body.did.startswith("did:key:"):
-        raise HTTPException(400, "Invalid DID format. Must be did:key:...")
+    # Validate DID format (accept did:key: or did:btcr:)
+    if not (body.did.startswith("did:key:") or body.did.startswith("did:btcr:")):
+        raise HTTPException(400, "Invalid DID format. Must be did:key: or did:btcr:")
     
     # Validate purpose
     if body.purpose not in PURPOSE_IDS:
