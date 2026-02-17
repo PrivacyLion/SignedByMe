@@ -209,6 +209,10 @@ data class LoginSession(
 // API Configuration
 private const val API_BASE_URL = "https://api.beta.privacy-lion.com"
 
+// Membership enrollment API key (beta - treated as public, scoped via clients.json)
+// Production: will be passed via QR/deep link with short-lived tokens
+private const val MEMBERSHIP_API_KEY = "acme-test-key-2026"
+
 /**
  * Send the Lightning invoice to the API (stateless flow).
  * 
@@ -602,6 +606,15 @@ fun SignedByMeApp(
     var backupError by remember { mutableStateOf("") }
     var isGoogleSignedIn by remember { mutableStateOf<Boolean?>(null) }
     
+    // Google Drive Restore State
+    var showRestorePasswordDialog by remember { mutableStateOf(false) }
+    var restorePassword by remember { mutableStateOf("") }
+    var isRestoring by remember { mutableStateOf(false) }
+    var restoreError by remember { mutableStateOf("") }
+    var hasCloudBackup by remember { mutableStateOf<Boolean?>(null) }
+    var isCheckingBackup by remember { mutableStateOf(false) }
+    var restoreMode by remember { mutableStateOf(false) }  // When true, sign-in is for restore
+    
     // Load Google Sign-In state asynchronously to avoid disk I/O on main thread
     LaunchedEffect(Unit) {
         isGoogleSignedIn = withContext(Dispatchers.IO) {
@@ -620,13 +633,31 @@ fun SignedByMeApp(
                 val success = googleDriveManager.handleSignInResult(account)
                 if (success) {
                     isGoogleSignedIn = true
-                    showBackupPasswordDialog = true
+                    if (restoreMode) {
+                        // Check if backup exists before showing password dialog
+                        isCheckingBackup = true
+                        val hasBackup = withContext(Dispatchers.IO) {
+                            googleDriveManager.hasBackup()
+                        }
+                        isCheckingBackup = false
+                        hasCloudBackup = hasBackup
+                        if (hasBackup) {
+                            showRestorePasswordDialog = true
+                        } else {
+                            Toast.makeText(context, "No backup found for this Google account", Toast.LENGTH_LONG).show()
+                        }
+                        restoreMode = false
+                    } else {
+                        showBackupPasswordDialog = true
+                    }
                 } else {
                     Toast.makeText(context, "Failed to connect to Google Drive", Toast.LENGTH_SHORT).show()
+                    restoreMode = false
                 }
             }
         } catch (e: ApiException) {
             Toast.makeText(context, "Google Sign-In failed: ${e.message}", Toast.LENGTH_SHORT).show()
+            restoreMode = false
         }
     }
 
@@ -1275,6 +1306,48 @@ fun SignedByMeApp(
                 onDismiss = { showBackupPasswordDialog = false }
             )
         }
+        // Google Drive Restore Password Dialog
+        if (showRestorePasswordDialog) {
+            RestorePasswordDialog(
+                password = restorePassword,
+                error = restoreError,
+                isRestoring = isRestoring,
+                onPasswordChange = { restorePassword = it },
+                onRestore = {
+                    if (restorePassword.isEmpty()) {
+                        restoreError = "Please enter your backup password"
+                    } else {
+                        isRestoring = true
+                        restoreError = ""
+                        scope.launch {
+                            val result = googleDriveManager.restoreMnemonic(restorePassword)
+                            result.onSuccess { mnemonic ->
+                                // Restore the wallet with the mnemonic
+                                val restoreResult = breezMgr.restoreFromMnemonic(mnemonic)
+                                restoreResult.onSuccess {
+                                    Toast.makeText(context, "Wallet restored successfully!", Toast.LENGTH_LONG).show()
+                                    showRestorePasswordDialog = false
+                                    step2Complete = true
+                                }.onFailure { e ->
+                                    restoreError = e.message ?: "Failed to restore wallet"
+                                }
+                            }.onFailure { e ->
+                                restoreError = when {
+                                    e.message?.contains("Incorrect password") == true -> "Incorrect password"
+                                    else -> e.message ?: "Restore failed"
+                                }
+                            }
+                            isRestoring = false
+                        }
+                    }
+                },
+                onDismiss = { 
+                    showRestorePasswordDialog = false
+                    restorePassword = ""
+                    restoreError = ""
+                }
+            )
+        }
     } else {
         // Show Onboarding Screen
         OnboardingScreen(
@@ -1379,6 +1452,28 @@ fun SignedByMeApp(
                             put("expires_at", System.currentTimeMillis() + 30L * 24 * 60 * 60 * 1000)
                             put("signature", sigHex)
                         }.toString()
+
+                        // Auto-enroll for membership (silent, UI-less)
+                        // This generates leaf_secret if not exists and calls enrollment API
+                        if (!didMgr.hasEnrollment()) {
+                            try {
+                                val enrollment = didMgr.enrollMembership(
+                                    apiBaseUrl = API_BASE_URL,
+                                    apiKey = MEMBERSHIP_API_KEY,
+                                    did = did!!,
+                                    purpose = "allowlist"
+                                )
+                                if (enrollment != null) {
+                                    android.util.Log.i("SignedByMe", "Auto-enrolled for membership: ${enrollment.enrollmentId}")
+                                } else {
+                                    android.util.Log.w("SignedByMe", "Membership enrollment failed (non-blocking)")
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.w("SignedByMe", "Membership enrollment error (non-blocking): ${e.message}")
+                            }
+                        } else {
+                            android.util.Log.i("SignedByMe", "Already enrolled for membership")
+                        }
 
                         withContext(Dispatchers.Main) {
                             lastClaimJson = claimJson
@@ -1545,7 +1640,7 @@ fun OnboardingScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    if (isWalletInitializing) {
+                    if (isWalletInitializing || isRestoring || isCheckingBackup) {
                         Column(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalAlignment = Alignment.CenterHorizontally
@@ -1555,14 +1650,68 @@ fun OnboardingScreen(
                                 color = Color(0xFF3B82F6)
                             )
                             Spacer(modifier = Modifier.height(12.dp))
-                            Text("Setting up wallet...", fontSize = 14.sp, color = Color.Gray)
+                            Text(
+                                when {
+                                    isRestoring -> "Restoring wallet..."
+                                    isCheckingBackup -> "Checking for backup..."
+                                    else -> "Setting up wallet..."
+                                },
+                                fontSize = 14.sp,
+                                color = Color.Gray
+                            )
                         }
                     } else {
-                        GradientButton(
-                            text = "Set Up Wallet",
-                            colors = listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6)),
-                            onClick = onSetupWallet
-                        )
+                        // Show both buttons only when no wallet exists
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            GradientButton(
+                                text = "Set Up New Wallet",
+                                colors = listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6)),
+                                onClick = onSetupWallet
+                            )
+                            
+                            // Restore from backup button
+                            OutlinedButton(
+                                onClick = {
+                                    if (isGoogleSignedIn == true) {
+                                        // Already signed in, check for backup
+                                        scope.launch {
+                                            isCheckingBackup = true
+                                            val hasBackup = withContext(Dispatchers.IO) {
+                                                googleDriveManager.hasBackup()
+                                            }
+                                            isCheckingBackup = false
+                                            hasCloudBackup = hasBackup
+                                            if (hasBackup) {
+                                                restorePassword = ""
+                                                restoreError = ""
+                                                showRestorePasswordDialog = true
+                                            } else {
+                                                Toast.makeText(context, "No backup found for this Google account", Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    } else {
+                                        // Need to sign in first
+                                        restoreMode = true
+                                        googleSignInLauncher.launch(googleDriveManager.getSignInIntent())
+                                    }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(50.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, Color(0xFF3B82F6))
+                            ) {
+                                Text(
+                                    "Restore from Backup",
+                                    color = Color(0xFF3B82F6),
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
                     }
 
                     if (walletState is BreezWalletManager.WalletState.Error) {
@@ -4194,6 +4343,97 @@ fun BackupPasswordDialog(
                         Text("Backing up...")
                     } else {
                         Text("☁️ Backup Now")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun RestorePasswordDialog(
+    password: String,
+    error: String,
+    isRestoring: Boolean,
+    onPasswordChange: (String) -> Unit,
+    onRestore: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Restore from Backup",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Text("✕", fontSize = 18.sp, color = Color.Gray)
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    "Enter the password you used when backing up your wallet.",
+                    fontSize = 14.sp,
+                    color = Color.Gray,
+                    textAlign = TextAlign.Center
+                )
+                
+                Spacer(modifier = Modifier.height(20.dp))
+                
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = onPasswordChange,
+                    label = { Text("Backup Password") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    enabled = !isRestoring
+                )
+                
+                if (error.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        error,
+                        color = Color(0xFFEF4444),
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+                
+                Spacer(modifier = Modifier.height(20.dp))
+                
+                Button(
+                    onClick = onRestore,
+                    enabled = !isRestoring && password.isNotEmpty(),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    if (isRestoring) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Restoring...")
+                    } else {
+                        Text("🔐 Restore Wallet")
                     }
                 }
             }

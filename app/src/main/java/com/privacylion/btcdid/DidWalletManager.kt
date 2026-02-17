@@ -966,6 +966,290 @@ class DidWalletManager(private val context: Context) {
     }
 
     // ============================================================================
+    // Membership Enrollment (API Integration)
+    // ============================================================================
+
+    private val enrollmentFile = "enrollment_data.json"
+
+    /**
+     * Enrollment data stored locally after successful enrollment.
+     */
+    data class EnrollmentData(
+        val enrollmentId: String,
+        val enrollmentToken: String,
+        val enrollmentTokenExpiresAt: Long,
+        val clientId: String,
+        val purpose: String,
+        val status: String,
+        val createdAt: Long
+    ) {
+        fun toJson(): String = org.json.JSONObject().apply {
+            put("enrollment_id", enrollmentId)
+            put("enrollment_token", enrollmentToken)
+            put("enrollment_token_expires_at", enrollmentTokenExpiresAt)
+            put("client_id", clientId)
+            put("purpose", purpose)
+            put("status", status)
+            put("created_at", createdAt)
+        }.toString()
+
+        companion object {
+            fun fromJson(json: String): EnrollmentData {
+                val obj = org.json.JSONObject(json)
+                return EnrollmentData(
+                    enrollmentId = obj.getString("enrollment_id"),
+                    enrollmentToken = obj.getString("enrollment_token"),
+                    enrollmentTokenExpiresAt = obj.getLong("enrollment_token_expires_at"),
+                    clientId = obj.getString("client_id"),
+                    purpose = obj.getString("purpose"),
+                    status = obj.getString("status"),
+                    createdAt = obj.getLong("created_at")
+                )
+            }
+        }
+
+        fun isTokenValid(): Boolean {
+            return System.currentTimeMillis() / 1000 < enrollmentTokenExpiresAt
+        }
+    }
+
+    /**
+     * Store enrollment data locally.
+     */
+    fun storeEnrollment(enrollment: EnrollmentData) {
+        context.openFileOutput(enrollmentFile, Context.MODE_PRIVATE).use {
+            it.write(enrollment.toJson().toByteArray())
+        }
+    }
+
+    /**
+     * Load stored enrollment data.
+     */
+    fun loadEnrollment(): EnrollmentData? {
+        return try {
+            val json = context.openFileInput(enrollmentFile).use { it.bufferedReader().readText() }
+            EnrollmentData.fromJson(json)
+        } catch (_: Throwable) { null }
+    }
+
+    /**
+     * Check if enrollment exists.
+     */
+    fun hasEnrollment(): Boolean {
+        return try {
+            context.openFileInput(enrollmentFile).use { true }
+        } catch (_: Throwable) { false }
+    }
+
+    /**
+     * Get leaf commitment for enrollment (production - no logging).
+     * Generates leaf secret if not exists.
+     * 
+     * @return Hex-encoded leaf commitment (64 chars, no 0x prefix), or null on error
+     */
+    fun getLeafCommitment(): String? {
+        return try {
+            val leafSecret = if (hasLeafSecret()) {
+                loadLeafSecret() ?: throw Exception("Failed to load leaf secret")
+            } else {
+                generateLeafSecret()
+            }
+
+            val commitmentBytes = NativeBridge.computeLeafCommitment(leafSecret)
+            java.util.Arrays.fill(leafSecret, 0.toByte())
+
+            commitmentBytes.joinToString("") { "%02x".format(it) }
+        } catch (e: Exception) {
+            android.util.Log.e("SignedByMe", "Failed to get leaf commitment: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Enroll with the membership API.
+     * 
+     * This is called during Step 3 onboarding to automatically enroll the user.
+     * 
+     * @param apiBaseUrl Base URL of the API (e.g., "https://api.beta.privacy-lion.com")
+     * @param apiKey RP client API key
+     * @param did User's DID
+     * @param purpose Membership purpose (default: "allowlist")
+     * @return EnrollmentData on success, null on failure
+     */
+    suspend fun enrollMembership(
+        apiBaseUrl: String,
+        apiKey: String,
+        did: String,
+        purpose: String = "allowlist"
+    ): EnrollmentData? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        try {
+            // Get or generate leaf commitment
+            val leafCommitment = getLeafCommitment() ?: return@withContext null
+
+            // Build request
+            val requestBody = org.json.JSONObject().apply {
+                put("leaf_commitment", leafCommitment)
+                put("did", did)
+                put("purpose", purpose)
+            }
+
+            // Make API call
+            val url = java.net.URL("$apiBaseUrl/v1/membership/enroll")
+            val conn = url.openConnection() as java.net.HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.setRequestProperty("X-API-Key", apiKey)
+            conn.doOutput = true
+            conn.connectTimeout = 10000
+            conn.readTimeout = 10000
+
+            conn.outputStream.use { it.write(requestBody.toString().toByteArray()) }
+
+            val responseCode = conn.responseCode
+            if (responseCode != 200) {
+                val error = try {
+                    conn.errorStream?.bufferedReader()?.readText() ?: "Unknown error"
+                } catch (_: Exception) { "HTTP $responseCode" }
+                android.util.Log.e("SignedByMe", "Enrollment failed: $error")
+                return@withContext null
+            }
+
+            val response = conn.inputStream.bufferedReader().readText()
+            val json = org.json.JSONObject(response)
+
+            val enrollment = EnrollmentData(
+                enrollmentId = json.getString("enrollment_id"),
+                enrollmentToken = json.getString("enrollment_token"),
+                enrollmentTokenExpiresAt = json.getLong("enrollment_token_expires_at"),
+                clientId = json.getString("client_id"),
+                purpose = json.getString("purpose"),
+                status = json.getString("status"),
+                createdAt = System.currentTimeMillis() / 1000
+            )
+
+            // Store locally
+            storeEnrollment(enrollment)
+
+            android.util.Log.i("SignedByMe", "Membership enrollment successful: ${enrollment.enrollmentId}")
+            enrollment
+        } catch (e: Exception) {
+            android.util.Log.e("SignedByMe", "Enrollment failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Fetch witness from API.
+     * 
+     * Uses enrollment token if valid, otherwise would need DID signature (not implemented for beta).
+     * 
+     * @param apiBaseUrl Base URL of the API
+     * @param apiKey RP client API key
+     * @param did User's DID
+     * @param purpose Membership purpose
+     * @param rootId Specific root ID (optional, uses current if null)
+     * @return WitnessData on success, null on failure
+     */
+    suspend fun fetchWitness(
+        apiBaseUrl: String,
+        apiKey: String,
+        did: String,
+        purpose: String = "allowlist",
+        rootId: String? = null
+    ): WitnessData? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        try {
+            val enrollment = loadEnrollment()
+            if (enrollment == null || !enrollment.isTokenValid()) {
+                android.util.Log.e("SignedByMe", "No valid enrollment token for witness fetch")
+                return@withContext null
+            }
+
+            // Build URL
+            val urlBuilder = StringBuilder("$apiBaseUrl/v1/membership/witness?did=${java.net.URLEncoder.encode(did, "UTF-8")}&purpose=$purpose")
+            if (rootId != null) {
+                urlBuilder.append("&root_id=${java.net.URLEncoder.encode(rootId, "UTF-8")}")
+            }
+
+            val url = java.net.URL(urlBuilder.toString())
+            val conn = url.openConnection() as java.net.HttpURLConnection
+            conn.requestMethod = "GET"
+            conn.setRequestProperty("X-API-Key", apiKey)
+            conn.setRequestProperty("X-Enrollment-Token", enrollment.enrollmentToken)
+            conn.connectTimeout = 10000
+            conn.readTimeout = 10000
+
+            val responseCode = conn.responseCode
+            if (responseCode == 202) {
+                // Tree build pending
+                android.util.Log.i("SignedByMe", "Witness fetch: tree build pending, retry later")
+                return@withContext null
+            }
+            if (responseCode != 200) {
+                val error = try {
+                    conn.errorStream?.bufferedReader()?.readText() ?: "Unknown error"
+                } catch (_: Exception) { "HTTP $responseCode" }
+                android.util.Log.e("SignedByMe", "Witness fetch failed: $error")
+                return@withContext null
+            }
+
+            val response = conn.inputStream.bufferedReader().readText()
+            val json = org.json.JSONObject(response)
+
+            // Parse witness response into WitnessData format
+            val siblingsArr = json.getJSONArray("siblings")
+            val siblings = (0 until siblingsArr.length()).map { i ->
+                hexToBytes(siblingsArr.getString(i))
+            }
+            val leafIndex = json.getInt("leaf_index")
+
+            // Convert leaf_index to path_bits (binary representation)
+            val depth = siblings.size
+            val pathBits = ByteArray(depth) { i ->
+                ((leafIndex shr i) and 1).toByte()
+            }
+
+            val witnessData = WitnessData(
+                version = 1,
+                clientId = enrollment.clientId,
+                rootId = json.getString("root_id"),
+                purposeId = purposeStringToId(json.getString("purpose")),
+                depth = depth,
+                siblings = siblings,
+                pathBits = pathBits,
+                rootHex = json.getString("root")
+            )
+
+            // Store witness locally for later use
+            storeWitness(org.json.JSONObject().apply {
+                put("version", witnessData.version)
+                put("client_id", witnessData.clientId)
+                put("root_id", witnessData.rootId)
+                put("purpose_id", witnessData.purposeId)
+                put("depth", witnessData.depth)
+                put("siblings", org.json.JSONArray(siblings.map { "0x" + it.joinToString("") { b -> "%02x".format(b) } }))
+                put("path_bits", org.json.JSONArray(pathBits.map { it.toInt() }))
+                put("root_hash", witnessData.rootHex)
+            }.toString())
+
+            android.util.Log.i("SignedByMe", "Witness fetched and stored: ${witnessData.rootId}")
+            witnessData
+        } catch (e: Exception) {
+            android.util.Log.e("SignedByMe", "Witness fetch failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Convert purpose string to ID.
+     */
+    private fun purposeStringToId(purpose: String): Int = when (purpose) {
+        "allowlist" -> 1
+        "issuer_batch" -> 2
+        "revocation" -> 3
+        else -> 0
+    }
+
+    // ============================================================================
     // DEV HELPER: Leaf Commitment Export (DEBUG only)
     // ============================================================================
 

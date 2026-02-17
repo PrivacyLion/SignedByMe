@@ -1,18 +1,16 @@
 """
-Membership enrollment and tree management.
+Membership enrollment, witness retrieval, and tree management.
 
-NOTE: These endpoints are GATED behind INTERNAL_ADMIN_ONLY flag.
-Production architecture is "enterprise-built trees" where:
-- Enterprises collect commitments directly from users
-- Enterprises build trees locally with CLI
-- Enterprises publish only roots to /v1/roots
+PUBLIC ENDPOINTS (RP-authenticated via X-API-Key):
+- POST /v1/membership/enroll - Submit enrollment (auto-approve based on policy)
+- POST /v1/membership/challenge - Get DID signature challenge
+- GET /v1/membership/witness - Fetch witness (requires token or DID signature)
 
-These endpoints exist for:
-- Internal testing
-- Dev/debug workflows  
-- Potential future "managed mode"
-
-Set SBM_INTERNAL_ADMIN=true to enable these endpoints.
+ADMIN ENDPOINTS (gated behind SBM_INTERNAL_ADMIN=true):
+- GET /v1/membership/enrollments - List all enrollments
+- POST /v1/membership/approve - Manual approval override
+- POST /v1/membership/build-tree - Force tree rebuild
+- DELETE /v1/membership/enrollments/{id} - Delete enrollment
 """
 
 import os
@@ -22,67 +20,116 @@ import secrets
 import hashlib
 from pathlib import Path
 from typing import Optional, List
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 router = APIRouter(tags=["membership"])
 
-# Feature flag - these endpoints are internal-only by default
+# Feature flag - admin endpoints require this
 INTERNAL_ADMIN_ONLY = os.getenv("SBM_INTERNAL_ADMIN", "").lower() in ("true", "1", "yes")
 
 # Storage paths
 DATA_DIR = Path(__file__).resolve().parents[2]
 ENROLLMENTS_FILE = DATA_DIR / "enrollments.json"
 ROOTS_FILE = DATA_DIR / "roots.json"
+CHALLENGES_FILE = DATA_DIR / "challenges.json"
+TOKENS_FILE = DATA_DIR / "enrollment_tokens.json"
+TREES_FILE = DATA_DIR / "trees.json"  # Stores tree data with witnesses
+BUILD_STATE_FILE = DATA_DIR / "build_state.json"  # Tracks last build times
 
 # Admin API key (separate from enterprise keys)
 ADMIN_API_KEY = os.getenv("SBM_ADMIN_KEY", "sbm_admin_dev_key")
 
+# Token/challenge config
+ENROLLMENT_TOKEN_TTL_SECONDS = 30 * 60  # 30 minutes
+CHALLENGE_TTL_SECONDS = 5 * 60  # 5 minutes
 
-def require_internal_enabled():
-    """Check if internal admin endpoints are enabled."""
-    if not INTERNAL_ADMIN_ONLY:
-        raise HTTPException(
-            403, 
-            "Internal admin endpoints disabled. Set SBM_INTERNAL_ADMIN=true to enable. "
-            "Production architecture uses enterprise-built trees."
-        )
+# Rate limiting (simple in-memory for beta)
+_rate_limit_cache: dict = {}
+RATE_LIMIT_PER_HOUR = 100
+
+
+# =============================================================================
+# Storage helpers
+# =============================================================================
+
+def load_json(path: Path, default: dict) -> dict:
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except:
+            return default
+    return default
+
+
+def save_json(path: Path, data: dict):
+    path.write_text(json.dumps(data, indent=2))
 
 
 def load_enrollments() -> dict:
-    """Load pending enrollments."""
-    if ENROLLMENTS_FILE.exists():
-        return json.loads(ENROLLMENTS_FILE.read_text())
-    return {"pending": [], "approved": []}
+    return load_json(ENROLLMENTS_FILE, {"pending": [], "approved": [], "in_tree": []})
 
 
 def save_enrollments(data: dict):
-    """Save enrollments."""
-    ENROLLMENTS_FILE.write_text(json.dumps(data, indent=2))
+    save_json(ENROLLMENTS_FILE, data)
 
 
 def load_roots() -> dict:
-    """Load roots registry."""
-    if ROOTS_FILE.exists():
-        return json.loads(ROOTS_FILE.read_text())
-    return {"roots": []}
+    return load_json(ROOTS_FILE, {"roots": []})
 
 
 def save_roots(data: dict):
-    """Save roots registry."""
-    ROOTS_FILE.write_text(json.dumps(data, indent=2))
+    save_json(ROOTS_FILE, data)
+
+
+def load_challenges() -> dict:
+    return load_json(CHALLENGES_FILE, {"challenges": []})
+
+
+def save_challenges(data: dict):
+    save_json(CHALLENGES_FILE, data)
+
+
+def load_tokens() -> dict:
+    return load_json(TOKENS_FILE, {"tokens": []})
+
+
+def save_tokens(data: dict):
+    save_json(TOKENS_FILE, data)
+
+
+def load_trees() -> dict:
+    return load_json(TREES_FILE, {"trees": {}})
+
+
+def save_trees(data: dict):
+    save_json(TREES_FILE, data)
+
+
+def load_build_state() -> dict:
+    return load_json(BUILD_STATE_FILE, {"clients": {}})
+
+
+def save_build_state(data: dict):
+    save_json(BUILD_STATE_FILE, data)
 
 
 def load_clients() -> dict:
-    """Load enterprise client configs."""
     clients_file = DATA_DIR / "clients.json"
     if clients_file.exists():
         return json.loads(clients_file.read_text())
     return {}
 
 
-def validate_enterprise_key(api_key: str) -> tuple[str, dict]:
+# =============================================================================
+# Auth helpers
+# =============================================================================
+
+def validate_enterprise_key(api_key: Optional[str]) -> tuple[str, dict]:
     """Validate enterprise API key, return (client_id, config)."""
+    if not api_key:
+        raise HTTPException(401, "Missing X-API-Key header")
     clients = load_clients()
     for client_id, config in clients.items():
         if config.get("api_key") == api_key:
@@ -96,58 +143,34 @@ def validate_admin_key(api_key: str):
         raise HTTPException(401, "Invalid admin key")
 
 
+def require_internal_enabled():
+    """Check if internal admin endpoints are enabled."""
+    if not INTERNAL_ADMIN_ONLY:
+        raise HTTPException(
+            403,
+            "Admin endpoints disabled. Set SBM_INTERNAL_ADMIN=true to enable."
+        )
+
+
+def check_rate_limit(client_id: str):
+    """Simple rate limiting per client."""
+    now = time.time()
+    hour_ago = now - 3600
+    
+    # Clean old entries
+    if client_id in _rate_limit_cache:
+        _rate_limit_cache[client_id] = [t for t in _rate_limit_cache[client_id] if t > hour_ago]
+    else:
+        _rate_limit_cache[client_id] = []
+    
+    if len(_rate_limit_cache[client_id]) >= RATE_LIMIT_PER_HOUR:
+        raise HTTPException(429, "Rate limit exceeded. Try again later.")
+    
+    _rate_limit_cache[client_id].append(now)
+
+
 # =============================================================================
 # Models
-# =============================================================================
-
-class EnrollRequest(BaseModel):
-    """User enrollment request."""
-    leaf_commitment: str = Field(..., description="Hex-encoded leaf commitment (32 bytes)")
-    purpose: str = Field("allowlist", description="Purpose: allowlist, issuer_batch, revocation")
-    # For allowlist, user should specify which enterprise they're enrolling with
-    enterprise_hint: Optional[str] = Field(None, description="Enterprise name (for allowlist)")
-
-
-class EnrollResponse(BaseModel):
-    """Enrollment response."""
-    enrollment_id: str
-    status: str  # "pending" or "approved"
-    purpose: str
-    message: str
-
-
-class ApproveRequest(BaseModel):
-    """Admin approval request."""
-    enrollment_ids: List[str] = Field(..., description="List of enrollment IDs to approve")
-
-
-class BuildTreeRequest(BaseModel):
-    """Request to build a Merkle tree from approved enrollments."""
-    purpose: str = Field(..., description="Purpose: allowlist, issuer_batch, revocation")
-    client_id: Optional[str] = Field(None, description="Client ID (required for allowlist)")
-    root_id: Optional[str] = Field(None, description="Custom root ID (auto-generated if not provided)")
-    description: Optional[str] = Field(None, description="Human-readable description")
-    expires_days: int = Field(365, description="Days until root expires")
-
-
-class BuildTreeResponse(BaseModel):
-    """Tree build response."""
-    root_id: str
-    root: str  # Hex-encoded root hash
-    purpose: str
-    leaf_count: int
-    created_at: int
-    expires_at: int
-
-
-class ListEnrollmentsResponse(BaseModel):
-    """List enrollments response."""
-    pending: List[dict]
-    approved: List[dict]
-
-
-# =============================================================================
-# Purpose ID mapping
 # =============================================================================
 
 PURPOSE_IDS = {
@@ -162,67 +185,675 @@ def get_purpose_id(purpose: str) -> int:
     return PURPOSE_IDS.get(purpose, 0)
 
 
+class EnrollRequest(BaseModel):
+    """User enrollment request."""
+    leaf_commitment: str = Field(..., description="Hex-encoded leaf commitment (32 bytes)")
+    did: str = Field(..., description="User's DID (did:key:z6Mk...)")
+    purpose: str = Field("allowlist", description="Purpose: allowlist, issuer_batch, revocation")
+
+
+class EnrollResponse(BaseModel):
+    """Enrollment response."""
+    enrollment_id: str
+    enrollment_token: str
+    enrollment_token_expires_at: int
+    status: str
+    purpose: str
+    client_id: str
+    message: str
+
+
+class ChallengeRequest(BaseModel):
+    """Request for DID signature challenge."""
+    did: str = Field(..., description="User's DID")
+
+
+class ChallengeResponse(BaseModel):
+    """Challenge response."""
+    challenge: str
+    challenge_expires_at: int
+
+
+class WitnessResponse(BaseModel):
+    """Witness response."""
+    root_id: str
+    root: str
+    leaf_index: int
+    siblings: List[str]
+    purpose: str
+    expires_at: int
+
+
+class ApproveRequest(BaseModel):
+    """Admin approval request."""
+    enrollment_ids: List[str]
+
+
+class BuildTreeRequest(BaseModel):
+    """Request to build a Merkle tree."""
+    purpose: str = Field(..., description="Purpose: allowlist, issuer_batch, revocation")
+    client_id: Optional[str] = Field(None, description="Client ID (required for allowlist)")
+    root_id: Optional[str] = Field(None, description="Custom root ID")
+    description: Optional[str] = Field(None)
+    expires_days: int = Field(365)
+
+
+class BuildTreeResponse(BaseModel):
+    """Tree build response."""
+    root_id: str
+    root: str
+    purpose: str
+    leaf_count: int
+    created_at: int
+    expires_at: int
+
+
+class ListEnrollmentsResponse(BaseModel):
+    """List enrollments response."""
+    pending: List[dict]
+    approved: List[dict]
+    in_tree: List[dict]
+
+
 # =============================================================================
-# Enrollment Endpoints
+# Tree building
+# =============================================================================
+
+def poseidon_hash_pair(left: bytes, right: bytes) -> bytes:
+    """
+    Placeholder Poseidon hash using SHA256.
+    TODO: Call Rust Poseidon via subprocess for production.
+    """
+    return hashlib.sha256(b"poseidon:" + left + right).digest()
+
+
+def build_merkle_tree_with_witnesses(leaves: List[bytes]) -> tuple[bytes, List[dict]]:
+    """
+    Build a Merkle tree and return (root, witnesses).
+    Each witness contains leaf_index and siblings for proving membership.
+    """
+    if not leaves:
+        return bytes(32), []
+    
+    # Ensure power of 2
+    n = len(leaves)
+    next_pow2 = 1
+    while next_pow2 < n:
+        next_pow2 *= 2
+    
+    padded = leaves + [bytes(32)] * (next_pow2 - n)
+    
+    # Build layers
+    layers = [padded]
+    current = padded
+    
+    while len(current) > 1:
+        next_layer = []
+        for i in range(0, len(current), 2):
+            left = current[i]
+            right = current[i + 1] if i + 1 < len(current) else bytes(32)
+            parent = poseidon_hash_pair(left, right)
+            next_layer.append(parent)
+        layers.append(next_layer)
+        current = next_layer
+    
+    root = current[0] if current else bytes(32)
+    
+    # Generate witnesses for each original leaf
+    witnesses = []
+    for leaf_index in range(n):
+        siblings = []
+        idx = leaf_index
+        for layer in layers[:-1]:
+            sibling_idx = idx ^ 1  # XOR with 1 to get sibling
+            if sibling_idx < len(layer):
+                siblings.append("0x" + layer[sibling_idx].hex())
+            else:
+                siblings.append("0x" + ("00" * 32))
+            idx //= 2
+        witnesses.append({
+            "leaf_index": leaf_index,
+            "siblings": siblings,
+        })
+    
+    return root, witnesses
+
+
+def do_build_tree(client_id: str, purpose: str) -> Optional[dict]:
+    """
+    Build tree from approved enrollments for client_id + purpose.
+    Returns root entry or None if no enrollments.
+    """
+    data = load_enrollments()
+    approved = data.get("approved", [])
+    
+    # Find matching enrollments
+    matching = []
+    remaining = []
+    
+    for e in approved:
+        if e.get("purpose") == purpose and e.get("client_id") == client_id:
+            matching.append(e)
+        else:
+            remaining.append(e)
+    
+    if not matching:
+        return None
+    
+    # Extract leaves and track enrollment IDs
+    leaves = []
+    enrollment_map = []  # Maps leaf_index to enrollment
+    
+    for e in matching:
+        try:
+            leaf = bytes.fromhex(e["leaf_commitment"].replace("0x", ""))
+            leaves.append(leaf)
+            enrollment_map.append(e)
+        except:
+            pass
+    
+    if not leaves:
+        return None
+    
+    # Build tree
+    root, witnesses = build_merkle_tree_with_witnesses(leaves)
+    root_hex = "0x" + root.hex()
+    
+    now = int(time.time())
+    root_id = f"{client_id}-{purpose}-{now}"
+    expires_at = now + (365 * 86400)
+    
+    # Create root entry
+    root_entry = {
+        "root_id": root_id,
+        "purpose": purpose,
+        "purpose_id": get_purpose_id(purpose),
+        "root": root_hex,
+        "hash_alg": "poseidon",
+        "depth": len(witnesses[0]["siblings"]) if witnesses else 0,
+        "leaf_count": len(leaves),
+        "client_id": client_id,
+        "not_before": now,
+        "expires_at": expires_at,
+        "created_at": now,
+    }
+    
+    # Save root
+    roots_data = load_roots()
+    roots_data["roots"].append(root_entry)
+    save_roots(roots_data)
+    
+    # Save tree with witnesses (keyed by root_id)
+    trees_data = load_trees()
+    tree_entry = {
+        "root_id": root_id,
+        "client_id": client_id,
+        "purpose": purpose,
+        "root": root_hex,
+        "expires_at": expires_at,
+        "leaves": [],  # Maps leaf_index to (did, leaf_commitment) - NO logging of commitment
+    }
+    
+    # Store witness data per DID (for retrieval)
+    for i, e in enumerate(enrollment_map):
+        tree_entry["leaves"].append({
+            "leaf_index": i,
+            "did": e["did"],
+            "siblings": witnesses[i]["siblings"],
+            # Note: leaf_commitment intentionally NOT stored here
+        })
+    
+    trees_data["trees"][root_id] = tree_entry
+    save_trees(trees_data)
+    
+    # Move enrollments from approved to in_tree
+    in_tree = data.get("in_tree", [])
+    for e in matching:
+        e["root_id"] = root_id
+        e["tree_built_at"] = now
+        in_tree.append(e)
+    
+    data["approved"] = remaining
+    data["in_tree"] = in_tree
+    save_enrollments(data)
+    
+    # Update build state
+    build_state = load_build_state()
+    if client_id not in build_state["clients"]:
+        build_state["clients"][client_id] = {}
+    build_state["clients"][client_id][purpose] = {
+        "last_build_time": now,
+        "last_root_id": root_id,
+    }
+    save_build_state(build_state)
+    
+    return root_entry
+
+
+def maybe_build_tree(client_id: str, purpose: str = "allowlist") -> bool:
+    """
+    Opportunistically build tree if threshold or interval trigger fires.
+    Returns True if tree was built.
+    """
+    clients = load_clients()
+    config = clients.get(client_id, {})
+    policy = config.get("membership_policy", {})
+    
+    if not policy.get("auto_approve"):
+        return False
+    
+    # Count approved enrollments not yet in tree
+    data = load_enrollments()
+    approved = data.get("approved", [])
+    pending_count = sum(
+        1 for e in approved
+        if e.get("purpose") == purpose and e.get("client_id") == client_id
+    )
+    
+    if pending_count == 0:
+        return False
+    
+    # Get build state
+    build_state = load_build_state()
+    client_state = build_state.get("clients", {}).get(client_id, {}).get(purpose, {})
+    last_build = client_state.get("last_build_time", 0)
+    
+    now = time.time()
+    hours_since = (now - last_build) / 3600
+    
+    threshold = policy.get("auto_build_threshold", 999999)
+    interval_hours = policy.get("auto_build_interval_hours", 24)
+    
+    # Threshold trigger (accelerator)
+    if pending_count >= threshold:
+        do_build_tree(client_id, purpose)
+        return True
+    
+    # Interval trigger (guarantee)
+    if hours_since >= interval_hours:
+        do_build_tree(client_id, purpose)
+        return True
+    
+    return False
+
+
+def get_current_root(client_id: str, purpose: str = "allowlist") -> Optional[dict]:
+    """Get the current (most recent, non-expired) root for client + purpose."""
+    roots_data = load_roots()
+    now = time.time()
+    
+    matching = [
+        r for r in roots_data.get("roots", [])
+        if r.get("client_id") == client_id
+        and r.get("purpose") == purpose
+        and r.get("expires_at", 0) > now
+    ]
+    
+    if not matching:
+        return None
+    
+    # Return most recent
+    return max(matching, key=lambda r: r.get("created_at", 0))
+
+
+# =============================================================================
+# Token and challenge management
+# =============================================================================
+
+def create_enrollment_token(enrollment_id: str, client_id: str, did: str) -> tuple[str, int]:
+    """Create enrollment token. Returns (token, expires_at)."""
+    token = "etk_" + secrets.token_urlsafe(32)
+    expires_at = int(time.time()) + ENROLLMENT_TOKEN_TTL_SECONDS
+    
+    tokens_data = load_tokens()
+    tokens_data["tokens"].append({
+        "token": token,
+        "enrollment_id": enrollment_id,
+        "client_id": client_id,
+        "did": did,
+        "expires_at": expires_at,
+        "consumed": False,
+    })
+    save_tokens(tokens_data)
+    
+    return token, expires_at
+
+
+def validate_enrollment_token(token: str, client_id: str, did: str) -> bool:
+    """Validate token. Returns True if valid."""
+    tokens_data = load_tokens()
+    now = time.time()
+    
+    for t in tokens_data["tokens"]:
+        if (t["token"] == token
+            and t["client_id"] == client_id
+            and t["did"] == did
+            and t["expires_at"] > now
+            and not t["consumed"]):
+            return True
+    
+    return False
+
+
+def consume_enrollment_token(token: str):
+    """Mark token as consumed."""
+    tokens_data = load_tokens()
+    for t in tokens_data["tokens"]:
+        if t["token"] == token:
+            t["consumed"] = True
+            break
+    save_tokens(tokens_data)
+
+
+def create_challenge(client_id: str, did: str) -> tuple[str, int]:
+    """Create DID signature challenge. Returns (challenge, expires_at)."""
+    challenge = "ch_" + secrets.token_urlsafe(24)
+    expires_at = int(time.time()) + CHALLENGE_TTL_SECONDS
+    
+    challenges_data = load_challenges()
+    # Remove old challenges for same (client_id, did)
+    challenges_data["challenges"] = [
+        c for c in challenges_data["challenges"]
+        if not (c["client_id"] == client_id and c["did"] == did)
+    ]
+    challenges_data["challenges"].append({
+        "challenge": challenge,
+        "client_id": client_id,
+        "did": did,
+        "expires_at": expires_at,
+    })
+    save_challenges(challenges_data)
+    
+    return challenge, expires_at
+
+
+def validate_challenge(challenge: str, client_id: str, did: str) -> bool:
+    """Validate challenge exists and is not expired."""
+    challenges_data = load_challenges()
+    now = time.time()
+    
+    for c in challenges_data["challenges"]:
+        if (c["challenge"] == challenge
+            and c["client_id"] == client_id
+            and c["did"] == did
+            and c["expires_at"] > now):
+            return True
+    
+    return False
+
+
+def consume_challenge(challenge: str):
+    """Remove challenge after use (single-use)."""
+    challenges_data = load_challenges()
+    challenges_data["challenges"] = [
+        c for c in challenges_data["challenges"]
+        if c["challenge"] != challenge
+    ]
+    save_challenges(challenges_data)
+
+
+def verify_did_signature(did: str, challenge: str, client_id: str, purpose: str, 
+                         root_id: str, signature: str) -> bool:
+    """
+    Verify DID signature over challenge payload.
+    
+    Payload format: challenge|client_id|did|purpose|root_id
+    
+    For beta, we support did:key with Ed25519 (z6Mk prefix).
+    """
+    # Construct expected payload
+    payload = f"{challenge}|{client_id}|{did}|{purpose}|{root_id}"
+    
+    try:
+        # Extract public key from did:key
+        if not did.startswith("did:key:"):
+            return False
+        
+        multibase_key = did[8:]  # Remove "did:key:" prefix
+        
+        # For Ed25519 keys (z6Mk prefix), decode and verify
+        if multibase_key.startswith("z6Mk"):
+            import base64
+            
+            # Decode signature
+            try:
+                sig_bytes = base64.b64decode(signature)
+            except:
+                return False
+            
+            # For beta: we trust the signature format
+            # TODO: Implement actual Ed25519 verification
+            # This requires the ed25519 library or calling Rust
+            
+            # For now, we verify the challenge exists and is valid
+            # Full cryptographic verification will be added
+            return validate_challenge(challenge, client_id, did)
+        
+        return False
+        
+    except Exception:
+        return False
+
+
+# =============================================================================
+# PUBLIC ENDPOINTS (RP-authenticated)
 # =============================================================================
 
 @router.post("/v1/membership/enroll", response_model=EnrollResponse)
-def enroll_member(body: EnrollRequest):
+def enroll_member(
+    body: EnrollRequest,
+    x_api_key: str = Header(None, alias="X-API-Key")
+):
     """
-    Submit a leaf commitment for membership enrollment.
+    Submit enrollment for membership.
     
-    GATED: Requires SBM_INTERNAL_ADMIN=true.
-    Production uses enterprise-built trees (commitments collected by enterprise, not SBM).
+    Requires X-API-Key (RP client key).
+    Auto-approves based on client's membership_policy.
     """
-    require_internal_enabled()
+    # Validate RP key
+    client_id, config = validate_enterprise_key(x_api_key)
+    
+    # Rate limit
+    check_rate_limit(client_id)
     
     # Validate commitment format
     try:
-        commitment_bytes = bytes.fromhex(body.leaf_commitment)
+        commitment_hex = body.leaf_commitment.replace("0x", "")
+        commitment_bytes = bytes.fromhex(commitment_hex)
         if len(commitment_bytes) != 32:
             raise ValueError("Must be 32 bytes")
     except Exception as e:
         raise HTTPException(400, f"Invalid leaf_commitment: {e}")
     
+    # Validate DID format
+    if not body.did.startswith("did:key:"):
+        raise HTTPException(400, "Invalid DID format. Must be did:key:...")
+    
     # Validate purpose
     if body.purpose not in PURPOSE_IDS:
         raise HTTPException(400, f"Invalid purpose. Must be one of: {list(PURPOSE_IDS.keys())}")
     
-    # Generate enrollment ID
-    enrollment_id = secrets.token_urlsafe(16)
+    # Check for duplicate enrollment
+    data = load_enrollments()
+    for e in data.get("approved", []) + data.get("pending", []) + data.get("in_tree", []):
+        if e.get("did") == body.did and e.get("client_id") == client_id and e.get("purpose") == body.purpose:
+            raise HTTPException(409, "DID already enrolled for this client and purpose")
+    
+    # Create enrollment
+    enrollment_id = "enr_" + secrets.token_urlsafe(16)
+    now = int(time.time())
     
     enrollment = {
         "enrollment_id": enrollment_id,
         "leaf_commitment": body.leaf_commitment,
+        "did": body.did,
         "purpose": body.purpose,
-        "enterprise_hint": body.enterprise_hint,
-        "created_at": int(time.time()),
+        "client_id": client_id,
+        "created_at": now,
     }
     
-    data = load_enrollments()
+    # Check auto-approve policy
+    policy = config.get("membership_policy", {})
+    auto_approve = policy.get("auto_approve", False)
     
-    # Auto-approve issuer_batch (SignedByMe controls this)
-    if body.purpose == "issuer_batch":
+    if auto_approve or body.purpose == "issuer_batch":
         enrollment["status"] = "approved"
-        enrollment["approved_at"] = int(time.time())
+        enrollment["approved_at"] = now
         data["approved"].append(enrollment)
         status = "approved"
-        message = "Auto-approved for issuer batch"
+        message = "Auto-approved based on client policy"
     else:
         enrollment["status"] = "pending"
         data["pending"].append(enrollment)
         status = "pending"
-        message = "Pending enterprise admin approval"
+        message = "Pending admin approval"
     
     save_enrollments(data)
     
+    # Create enrollment token
+    token, token_expires = create_enrollment_token(enrollment_id, client_id, body.did)
+    
+    # Opportunistic tree build
+    if status == "approved":
+        maybe_build_tree(client_id, body.purpose)
+    
     return EnrollResponse(
         enrollment_id=enrollment_id,
+        enrollment_token=token,
+        enrollment_token_expires_at=token_expires,
         status=status,
         purpose=body.purpose,
+        client_id=client_id,
         message=message,
     )
 
+
+@router.post("/v1/membership/challenge", response_model=ChallengeResponse)
+def get_challenge(
+    body: ChallengeRequest,
+    x_api_key: str = Header(None, alias="X-API-Key")
+):
+    """
+    Get a challenge for DID signature (for witness retrieval when token expired).
+    
+    Requires X-API-Key (RP client key).
+    """
+    client_id, _ = validate_enterprise_key(x_api_key)
+    
+    # Validate DID format
+    if not body.did.startswith("did:key:"):
+        raise HTTPException(400, "Invalid DID format")
+    
+    challenge, expires_at = create_challenge(client_id, body.did)
+    
+    return ChallengeResponse(
+        challenge=challenge,
+        challenge_expires_at=expires_at,
+    )
+
+
+@router.get("/v1/membership/witness")
+def get_witness(
+    did: str = Query(..., description="User's DID"),
+    purpose: str = Query("allowlist", description="Purpose"),
+    root_id: Optional[str] = Query(None, description="Specific root ID (defaults to current)"),
+    x_api_key: str = Header(None, alias="X-API-Key"),
+    x_enrollment_token: Optional[str] = Header(None, alias="X-Enrollment-Token"),
+    x_did_challenge: Optional[str] = Header(None, alias="X-DID-Challenge"),
+    x_did_signature: Optional[str] = Header(None, alias="X-DID-Signature"),
+):
+    """
+    Fetch witness for membership proof.
+    
+    Requires X-API-Key (RP client key) + user authorization via:
+    - X-Enrollment-Token (valid, unexpired, unconsumed), OR
+    - X-DID-Challenge + X-DID-Signature (proof of DID ownership)
+    
+    client_id is derived from X-API-Key (not in query params).
+    """
+    # Validate RP key
+    client_id, config = validate_enterprise_key(x_api_key)
+    
+    # Run opportunistic tree build BEFORE lookup
+    maybe_build_tree(client_id, purpose)
+    
+    # Determine root_id
+    if root_id:
+        target_root_id = root_id
+    else:
+        current_root = get_current_root(client_id, purpose)
+        if not current_root:
+            # Check if enrollment exists but tree not built yet
+            data = load_enrollments()
+            for e in data.get("approved", []):
+                if e.get("did") == did and e.get("client_id") == client_id and e.get("purpose") == purpose:
+                    return JSONResponse(
+                        status_code=202,
+                        content={
+                            "status": "pending_tree_build",
+                            "message": "Enrollment approved but tree not yet built",
+                            "retry_after_seconds": 60,
+                        }
+                    )
+            raise HTTPException(404, "No active root found for this client and purpose")
+        target_root_id = current_root["root_id"]
+    
+    # Validate user authorization
+    auth_valid = False
+    used_token = None
+    
+    # Try token first
+    if x_enrollment_token:
+        if validate_enrollment_token(x_enrollment_token, client_id, did):
+            auth_valid = True
+            used_token = x_enrollment_token
+    
+    # Try DID signature if token not valid
+    if not auth_valid and x_did_challenge and x_did_signature:
+        if verify_did_signature(did, x_did_challenge, client_id, purpose, target_root_id, x_did_signature):
+            auth_valid = True
+            consume_challenge(x_did_challenge)
+    
+    if not auth_valid:
+        raise HTTPException(
+            401,
+            "Unauthorized. Provide valid X-Enrollment-Token or X-DID-Challenge + X-DID-Signature"
+        )
+    
+    # Find witness in tree
+    trees_data = load_trees()
+    tree = trees_data.get("trees", {}).get(target_root_id)
+    
+    if not tree:
+        raise HTTPException(404, f"Tree not found for root_id: {target_root_id}")
+    
+    # Find leaf for this DID
+    witness_data = None
+    for leaf in tree.get("leaves", []):
+        if leaf.get("did") == did:
+            witness_data = leaf
+            break
+    
+    if not witness_data:
+        raise HTTPException(404, "DID not found in tree")
+    
+    # Consume token on successful retrieval
+    if used_token:
+        consume_enrollment_token(used_token)
+    
+    return WitnessResponse(
+        root_id=target_root_id,
+        root=tree["root"],
+        leaf_index=witness_data["leaf_index"],
+        siblings=witness_data["siblings"],
+        purpose=purpose,
+        expires_at=tree["expires_at"],
+    )
+
+
+# =============================================================================
+# ADMIN ENDPOINTS (gated behind SBM_INTERNAL_ADMIN=true)
+# =============================================================================
 
 @router.get("/v1/membership/enrollments", response_model=ListEnrollmentsResponse)
 def list_enrollments(
@@ -242,18 +873,24 @@ def list_enrollments(
     
     pending = data.get("pending", [])
     approved = data.get("approved", [])
+    in_tree = data.get("in_tree", [])
     
-    # Apply filters
     if purpose:
         pending = [e for e in pending if e.get("purpose") == purpose]
         approved = [e for e in approved if e.get("purpose") == purpose]
+        in_tree = [e for e in in_tree if e.get("purpose") == purpose]
     
     if status == "pending":
         approved = []
+        in_tree = []
     elif status == "approved":
         pending = []
+        in_tree = []
+    elif status == "in_tree":
+        pending = []
+        approved = []
     
-    return ListEnrollmentsResponse(pending=pending, approved=approved)
+    return ListEnrollmentsResponse(pending=pending, approved=approved, in_tree=in_tree)
 
 
 @router.post("/v1/membership/approve")
@@ -262,7 +899,7 @@ def approve_enrollments(
     x_admin_key: str = Header(..., alias="X-Admin-Key")
 ):
     """
-    Approve pending enrollments (admin only).
+    Manually approve pending enrollments (admin only).
     
     GATED: Requires SBM_INTERNAL_ADMIN=true.
     """
@@ -275,7 +912,6 @@ def approve_enrollments(
     not_found = []
     
     for enrollment_id in body.enrollment_ids:
-        # Find in pending
         found = None
         for i, e in enumerate(data["pending"]):
             if e["enrollment_id"] == enrollment_id:
@@ -300,161 +936,39 @@ def approve_enrollments(
     }
 
 
-# =============================================================================
-# Tree Building
-# =============================================================================
-
-def poseidon_hash_pair(left: bytes, right: bytes) -> bytes:
-    """
-    Placeholder Poseidon hash. 
-    In production, this calls the Rust implementation.
-    For now, we use SHA256 as a stand-in.
-    """
-    # TODO: Call Rust Poseidon via FFI or subprocess
-    # For now, use SHA256 with domain separator
-    return hashlib.sha256(b"poseidon:" + left + right).digest()
-
-
-def build_merkle_tree(leaves: List[bytes]) -> tuple[bytes, List[List[bytes]]]:
-    """
-    Build a Merkle tree from leaves.
-    
-    Returns (root, layers) where layers[0] = leaves, layers[-1] = [root].
-    """
-    if not leaves:
-        return bytes(32), [[]]
-    
-    # Ensure power of 2 (pad with zeros)
-    n = len(leaves)
-    next_pow2 = 1
-    while next_pow2 < n:
-        next_pow2 *= 2
-    
-    padded = leaves + [bytes(32)] * (next_pow2 - n)
-    
-    layers = [padded]
-    current = padded
-    
-    while len(current) > 1:
-        next_layer = []
-        for i in range(0, len(current), 2):
-            left = current[i]
-            right = current[i + 1] if i + 1 < len(current) else bytes(32)
-            parent = poseidon_hash_pair(left, right)
-            next_layer.append(parent)
-        layers.append(next_layer)
-        current = next_layer
-    
-    root = current[0] if current else bytes(32)
-    return root, layers
-
-
 @router.post("/v1/membership/build-tree", response_model=BuildTreeResponse)
-def build_tree(
+def build_tree_admin(
     body: BuildTreeRequest,
     x_admin_key: str = Header(..., alias="X-Admin-Key")
 ):
     """
-    Build a Merkle tree from approved enrollments and publish the root.
+    Force build a Merkle tree (admin only).
     
     GATED: Requires SBM_INTERNAL_ADMIN=true.
-    Production uses enterprise-built trees (CLI tool).
     """
     require_internal_enabled()
     validate_admin_key(x_admin_key)
     
-    # Validate purpose
     if body.purpose not in PURPOSE_IDS:
         raise HTTPException(400, f"Invalid purpose: {body.purpose}")
     
-    purpose_id = get_purpose_id(body.purpose)
-    
-    # Allowlist requires client_id
     if body.purpose == "allowlist" and not body.client_id:
         raise HTTPException(400, "client_id required for allowlist purpose")
     
-    # Load approved enrollments for this purpose
-    data = load_enrollments()
-    approved = data.get("approved", [])
+    client_id = body.client_id or "sbm"
     
-    # Filter by purpose (and client_id for allowlist)
-    matching = []
-    remaining = []
+    result = do_build_tree(client_id, body.purpose)
     
-    for e in approved:
-        if e.get("purpose") == body.purpose:
-            # For allowlist, also check enterprise_hint matches client_id
-            if body.purpose == "allowlist":
-                if e.get("enterprise_hint") == body.client_id:
-                    matching.append(e)
-                else:
-                    remaining.append(e)
-            else:
-                matching.append(e)
-        else:
-            remaining.append(e)
-    
-    if not matching:
+    if not result:
         raise HTTPException(400, "No approved enrollments found for this purpose/client")
     
-    # Extract leaf commitments
-    leaves = []
-    for e in matching:
-        try:
-            leaf = bytes.fromhex(e["leaf_commitment"])
-            leaves.append(leaf)
-        except:
-            pass  # Skip invalid
-    
-    if not leaves:
-        raise HTTPException(400, "No valid leaf commitments")
-    
-    # Build tree
-    root, layers = build_merkle_tree(leaves)
-    root_hex = "0x" + root.hex()
-    
-    # Generate root_id
-    now = int(time.time())
-    if body.root_id:
-        root_id = body.root_id
-    else:
-        prefix = body.client_id or "sbm"
-        root_id = f"{prefix}-{body.purpose}-{now}"
-    
-    expires_at = now + (body.expires_days * 86400)
-    
-    # Create root entry
-    root_entry = {
-        "root_id": root_id,
-        "purpose": body.purpose,
-        "purpose_id": purpose_id,
-        "root": root_hex,
-        "hash_alg": "poseidon",
-        "depth": len(layers) - 1,
-        "leaf_count": len(leaves),
-        "client_id": body.client_id,  # None for global roots
-        "not_before": now,
-        "expires_at": expires_at,
-        "description": body.description or f"{body.purpose} tree with {len(leaves)} members",
-        "created_at": now,
-    }
-    
-    # Save root
-    roots_data = load_roots()
-    roots_data["roots"].append(root_entry)
-    save_roots(roots_data)
-    
-    # Remove consumed enrollments
-    data["approved"] = remaining
-    save_enrollments(data)
-    
     return BuildTreeResponse(
-        root_id=root_id,
-        root=root_hex,
-        purpose=body.purpose,
-        leaf_count=len(leaves),
-        created_at=now,
-        expires_at=expires_at,
+        root_id=result["root_id"],
+        root=result["root"],
+        purpose=result["purpose"],
+        leaf_count=result["leaf_count"],
+        created_at=result["created_at"],
+        expires_at=result["expires_at"],
     )
 
 
@@ -464,7 +978,7 @@ def delete_enrollment(
     x_admin_key: str = Header(..., alias="X-Admin-Key")
 ):
     """
-    Delete a pending or approved enrollment (admin only).
+    Delete an enrollment (admin only).
     
     GATED: Requires SBM_INTERNAL_ADMIN=true.
     """
@@ -473,18 +987,11 @@ def delete_enrollment(
     
     data = load_enrollments()
     
-    # Check pending
-    for i, e in enumerate(data["pending"]):
-        if e["enrollment_id"] == enrollment_id:
-            data["pending"].pop(i)
-            save_enrollments(data)
-            return {"deleted": enrollment_id, "was_status": "pending"}
-    
-    # Check approved
-    for i, e in enumerate(data["approved"]):
-        if e["enrollment_id"] == enrollment_id:
-            data["approved"].pop(i)
-            save_enrollments(data)
-            return {"deleted": enrollment_id, "was_status": "approved"}
+    for list_name in ["pending", "approved", "in_tree"]:
+        for i, e in enumerate(data.get(list_name, [])):
+            if e["enrollment_id"] == enrollment_id:
+                data[list_name].pop(i)
+                save_enrollments(data)
+                return {"deleted": enrollment_id, "was_status": list_name}
     
     raise HTTPException(404, "Enrollment not found")

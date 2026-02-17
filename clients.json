@@ -1,1 +1,13 @@
-{"acme":{"name":"Acme Corp","api_key":"acme-test-key-2026","require_membership":true,"default_root_id":"acme-allowlist-1771011349"}}
+{
+  "acme": {
+    "name": "Acme Corp",
+    "api_key": "acme-test-key-2026",
+    "require_membership": true,
+    "default_root_id": "acme-allowlist-1771011349",
+    "membership_policy": {
+      "auto_approve": true,
+      "auto_build_interval_hours": 24,
+      "auto_build_threshold": 10
+    }
+  }
+}
