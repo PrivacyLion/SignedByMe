@@ -5,7 +5,7 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     
-    <!-- Cursive Capital S - 1.5x larger -->
+    <!-- Cursive Capital S for app launcher icon -->
     <path
         android:pathData="
             M48,63

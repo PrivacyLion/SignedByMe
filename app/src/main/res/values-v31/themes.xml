@@ -3,12 +3,16 @@
 
     <style name="Theme.BTC_DID" parent="android:Theme.Material.Light.NoActionBar" />
     
-    <!-- Splash screen theme - just gradient, no icon -->
+    <!-- Splash screen theme for Android 12+ - no icon, just gradient -->
     <style name="Theme.SignedByMe.Splash" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@drawable/splash_background</item>
         <item name="android:statusBarColor">#3B82F6</item>
         <item name="android:navigationBarColor">#8B5CF6</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowFullscreen">true</item>
+        <!-- Android 12+ splash screen API - no icon -->
+        <item name="android:windowSplashScreenBackground">#3B82F6</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+        <item name="android:windowSplashScreenAnimationDuration">0</item>
     </style>
 </resources>
