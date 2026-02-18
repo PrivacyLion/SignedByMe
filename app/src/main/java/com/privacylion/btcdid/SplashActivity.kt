@@ -61,7 +61,7 @@ fun SplashScreen(onAnimationComplete: () -> Unit) {
     val progress by animateFloatAsState(
         targetValue = if (startAnimation) 1f else 0f,
         animationSpec = tween(
-            durationMillis = 1500,  // 1.5 seconds to draw
+            durationMillis = 2500,  // 2.5 seconds to draw (slower)
             easing = FastOutSlowInEasing
         ),
         label = "drawProgress"
