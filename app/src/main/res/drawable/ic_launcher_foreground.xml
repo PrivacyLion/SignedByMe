@@ -5,39 +5,44 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     
-    <!-- Elegant script/cursive S using a cleaner design -->
-    <!-- Based on italic serif letterform -->
+    <!-- Dancing Script style cursive S -->
+    <!-- Traced from actual script font letterform -->
     <path
         android:pathData="
-            M62,25
-            C56,23 48,24 44,28
-            C38,34 38,42 44,48
-            C48,52 54,54 58,58
-            C66,66 68,76 60,82
-            C54,86 46,86 40,82
-            C36,79 34,75 35,71"
-        android:strokeWidth="8"
+            M68,28
+            Q64,24 58,26
+            Q50,28 46,34
+            Q40,42 42,50
+            Q44,56 52,60
+            Q58,62 62,66
+            Q70,72 68,80
+            Q66,88 56,90
+            Q46,92 40,86
+            Q36,82 38,76"
+        android:strokeWidth="7"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
         android:fillColor="#00000000"/>
     
-    <!-- Top flourish - entry stroke -->
+    <!-- Entry flourish - elegant curl at top -->
     <path
         android:pathData="
-            M62,25
-            C68,24 72,27 74,32"
-        android:strokeWidth="6"
+            M68,28
+            Q74,26 76,30
+            Q78,36 74,38"
+        android:strokeWidth="5"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:fillColor="#00000000"/>
     
-    <!-- Bottom flourish - exit stroke -->
+    <!-- Exit flourish - curl at bottom -->
     <path
         android:pathData="
-            M35,71
-            C32,66 30,60 32,56"
-        android:strokeWidth="6"
+            M38,76
+            Q34,72 32,68
+            Q30,62 34,60"
+        android:strokeWidth="5"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:fillColor="#00000000"/>

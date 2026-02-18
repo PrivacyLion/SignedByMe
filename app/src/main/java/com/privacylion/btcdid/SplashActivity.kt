@@ -56,13 +56,8 @@ class AnimatedSignatureView(context: android.content.Context) : View(context) {
         alpha = 100
     }
     
-    // Paint for extracting text path - use script/italic style
-    private val textPaint = Paint().apply {
-        textSize = 400f
-        // Try different cursive-style fonts - serif italic tends to be more elegant
-        typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC)
-        isAntiAlias = true
-    }
+    // Paint for extracting text path - use Dancing Script font
+    private lateinit var textPaint: Paint
     
     private val gradientColors = intArrayOf(
         Color.parseColor("#3B82F6"),
@@ -82,6 +77,23 @@ class AnimatedSignatureView(context: android.content.Context) : View(context) {
     init {
         // Disable hardware acceleration for blur effect
         setLayerType(LAYER_TYPE_SOFTWARE, null)
+        
+        // Load Dancing Script font for authentic cursive look
+        val dancingScript = try {
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                context.resources.getFont(R.font.dancing_script)
+            } else {
+                Typeface.create("cursive", Typeface.NORMAL)
+            }
+        } catch (e: Exception) {
+            Typeface.create("cursive", Typeface.NORMAL)
+        }
+        
+        textPaint = Paint().apply {
+            textSize = 400f
+            typeface = dancingScript
+            isAntiAlias = true
+        }
     }
     
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
