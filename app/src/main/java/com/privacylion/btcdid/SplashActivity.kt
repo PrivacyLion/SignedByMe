@@ -6,25 +6,22 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.Font
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.unit.sp
-import androidx.compose.material3.Text
+import androidx.compose.ui.platform.LocalDensity
 import kotlinx.coroutines.delay
 
 /**
- * Splash screen with animated cursive "S" using Dancing Script font.
+ * Splash screen that DRAWS a cursive "S" using Dancing Script font path.
+ * Extracts the actual glyph path from the font and animates it being drawn.
  */
 class SplashActivity : ComponentActivity() {
     
@@ -45,42 +42,43 @@ class SplashActivity : ComponentActivity() {
 
 @Composable
 fun SplashScreen(onAnimationComplete: () -> Unit) {
-    // Load Dancing Script font
-    val dancingScript = FontFamily(Font(R.font.dancing_script))
+    val context = LocalContext.current
     
-    // Animation states
+    // Load Dancing Script font
+    val dancingScriptTypeface = remember {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                context.resources.getFont(R.font.dancing_script)
+            } else {
+                Typeface.create("cursive", Typeface.NORMAL)
+            }
+        } catch (e: Exception) {
+            Typeface.create("cursive", Typeface.NORMAL)
+        }
+    }
+    
+    // Animation progress 0 -> 1
     var startAnimation by remember { mutableStateOf(false) }
     
-    // Scale animation: 0.5 -> 1.0
-    val scale by animateFloatAsState(
-        targetValue = if (startAnimation) 1f else 0.5f,
-        animationSpec = tween(
-            durationMillis = 800,
-            easing = FastOutSlowInEasing
-        ),
-        label = "scale"
-    )
-    
-    // Alpha animation: 0 -> 1
-    val alpha by animateFloatAsState(
+    val progress by animateFloatAsState(
         targetValue = if (startAnimation) 1f else 0f,
         animationSpec = tween(
-            durationMillis = 600,
+            durationMillis = 1500,  // 1.5 seconds to draw
             easing = FastOutSlowInEasing
         ),
-        label = "alpha"
+        label = "drawProgress"
     )
     
     // Start animation after short delay
     LaunchedEffect(Unit) {
-        delay(200)
+        delay(300)
         startAnimation = true
     }
     
     // Navigate after animation completes
-    LaunchedEffect(startAnimation) {
-        if (startAnimation) {
-            delay(1500) // Wait for animation + pause
+    LaunchedEffect(progress) {
+        if (progress >= 1f) {
+            delay(600)  // Pause to admire
             onAnimationComplete()
         }
     }
@@ -100,17 +98,85 @@ fun SplashScreen(onAnimationComplete: () -> Unit) {
             ),
         contentAlignment = Alignment.Center
     ) {
-        // Large cursive S using Dancing Script font
-        Text(
-            text = "S",
-            style = TextStyle(
-                fontFamily = dancingScript,
-                fontSize = 280.sp,  // MUCH LARGER
-                color = Color.White
-            ),
-            modifier = Modifier
-                .scale(scale)
-                .alpha(alpha)
+        CursiveSDrawing(
+            typeface = dancingScriptTypeface,
+            progress = progress,
+            modifier = Modifier.size(with(LocalDensity.current) { 350.dp })  // BIGGER
+        )
+    }
+}
+
+@Composable
+fun CursiveSDrawing(
+    typeface: Typeface,
+    progress: Float,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val canvasWidth = size.width
+        val canvasHeight = size.height
+        
+        // Create paint with Dancing Script font
+        val textPaint = android.graphics.Paint().apply {
+            this.typeface = typeface
+            textSize = canvasHeight * 0.9f  // Large S
+            isAntiAlias = true
+        }
+        
+        // Extract the path of "S" from the font
+        val androidPath = android.graphics.Path()
+        textPaint.getTextPath("S", 0, 1, 0f, 0f, androidPath)
+        
+        // Get bounds to center it
+        val bounds = android.graphics.RectF()
+        androidPath.computeBounds(bounds, true)
+        
+        // Transform to center on canvas
+        val matrix = android.graphics.Matrix()
+        matrix.postTranslate(
+            (canvasWidth - bounds.width()) / 2f - bounds.left,
+            (canvasHeight - bounds.height()) / 2f - bounds.top + bounds.height()
+        )
+        androidPath.transform(matrix)
+        
+        // Convert to Compose Path
+        val composePath = androidPath.asComposePath()
+        
+        // Measure the path
+        val pathMeasure = android.graphics.PathMeasure(androidPath, false)
+        val pathLength = pathMeasure.length
+        
+        // Calculate stroke width based on canvas size
+        val strokeWidth = canvasWidth * 0.06f
+        
+        // Draw glow effect (slightly ahead for smooth look)
+        drawPath(
+            path = composePath,
+            color = Color.White.copy(alpha = 0.4f),
+            style = Stroke(
+                width = strokeWidth * 1.8f,
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round,
+                pathEffect = PathEffect.dashPathEffect(
+                    intervals = floatArrayOf(pathLength * progress, pathLength),
+                    phase = 0f
+                )
+            )
+        )
+        
+        // Draw main stroke - the "pen" drawing the S
+        drawPath(
+            path = composePath,
+            color = Color.White,
+            style = Stroke(
+                width = strokeWidth,
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round,
+                pathEffect = PathEffect.dashPathEffect(
+                    intervals = floatArrayOf(pathLength * progress, pathLength),
+                    phase = 0f
+                )
+            )
         )
     }
 }
