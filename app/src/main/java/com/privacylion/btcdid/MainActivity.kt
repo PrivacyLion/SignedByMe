@@ -13,6 +13,7 @@ import androidx.activity.compose.setContent
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
@@ -615,6 +616,11 @@ fun SignedByMeApp(
     var isCheckingBackup by remember { mutableStateOf(false) }
     var restoreMode by remember { mutableStateOf(false) }  // When true, sign-in is for restore
     
+    // Backup Prompt State (deferred backup after first login)
+    val backupStateManager = remember { BackupStateManager(context) }
+    var showBackupPrompt by remember { mutableStateOf(false) }
+    var backupPromptSatsEarned by remember { mutableStateOf(0L) }
+    
     // Load Google Sign-In state asynchronously to avoid disk I/O on main thread
     LaunchedEffect(Unit) {
         isGoogleSignedIn = withContext(Dispatchers.IO) {
@@ -750,6 +756,16 @@ fun SignedByMeApp(
                     showInvoiceDialog = false
                     // Refresh transactions
                     transactions = breezMgr.getAllPayments()
+                    
+                    // Trigger backup prompt after first successful login
+                    backupStateManager.recordSuccessfulLogin()
+                    if (backupStateManager.shouldShowBackupPrompt()) {
+                        // Get the amount earned for the prompt
+                        backupPromptSatsEarned = invoiceAmountSats.toLong()
+                        // Delay to let user see the success message first
+                        delay(2000)
+                        showBackupPrompt = true
+                    }
                 }
                 delay(3000) // Poll every 3 seconds
             }
@@ -1291,6 +1307,7 @@ fun SignedByMeApp(
                                 val result = googleDriveManager.backupMnemonic(mnemonic, backupPassword)
                                 result.onSuccess {
                                     Toast.makeText(context, "Wallet backed up to Google Drive!", Toast.LENGTH_LONG).show()
+                                    backupStateManager.markBackupCompleted()
                                     showBackupPasswordDialog = false
                                     showSeedWordsDialog = false
                                 }.onFailure { e ->
@@ -1345,6 +1362,34 @@ fun SignedByMeApp(
                     showRestorePasswordDialog = false
                     restorePassword = ""
                     restoreError = ""
+                }
+            )
+        }
+        
+        // Backup Prompt Bottom Sheet (shown after first successful login)
+        if (showBackupPrompt) {
+            BackupPromptBottomSheet(
+                satsEarned = backupPromptSatsEarned,
+                onBackupNow = {
+                    showBackupPrompt = false
+                    if (isGoogleSignedIn == true) {
+                        // Already signed in, show password dialog
+                        backupPassword = ""
+                        backupPasswordConfirm = ""
+                        backupError = ""
+                        showBackupPasswordDialog = true
+                    } else {
+                        // Need to sign in first
+                        googleSignInLauncher.launch(googleDriveManager.getSignInIntent())
+                    }
+                },
+                onRemindLater = {
+                    backupStateManager.recordPromptDismissed()
+                    showBackupPrompt = false
+                },
+                onDismiss = {
+                    backupStateManager.recordPromptDismissed()
+                    showBackupPrompt = false
                 }
             )
         }
@@ -4436,6 +4481,145 @@ fun RestorePasswordDialog(
                         Text("🔐 Restore Wallet")
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Bottom sheet prompt shown after first successful login to encourage wallet backup.
+ * 
+ * Appears with a celebration moment - user just earned sats, now secure them.
+ */
+@Composable
+fun BackupPromptBottomSheet(
+    satsEarned: Long,
+    onBackupNow: () -> Unit,
+    onRemindLater: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    // Full screen overlay with bottom sheet
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.5f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onDismiss
+            )
+    ) {
+        // Bottom sheet card
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomCenter)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {} // Prevent clicks from dismissing
+                ),
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E32))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Handle bar
+                Box(
+                    modifier = Modifier
+                        .width(40.dp)
+                        .height(4.dp)
+                        .background(Color(0xFF444444), RoundedCornerShape(2.dp))
+                )
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                // Icon
+                Text(
+                    "🔐",
+                    fontSize = 48.sp
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // Title
+                Text(
+                    "Secure Your Earnings",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                // Description
+                Text(
+                    "You just earned $satsEarned sats! Back up your wallet to Google Drive so you never lose your earnings — even if you lose your phone.",
+                    fontSize = 15.sp,
+                    color = Color(0xFF999999),
+                    textAlign = TextAlign.Center,
+                    lineHeight = 22.sp
+                )
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                // Backup button with gradient
+                Button(
+                    onClick = onBackupNow,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+                    contentPadding = PaddingValues(0.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                brush = Brush.horizontalGradient(
+                                    colors = listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6))
+                                ),
+                                shape = RoundedCornerShape(12.dp)
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                "☁️",
+                                fontSize = 18.sp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Back Up to Google Drive",
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White
+                            )
+                        }
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // Remind later link
+                Text(
+                    "Remind me later",
+                    fontSize = 15.sp,
+                    color = Color(0xFF666666),
+                    modifier = Modifier
+                        .clickable { onRemindLater() }
+                        .padding(8.dp)
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
             }
         }
     }
