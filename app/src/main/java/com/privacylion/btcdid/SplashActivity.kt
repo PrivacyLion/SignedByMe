@@ -32,12 +32,13 @@ class SplashActivity : ComponentActivity() {
 
 /**
  * Custom view that draws an animated cursive "S" with handwriting effect.
+ * Uses actual cursive font for authentic look.
  */
 class AnimatedSignatureView(context: android.content.Context) : View(context) {
     
     private val pathPaint = Paint().apply {
         color = Color.WHITE
-        strokeWidth = 16f
+        strokeWidth = 24f  // Thicker stroke
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
@@ -46,13 +47,20 @@ class AnimatedSignatureView(context: android.content.Context) : View(context) {
     
     private val glowPaint = Paint().apply {
         color = Color.WHITE
-        strokeWidth = 28f
+        strokeWidth = 40f  // Thicker glow
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
         isAntiAlias = true
-        maskFilter = BlurMaskFilter(20f, BlurMaskFilter.Blur.NORMAL)
-        alpha = 80
+        maskFilter = BlurMaskFilter(25f, BlurMaskFilter.Blur.NORMAL)
+        alpha = 100
+    }
+    
+    // Paint for extracting text path
+    private val textPaint = Paint().apply {
+        textSize = 400f
+        typeface = Typeface.create("cursive", Typeface.BOLD_ITALIC)
+        isAntiAlias = true
     }
     
     private val gradientColors = intArrayOf(
@@ -85,7 +93,7 @@ class AnimatedSignatureView(context: android.content.Context) : View(context) {
         )
         backgroundPaint.shader = backgroundGradient
         
-        // Build the cursive S path centered on screen
+        // Build the cursive S path using actual cursive font
         buildSignaturePath(w, h)
         
         pathMeasure.setPath(sPath, false)
@@ -95,49 +103,27 @@ class AnimatedSignatureView(context: android.content.Context) : View(context) {
     private fun buildSignaturePath(w: Int, h: Int) {
         val cx = w / 2f
         val cy = h / 2f
-        val size = minOf(w, h) * 0.3f
+        
+        // Scale text size based on screen
+        val fontSize = minOf(w, h) * 0.6f
+        textPaint.textSize = fontSize
         
         sPath.reset()
         
-        // Flowing cursive S - like handwritten script
-        // Slanted, with loops, connected feel
+        // Get the path of the letter "S" from the cursive font
+        textPaint.getTextPath("S", 0, 1, 0f, 0f, sPath)
         
-        // 1. Entry stroke - start top right, small loop going left
-        sPath.moveTo(cx + size * 0.6f, cy - size * 1.4f)
+        // Measure the path bounds to center it
+        val bounds = RectF()
+        sPath.computeBounds(bounds, true)
         
-        // Loop at top going left and around
-        sPath.cubicTo(
-            cx + size * 0.2f, cy - size * 1.6f,    // up slightly
-            cx - size * 0.6f, cy - size * 1.5f,    // across to left
-            cx - size * 0.7f, cy - size * 1.1f     // coming down on left side
+        // Create transformation matrix to center the S
+        val matrix = Matrix()
+        matrix.postTranslate(
+            cx - bounds.centerX(),
+            cy - bounds.centerY()
         )
-        
-        // 2. Big downward swoop on left side, curving right
-        sPath.cubicTo(
-            cx - size * 0.8f, cy - size * 0.6f,    // down the left
-            cx - size * 0.5f, cy - size * 0.1f,    // curving toward center
-            cx + size * 0.1f, cy + size * 0.1f     // through the middle going right
-        )
-        
-        // 3. Continue the diagonal, curving into bottom right
-        sPath.cubicTo(
-            cx + size * 0.6f, cy + size * 0.3f,    // pushing right
-            cx + size * 0.9f, cy + size * 0.7f,    // into lower right
-            cx + size * 0.7f, cy + size * 1.1f     // curving around bottom
-        )
-        
-        // 4. Bottom loop going left
-        sPath.cubicTo(
-            cx + size * 0.5f, cy + size * 1.5f,    // bottom of loop
-            cx - size * 0.2f, cy + size * 1.6f,    // across bottom going left
-            cx - size * 0.6f, cy + size * 1.4f     // up on left side
-        )
-        
-        // 5. Exit flourish - small upward curve
-        sPath.quadTo(
-            cx - size * 0.9f, cy + size * 1.1f,    // continuing left and up
-            cx - size * 0.7f, cy + size * 0.8f     // end with upstroke
-        )
+        sPath.transform(matrix)
     }
     
     override fun onDraw(canvas: Canvas) {
