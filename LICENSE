@@ -21,7 +21,7 @@ Competing Application.
 Definitions:
 - “Competing Application” means any application, service, or product (including any hosted API)
   offered to third parties that provides substantially similar functionality to SignedByMe,
-  including device-bound identity authorization/proof flows, paid-login/payment-gated authorization,
+  including identity authorization/proof flows, paid-login/payment-gated authorization,
   or issuance of authentication artifacts (e.g., OIDC/OAuth-compatible tokens or equivalents).
 - “Distribute” includes publishing to an app store, distributing binaries, or otherwise making the
   software available for use by third parties.
