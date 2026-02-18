@@ -5,15 +5,17 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     
-    <!-- Cursive S - matching the animated version -->
-    <!-- Two flowing curves forming script S -->
+    <!-- ACTUAL CURSIVE CAPITAL S -->
+    <!-- Starts at bottom, goes up, loops at top, crosses over, bottom curve -->
     <path
         android:pathData="
-            M72,24
-            C88,16 20,16 26,42
-            C30,56 78,48 82,66
-            C88,92 20,92 36,78"
-        android:strokeWidth="9"
+            M38,82
+            C44,62 62,30 58,18
+            C54,6 26,10 30,30
+            C34,48 60,58 72,74
+            C80,86 58,94 44,86
+            Q36,80 46,72"
+        android:strokeWidth="8"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"

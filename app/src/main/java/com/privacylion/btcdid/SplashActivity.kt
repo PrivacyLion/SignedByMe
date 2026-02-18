@@ -113,38 +113,49 @@ fun CursiveSDrawing(
     Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
+        val cx = w / 2f
+        val cy = h / 2f
+        val scale = minOf(w, h) * 0.4f
         
-        // CURSIVE S - Based on Grok's recommended Bézier pattern
-        // Two main curves that form the classic script S shape
+        // ACTUAL CURSIVE CAPITAL S - based on how it's written by hand
+        // Key: starts at BOTTOM, goes UP, loops at top, crosses over, bottom curve, exit hook
         val path = Path().apply {
-            // Scale and center
-            val scale = minOf(w, h) * 0.8f
-            val offsetX = (w - scale) / 2f
-            val offsetY = (h - scale) / 2f
             
-            // Normalized coordinates (0-1) scaled to canvas
-            // Start at top-right area
-            moveTo(offsetX + scale * 0.7f, offsetY + scale * 0.15f)
+            // 1. START at bottom-left, pen on paper
+            moveTo(cx - scale * 0.3f, cy + scale * 0.9f)
             
-            // Upper curve - sweeps left and down, like top of cursive S
+            // 2. Diagonal stroke going UP and to the RIGHT
             cubicTo(
-                offsetX + scale * 0.85f, offsetY + scale * 0.0f,   // control 1: up and right
-                offsetX + scale * 0.15f, offsetY + scale * 0.0f,   // control 2: across to left
-                offsetX + scale * 0.2f, offsetY + scale * 0.35f    // end: left side, going down
+                cx - scale * 0.1f, cy + scale * 0.5f,   // control 1: going up
+                cx + scale * 0.3f, cy - scale * 0.2f,   // control 2: continuing up-right
+                cx + scale * 0.2f, cy - scale * 0.6f    // end: near top, curving left
             )
             
-            // Middle crossing curve - goes right
+            // 3. LOOP at top - curves left and back down
             cubicTo(
-                offsetX + scale * 0.25f, offsetY + scale * 0.55f,  // control 1
-                offsetX + scale * 0.75f, offsetY + scale * 0.45f,  // control 2
-                offsetX + scale * 0.8f, offsetY + scale * 0.65f    // end: right side
+                cx + scale * 0.1f, cy - scale * 0.95f,  // control 1: top of loop
+                cx - scale * 0.5f, cy - scale * 0.9f,   // control 2: left side of loop
+                cx - scale * 0.4f, cy - scale * 0.5f    // end: coming back down on left
             )
             
-            // Lower curve - sweeps left and down, completing the S
+            // 4. Cross over the first stroke, continue down-right
             cubicTo(
-                offsetX + scale * 0.85f, offsetY + scale * 1.0f,   // control 1: down and right
-                offsetX + scale * 0.15f, offsetY + scale * 1.0f,   // control 2: across bottom
-                offsetX + scale * 0.3f, offsetY + scale * 0.85f    // end: bottom left area
+                cx - scale * 0.3f, cy - scale * 0.1f,   // control 1: crossing middle
+                cx + scale * 0.1f, cy + scale * 0.2f,   // control 2: going right
+                cx + scale * 0.4f, cy + scale * 0.5f    // end: right side, going down
+            )
+            
+            // 5. Bottom curve - sweeps left
+            cubicTo(
+                cx + scale * 0.5f, cy + scale * 0.85f,  // control 1: bottom right
+                cx + scale * 0.1f, cy + scale * 1.0f,   // control 2: bottom center
+                cx - scale * 0.2f, cy + scale * 0.85f   // end: bottom left
+            )
+            
+            // 6. Exit hook - small curve to connect to next letter
+            quadraticBezierTo(
+                cx - scale * 0.35f, cy + scale * 0.7f,  // control
+                cx - scale * 0.15f, cy + scale * 0.6f   // end: hook pointing right
             )
         }
         
@@ -152,7 +163,7 @@ fun CursiveSDrawing(
         val pathMeasure = android.graphics.PathMeasure(path.asAndroidPath(), false)
         val pathLength = pathMeasure.length
         
-        val strokeWidth = minOf(w, h) * 0.08f
+        val strokeWidth = minOf(w, h) * 0.07f
         
         // Glow effect
         drawPath(
