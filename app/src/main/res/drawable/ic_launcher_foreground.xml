@@ -5,16 +5,16 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     
-    <!-- Cursive Capital S - tightened up to fit -->
+    <!-- Cursive Capital S - more compact -->
     <path
         android:pathData="
-            M48,62
-            C50,56 52,48 53,42
-            C54,34 44,34 45,42
-            C46,50 52,53 57,57
-            C61,60 59,66 53,65
-            Q56,63 62,65"
-        android:strokeWidth="3.5"
+            M50,60
+            C51,56 53,50 54,46
+            C55,40 48,40 48,46
+            C48,52 53,54 56,56
+            C59,58 58,62 54,61
+            Q56,60 60,61"
+        android:strokeWidth="3"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
