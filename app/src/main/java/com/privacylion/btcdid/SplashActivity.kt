@@ -117,52 +117,46 @@ fun CursiveSDrawing(
         val cy = h / 2f
         val scale = minOf(w, h) * 0.42f  // LARGER
         
-        // CURSIVE CAPITAL S - alienschooler style
+        // CURSIVE CAPITAL S - PrepScholar method
+        // 1. Start BOTTOM  2. Diagonal UP  3. Loop at top going DOWN
+        // 4. Cross over diagonal (middle)  5. Continue, cross diagonal again (bottom)  6. Hook RIGHT
         val path = Path().apply {
             
-            // 1. Start at bottom left
-            moveTo(cx - scale * 0.3f, cy + scale * 0.6f)
+            // 1. START at bottom
+            moveTo(cx - scale * 0.25f, cy + scale * 0.6f)
             
-            // 2. Go UP and RIGHT diagonally to top
+            // 2. Diagonal curved line going UP to top
             cubicTo(
-                cx, cy + scale * 0.1f,
-                cx + scale * 0.2f, cy - scale * 0.4f,
+                cx - scale * 0.1f, cy + scale * 0.2f,
+                cx + scale * 0.1f, cy - scale * 0.3f,
                 cx + scale * 0.2f, cy - scale * 0.6f
             )
             
-            // 3. TOP LOOP - curve LEFT and back down
+            // 3. Loop at top - curves LEFT and back DOWN
             cubicTo(
-                cx + scale * 0.2f, cy - scale * 0.9f,   // up to peak
-                cx - scale * 0.35f, cy - scale * 0.9f,  // across left
-                cx - scale * 0.35f, cy - scale * 0.5f   // down left side
+                cx + scale * 0.25f, cy - scale * 0.9f,
+                cx - scale * 0.35f, cy - scale * 0.9f,
+                cx - scale * 0.3f, cy - scale * 0.55f
             )
             
-            // 4. Cross through middle going RIGHT and DOWN
+            // 4. FIRST CROSSING - cross over diagonal making semi-circle (middle of S)
             cubicTo(
-                cx - scale * 0.35f, cy - scale * 0.1f,
-                cx + scale * 0.1f, cy + scale * 0.2f,
-                cx + scale * 0.35f, cy + scale * 0.5f
+                cx - scale * 0.25f, cy - scale * 0.2f,
+                cx + scale * 0.05f, cy + scale * 0.05f,
+                cx + scale * 0.3f, cy + scale * 0.3f
             )
             
-            // 5. BOTTOM LOOP - curve DOWN and LEFT
+            // 5. Continue down, then SECOND CROSSING over diagonal at bottom
             cubicTo(
-                cx + scale * 0.5f, cy + scale * 0.75f,  // down right
-                cx + scale * 0.3f, cy + scale * 0.95f,  // bottom
-                cx - scale * 0.1f, cy + scale * 0.85f   // coming up left
+                cx + scale * 0.45f, cy + scale * 0.5f,
+                cx + scale * 0.35f, cy + scale * 0.8f,
+                cx, cy + scale * 0.75f
             )
             
-            // 6. Curve UP and RIGHT - crossing over the diagonal
-            cubicTo(
-                cx - scale * 0.3f, cy + scale * 0.75f,
-                cx - scale * 0.25f, cy + scale * 0.5f,
-                cx, cy + scale * 0.35f                   // crosses the diagonal here
-            )
-            
-            // 7. EXIT to the RIGHT
-            cubicTo(
-                cx + scale * 0.15f, cy + scale * 0.25f,
-                cx + scale * 0.35f, cy + scale * 0.3f,
-                cx + scale * 0.5f, cy + scale * 0.35f
+            // 6. Hook to the RIGHT (connector for next letter)
+            quadraticBezierTo(
+                cx + scale * 0.15f, cy + scale * 0.65f,
+                cx + scale * 0.4f, cy + scale * 0.7f
             )
         }
         
