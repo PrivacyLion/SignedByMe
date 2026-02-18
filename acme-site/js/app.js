@@ -25,7 +25,7 @@ const qrView = document.getElementById('qr-view');
 const successView = document.getElementById('success-view');
 const signedByBtn = document.getElementById('signedby-btn');
 const backBtn = document.getElementById('back-btn');
-const qrCanvas = document.getElementById('qr-code');
+// QR code container (qrcodejs creates elements inside)
 const rewardAmount = document.getElementById('reward-amount');
 const statusText = document.getElementById('status-text');
 const spinner = document.getElementById('spinner');
@@ -75,13 +75,14 @@ async function startSignedByLogin() {
         expiresAt = currentSession.expires_at;
         
         // Generate QR code
-        await QRCode.toCanvas(qrCanvas, currentSession.qr_data, {
+        const qrContainer = document.getElementById('qr-container');
+        qrContainer.innerHTML = ''; // Clear previous
+        new QRCode(qrContainer, {
+            text: currentSession.qr_data,
             width: 250,
-            margin: 2,
-            color: {
-                dark: '#1a56db',
-                light: '#ffffff'
-            }
+            height: 250,
+            colorDark: '#1a56db',
+            colorLight: '#ffffff'
         });
         
         // Show QR view
