@@ -4,15 +4,15 @@
 
 ## License Summary
 
-This repository (including **iOS**, **Android**, and **API** code) is publicly visible and source-available, but it is **not OSI “open source” today**.
+This repository (including **iOS**, **Android**, and **API** code) is publicly visible and source-available, but it is **not OSI “open source”** today.
 
 - **Current license:** Business Source License 1.1 (BSL 1.1)
-- **Change Date:** **2031-02-18**
+- **Change Date:** **2031-02-18** (60 months from 2026-02-18)
 - **Change License:** Apache License 2.0
 
-On the Change Date, this codebase will automatically become available under **Apache-2.0**.
+On the **Change Date**, this codebase will automatically become available under **Apache-2.0**.
 
-## Use Limitation (No Competing Products)
+## Use Limitation: No Competing Products
 
 You may use, modify, and evaluate this code, and you may contribute to it, **but you may not Distribute or Make Available** this code (or any Derivative Work) **as part of a Competing Application**.
 
@@ -27,16 +27,21 @@ You may use, modify, and evaluate this code, and you may contribute to it, **but
 
 - **Make Available** includes operating the software as a network service for third parties.
 
-If you are unsure whether your use is permitted, do not ship it.
+If you are unsure whether your use is permitted, **do not ship it**.
 
 ## Trademarks
 
-“SignedByMe” and associated marks are trademarks of Privacy Lion LLC. This repository does not grant any right to use the SignedByMe name, logos, or brand in a way that suggests affiliation or endorsement.
+“SignedByMe” and associated marks are trademarks of Privacy Lion LLC.  
+This repository does not grant any right to use the SignedByMe name, logos, or brand in a way that suggests affiliation or endorsement.
 
 ## Full License Text
 
 See:
 
-- `LICENSE` (Business Source License 1.1 + parameters)
-- `LICENSE-APACHE` (Apache 2.0 — applies starting 2031-02-18)
-- `TRADEMARK.md`
+- [`LICENSE`](LICENSE)  
+  (Business Source License 1.1 + parameters)
+
+- [`LICENSE-APACHE`](LICENSE-APACHE)  
+  (Apache 2.0 — applies starting 2031-02-18)
+
+- [`TRADEMARK.md`](TRADEMARK.md)
