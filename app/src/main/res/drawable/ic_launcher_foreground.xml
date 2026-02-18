@@ -5,16 +5,16 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     
-    <!-- Cursive Capital S - smaller to fit in safe zone (center 66dp) -->
+    <!-- Cursive Capital S - tightened up to fit -->
     <path
         android:pathData="
-            M46,64
-            C49,57 52,47 54,38
-            C56,28 42,28 43,38
-            C44,48 54,52 60,57
-            C65,62 62,70 54,68
-            Q58,66 66,68"
-        android:strokeWidth="4"
+            M48,62
+            C50,56 52,48 53,42
+            C54,34 44,34 45,42
+            C46,50 52,53 57,57
+            C61,60 59,66 53,65
+            Q56,63 62,65"
+        android:strokeWidth="3.5"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
