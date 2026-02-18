@@ -1,10 +1,10 @@
-                      # SignedByMe — Source Available (BSL 1.1) → Apache 2.0 on Change Date
+# SignedByMe — Source Available (BSL 1.1) → Apache 2.0 on Change Date
 
 **Copyright © Privacy Lion LLC (d/b/a SignedByMe). All rights reserved.**
 
 ## License Summary
 
-This repository (including **iOS**, **Android**, and **API** code) is **publicly visible** and **source-available**, but **not OSI “open source” today**.
+This repository (including **iOS**, **Android**, and **API** code) is publicly visible and source-available, but it is **not OSI “open source” today**.
 
 - **Current license:** Business Source License 1.1 (BSL 1.1)
 - **Change Date:** **2031-02-18**
@@ -16,12 +16,12 @@ On the Change Date, this codebase will automatically become available under **Ap
 
 You may use, modify, and evaluate this code, and you may contribute to it, **but you may not Distribute or Make Available** this code (or any Derivative Work) **as part of a Competing Application**.
 
-### Definitions (Plain English)
+### Definitions
 
 - **Competing Application** means any application, service, or product (including any hosted API) offered to third parties that provides **substantially similar functionality** to SignedByMe, including (without limitation):
-  - device-bound identity proof / authorization flows,
-  - paid-login or payment-gated authorization,
-  - issuance of authentication artifacts (e.g., OIDC/OAuth-compatible tokens or equivalents) based on such proofs.
+  - device-bound identity proof / authorization flows
+  - paid-login or payment-gated authorization
+  - issuance of authentication artifacts (e.g., OIDC/OAuth-compatible tokens or equivalents) based on such proofs
 
 - **Distribute** includes publishing to an app store, distributing binaries, or otherwise making the software available for use by third parties.
 
@@ -36,7 +36,7 @@ If you are unsure whether your use is permitted, do not ship it.
 ## Full License Text
 
 See:
+
 - `LICENSE` (Business Source License 1.1 + parameters)
 - `LICENSE-APACHE` (Apache 2.0 — applies starting 2031-02-18)
 - `TRADEMARK.md`
-
