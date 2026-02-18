@@ -95,41 +95,48 @@ class AnimatedSignatureView(context: android.content.Context) : View(context) {
     private fun buildSignaturePath(w: Int, h: Int) {
         val cx = w / 2f
         val cy = h / 2f
-        val h2 = minOf(w, h) * 0.35f  // half height of S
-        val w2 = h2 * 0.6f            // half width (S is taller than wide)
+        val size = minOf(w, h) * 0.3f
         
         sPath.reset()
         
-        // Classic cursive S - simple and elegant
-        // Think: two mirrored C-curves stacked
+        // Flowing cursive S - like handwritten script
+        // Slanted, with loops, connected feel
         
-        // Start at top right with entry flourish
-        sPath.moveTo(cx + w2 * 0.8f, cy - h2 * 0.7f)
+        // 1. Entry stroke - start top right, small loop going left
+        sPath.moveTo(cx + size * 0.6f, cy - size * 1.4f)
         
-        // Small entry curve going left to top of S
-        sPath.quadTo(
-            cx + w2 * 0.3f, cy - h2 * 1.1f,
-            cx - w2 * 0.3f, cy - h2 * 0.95f
-        )
-        
-        // Top curve - big arc going left then down (backwards C)
+        // Loop at top going left and around
         sPath.cubicTo(
-            cx - w2 * 1.3f, cy - h2 * 0.8f,   // far left, upper
-            cx - w2 * 1.3f, cy - h2 * 0.1f,   // far left, approaching middle
-            cx, cy                              // center point
+            cx + size * 0.2f, cy - size * 1.6f,    // up slightly
+            cx - size * 0.6f, cy - size * 1.5f,    // across to left
+            cx - size * 0.7f, cy - size * 1.1f     // coming down on left side
         )
         
-        // Bottom curve - arc going right then down (regular C)
+        // 2. Big downward swoop on left side, curving right
         sPath.cubicTo(
-            cx + w2 * 1.3f, cy + h2 * 0.1f,   // far right, below middle
-            cx + w2 * 1.3f, cy + h2 * 0.8f,   // far right, lower
-            cx + w2 * 0.3f, cy + h2 * 0.95f   // bottom approaching end
+            cx - size * 0.8f, cy - size * 0.6f,    // down the left
+            cx - size * 0.5f, cy - size * 0.1f,    // curving toward center
+            cx + size * 0.1f, cy + size * 0.1f     // through the middle going right
         )
         
-        // Exit flourish curving left
+        // 3. Continue the diagonal, curving into bottom right
+        sPath.cubicTo(
+            cx + size * 0.6f, cy + size * 0.3f,    // pushing right
+            cx + size * 0.9f, cy + size * 0.7f,    // into lower right
+            cx + size * 0.7f, cy + size * 1.1f     // curving around bottom
+        )
+        
+        // 4. Bottom loop going left
+        sPath.cubicTo(
+            cx + size * 0.5f, cy + size * 1.5f,    // bottom of loop
+            cx - size * 0.2f, cy + size * 1.6f,    // across bottom going left
+            cx - size * 0.6f, cy + size * 1.4f     // up on left side
+        )
+        
+        // 5. Exit flourish - small upward curve
         sPath.quadTo(
-            cx - w2 * 0.3f, cy + h2 * 1.1f,
-            cx - w2 * 0.8f, cy + h2 * 0.7f
+            cx - size * 0.9f, cy + size * 1.1f,    // continuing left and up
+            cx - size * 0.7f, cy + size * 0.8f     // end with upstroke
         )
     }
     
