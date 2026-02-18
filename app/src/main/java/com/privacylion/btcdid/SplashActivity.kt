@@ -37,7 +37,7 @@ class AnimatedSignatureView(context: android.content.Context) : View(context) {
     
     private val pathPaint = Paint().apply {
         color = Color.WHITE
-        strokeWidth = 12f
+        strokeWidth = 16f
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
@@ -46,13 +46,13 @@ class AnimatedSignatureView(context: android.content.Context) : View(context) {
     
     private val glowPaint = Paint().apply {
         color = Color.WHITE
-        strokeWidth = 20f
+        strokeWidth = 28f
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
         isAntiAlias = true
-        maskFilter = BlurMaskFilter(15f, BlurMaskFilter.Blur.NORMAL)
-        alpha = 100
+        maskFilter = BlurMaskFilter(20f, BlurMaskFilter.Blur.NORMAL)
+        alpha = 80
     }
     
     private val gradientColors = intArrayOf(
@@ -95,35 +95,47 @@ class AnimatedSignatureView(context: android.content.Context) : View(context) {
     private fun buildSignaturePath(w: Int, h: Int) {
         val centerX = w / 2f
         val centerY = h / 2f
-        val scale = minOf(w, h) / 4f
+        val scale = minOf(w, h) / 5f
         
         sPath.reset()
         
-        // Starting flourish (top right)
-        sPath.moveTo(centerX + scale * 0.5f, centerY - scale * 0.9f)
-        sPath.quadTo(
-            centerX + scale * 0.3f, centerY - scale * 1.1f,
-            centerX, centerY - scale * 0.8f
-        )
+        // Elegant cursive S - like a handwritten signature
+        // Start with entry stroke from top right
+        sPath.moveTo(centerX + scale * 0.8f, centerY - scale * 1.2f)
         
-        // Main S curve - top arc
+        // Entry flourish curving left
         sPath.cubicTo(
-            centerX - scale * 0.7f, centerY - scale * 0.8f,  // control 1
-            centerX - scale * 0.6f, centerY - scale * 0.3f,  // control 2
-            centerX, centerY                                   // end at center
+            centerX + scale * 0.4f, centerY - scale * 1.4f,  // control 1 - up and left
+            centerX - scale * 0.3f, centerY - scale * 1.3f,  // control 2 - continuing left
+            centerX - scale * 0.5f, centerY - scale * 0.9f   // top of S curve
         )
         
-        // Main S curve - bottom arc
+        // Top loop of S - curves right
         sPath.cubicTo(
-            centerX + scale * 0.6f, centerY + scale * 0.3f,  // control 1
-            centerX + scale * 0.7f, centerY + scale * 0.8f,  // control 2
-            centerX, centerY + scale * 0.8f                   // end
+            centerX - scale * 0.7f, centerY - scale * 0.5f,  // control 1
+            centerX - scale * 0.5f, centerY - scale * 0.2f,  // control 2
+            centerX + scale * 0.1f, centerY - scale * 0.1f   // approaching center
         )
         
-        // Ending flourish (bottom left)
-        sPath.quadTo(
-            centerX - scale * 0.3f, centerY + scale * 1.1f,
-            centerX - scale * 0.5f, centerY + scale * 0.9f
+        // Middle transition - the crossover
+        sPath.cubicTo(
+            centerX + scale * 0.5f, centerY + scale * 0.0f,  // control 1
+            centerX + scale * 0.6f, centerY + scale * 0.3f,  // control 2
+            centerX + scale * 0.4f, centerY + scale * 0.6f   // into bottom curve
+        )
+        
+        // Bottom curve of S - curves left
+        sPath.cubicTo(
+            centerX + scale * 0.2f, centerY + scale * 0.9f,  // control 1
+            centerX - scale * 0.2f, centerY + scale * 1.1f,  // control 2
+            centerX - scale * 0.6f, centerY + scale * 1.0f   // bottom left
+        )
+        
+        // Exit flourish - elegant tail
+        sPath.cubicTo(
+            centerX - scale * 0.9f, centerY + scale * 0.9f,  // control 1
+            centerX - scale * 1.0f, centerY + scale * 0.6f,  // control 2
+            centerX - scale * 0.7f, centerY + scale * 0.4f   // end with upward flourish
         )
     }
     
