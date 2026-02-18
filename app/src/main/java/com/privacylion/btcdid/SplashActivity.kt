@@ -117,46 +117,54 @@ fun CursiveSDrawing(
         val cy = h / 2f
         val scale = minOf(w, h) * 0.42f  // LARGER
         
-        // CURSIVE CAPITAL S - Alienschooler style
+        // CURSIVE CAPITAL S - Alienschooler style (complete)
         // Figure-8 rotated, both loops counter-clockwise
-        // Start bottom-left, diagonal up, upper loop, descend, lower loop, exit right
+        // Start bottom-left, diagonal up, upper loop, descend, lower loop, 
+        // THEN: back up, cross over, exit right
         val path = Path().apply {
             
             // 1. START at lower-left (baseline)
-            moveTo(cx - scale * 0.35f, cy + scale * 0.7f)
+            moveTo(cx - scale * 0.3f, cy + scale * 0.5f)
             
-            // 2. ENTRY STROKE - diagonal up toward upper-right (~55° angle)
+            // 2. ENTRY STROKE - diagonal up toward upper-right
             cubicTo(
-                cx - scale * 0.15f, cy + scale * 0.3f,  // control 1
-                cx + scale * 0.2f, cy - scale * 0.2f,   // control 2
-                cx + scale * 0.3f, cy - scale * 0.5f    // end: upper right
+                cx - scale * 0.1f, cy + scale * 0.1f,   // control 1
+                cx + scale * 0.2f, cy - scale * 0.3f,   // control 2
+                cx + scale * 0.25f, cy - scale * 0.55f  // end: upper right
             )
             
             // 3. UPPER LOOP (counter-clockwise) - curve left and down
             cubicTo(
-                cx + scale * 0.35f, cy - scale * 0.85f, // control 1: peak (above top)
-                cx - scale * 0.35f, cy - scale * 0.85f, // control 2: swing left
-                cx - scale * 0.25f, cy - scale * 0.4f   // end: left side, heading down
+                cx + scale * 0.3f, cy - scale * 0.9f,   // control 1: peak
+                cx - scale * 0.4f, cy - scale * 0.85f,  // control 2: swing left
+                cx - scale * 0.3f, cy - scale * 0.4f    // end: left side, heading down
             )
             
             // 4. DESCENDING DIAGONAL - crosses through middle toward lower-right
             cubicTo(
-                cx - scale * 0.15f, cy,                  // control 1: through center
-                cx + scale * 0.15f, cy + scale * 0.35f, // control 2
-                cx + scale * 0.35f, cy + scale * 0.55f  // end: lower right
+                cx - scale * 0.2f, cy,                   // control 1: through center
+                cx + scale * 0.1f, cy + scale * 0.3f,   // control 2
+                cx + scale * 0.3f, cy + scale * 0.5f    // end: lower right
             )
             
-            // 5. LOWER LOOP (counter-clockwise) - swing down, left, and back up
+            // 5. LOWER LOOP (counter-clockwise) - swing down and left
             cubicTo(
-                cx + scale * 0.5f, cy + scale * 0.85f,  // control 1: below baseline right
-                cx - scale * 0.1f, cy + scale * 0.95f,  // control 2: bottom center
-                cx - scale * 0.3f, cy + scale * 0.7f    // end: back near start
+                cx + scale * 0.5f, cy + scale * 0.8f,   // control 1: down right
+                cx + scale * 0.2f, cy + scale * 1.0f,   // control 2: bottom
+                cx - scale * 0.15f, cy + scale * 0.9f   // end: bottom left area
             )
             
-            // 6. EXIT STROKE - curves right along baseline
+            // 6. CURVE BACK UP - comes back up from lower loop
+            cubicTo(
+                cx - scale * 0.4f, cy + scale * 0.8f,   // control 1: left side
+                cx - scale * 0.45f, cy + scale * 0.55f, // control 2: going up
+                cx - scale * 0.25f, cy + scale * 0.4f   // end: crosses over descender
+            )
+            
+            // 7. CROSS OVER and EXIT RIGHT - final connecting stroke
             quadraticBezierTo(
-                cx - scale * 0.35f, cy + scale * 0.5f,  // control: up
-                cx - scale * 0.1f, cy + scale * 0.55f   // end: pointing right
+                cx - scale * 0.05f, cy + scale * 0.25f, // control: curving right
+                cx + scale * 0.15f, cy + scale * 0.35f  // end: exits to the right
             )
         }
         
