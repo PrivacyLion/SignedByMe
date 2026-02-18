@@ -95,47 +95,49 @@ class AnimatedSignatureView(context: android.content.Context) : View(context) {
     private fun buildSignaturePath(w: Int, h: Int) {
         val centerX = w / 2f
         val centerY = h / 2f
-        val scale = minOf(w, h) / 5f
+        val s = minOf(w, h) / 6f  // scale factor
         
         sPath.reset()
         
-        // Elegant cursive S - like a handwritten signature
-        // Start with entry stroke from top right
-        sPath.moveTo(centerX + scale * 0.8f, centerY - scale * 1.2f)
+        // True cursive capital S
+        // Reference: Think of writing a fancy script S by hand
         
-        // Entry flourish curving left
+        // 1. Start at middle-left, entry stroke going up-right
+        sPath.moveTo(centerX - s * 0.2f, centerY)
+        
+        // 2. Upper loop - sweep up and curve around to the right
         sPath.cubicTo(
-            centerX + scale * 0.4f, centerY - scale * 1.4f,  // control 1 - up and left
-            centerX - scale * 0.3f, centerY - scale * 1.3f,  // control 2 - continuing left
-            centerX - scale * 0.5f, centerY - scale * 0.9f   // top of S curve
+            centerX - s * 1.2f, centerY - s * 0.5f,   // pull left
+            centerX - s * 1.0f, centerY - s * 1.8f,   // up to top-left
+            centerX, centerY - s * 1.8f               // top center
         )
         
-        // Top loop of S - curves right
+        // 3. Continue the top curve, sweeping right and down
         sPath.cubicTo(
-            centerX - scale * 0.7f, centerY - scale * 0.5f,  // control 1
-            centerX - scale * 0.5f, centerY - scale * 0.2f,  // control 2
-            centerX + scale * 0.1f, centerY - scale * 0.1f   // approaching center
+            centerX + s * 1.0f, centerY - s * 1.8f,   // top right
+            centerX + s * 1.2f, centerY - s * 1.0f,   // curving down
+            centerX + s * 0.3f, centerY - s * 0.3f    // back toward center
         )
         
-        // Middle transition - the crossover
+        // 4. The spine - diagonal through center going down-left
         sPath.cubicTo(
-            centerX + scale * 0.5f, centerY + scale * 0.0f,  // control 1
-            centerX + scale * 0.6f, centerY + scale * 0.3f,  // control 2
-            centerX + scale * 0.4f, centerY + scale * 0.6f   // into bottom curve
+            centerX - s * 0.3f, centerY + s * 0.2f,   // through middle
+            centerX - s * 0.8f, centerY + s * 0.6f,   // continuing down-left
+            centerX - s * 1.0f, centerY + s * 1.2f    // bottom-left area
         )
         
-        // Bottom curve of S - curves left
+        // 5. Lower loop - curve around bottom going right
         sPath.cubicTo(
-            centerX + scale * 0.2f, centerY + scale * 0.9f,  // control 1
-            centerX - scale * 0.2f, centerY + scale * 1.1f,  // control 2
-            centerX - scale * 0.6f, centerY + scale * 1.0f   // bottom left
+            centerX - s * 1.1f, centerY + s * 1.8f,   // bottom curve
+            centerX - s * 0.2f, centerY + s * 2.0f,   // bottom center
+            centerX + s * 0.6f, centerY + s * 1.6f    // curving up-right
         )
         
-        // Exit flourish - elegant tail
+        // 6. Exit stroke - finish with rightward flourish
         sPath.cubicTo(
-            centerX - scale * 0.9f, centerY + scale * 0.9f,  // control 1
-            centerX - scale * 1.0f, centerY + scale * 0.6f,  // control 2
-            centerX - scale * 0.7f, centerY + scale * 0.4f   // end with upward flourish
+            centerX + s * 1.0f, centerY + s * 1.3f,   // continuing right
+            centerX + s * 1.3f, centerY + s * 0.9f,   // up and right
+            centerX + s * 1.1f, centerY + s * 0.6f    // end with slight hook
         )
     }
     
