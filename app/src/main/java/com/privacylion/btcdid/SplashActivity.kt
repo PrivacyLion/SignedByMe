@@ -111,48 +111,68 @@ fun CursiveSDrawing(
     modifier: Modifier = Modifier
 ) {
     Canvas(modifier = modifier) {
-        val canvasWidth = size.width
-        val canvasHeight = size.height
+        val w = size.width
+        val h = size.height
+        val cx = w / 2f
+        val cy = h / 2f
         
-        // Create paint with Dancing Script font
-        val textPaint = android.graphics.Paint().apply {
-            this.typeface = typeface
-            textSize = canvasHeight * 0.9f  // Large S
-            isAntiAlias = true
+        // SINGLE-STROKE CURSIVE S - like actual handwriting
+        // This is the path a PEN would follow, not a font outline
+        val path = Path().apply {
+            // Scale to fit canvas with padding
+            val scale = minOf(w, h) * 0.35f
+            
+            // Start: top-right, entry stroke
+            moveTo(cx + scale * 0.4f, cy - scale * 1.1f)
+            
+            // 1. Curve up and left (entry flourish)
+            cubicTo(
+                cx + scale * 0.1f, cy - scale * 1.3f,
+                cx - scale * 0.4f, cy - scale * 1.2f,
+                cx - scale * 0.5f, cy - scale * 0.8f
+            )
+            
+            // 2. Down and around - top bowl curving right
+            cubicTo(
+                cx - scale * 0.6f, cy - scale * 0.4f,
+                cx - scale * 0.4f, cy - scale * 0.1f,
+                cx, cy
+            )
+            
+            // 3. Continue through middle, curving to bottom right
+            cubicTo(
+                cx + scale * 0.4f, cy + scale * 0.1f,
+                cx + scale * 0.6f, cy + scale * 0.4f,
+                cx + scale * 0.5f, cy + scale * 0.8f
+            )
+            
+            // 4. Bottom curve going left
+            cubicTo(
+                cx + scale * 0.4f, cy + scale * 1.2f,
+                cx - scale * 0.1f, cy + scale * 1.3f,
+                cx - scale * 0.4f, cy + scale * 1.1f
+            )
+            
+            // 5. Exit flourish - curve up
+            cubicTo(
+                cx - scale * 0.6f, cy + scale * 0.9f,
+                cx - scale * 0.5f, cy + scale * 0.6f,
+                cx - scale * 0.3f, cy + scale * 0.5f
+            )
         }
         
-        // Extract the path of "S" from the font
-        val androidPath = android.graphics.Path()
-        textPaint.getTextPath("S", 0, 1, 0f, 0f, androidPath)
-        
-        // Get bounds to center it
-        val bounds = android.graphics.RectF()
-        androidPath.computeBounds(bounds, true)
-        
-        // Transform to center on canvas (text baseline adjustment)
-        val matrix = android.graphics.Matrix()
-        matrix.postTranslate(
-            (canvasWidth - bounds.width()) / 2f - bounds.left,
-            (canvasHeight + bounds.height()) / 2f - bounds.bottom
-        )
-        androidPath.transform(matrix)
-        
-        // Convert to Compose Path
-        val composePath = androidPath.asComposePath()
-        
-        // Measure the path
-        val pathMeasure = android.graphics.PathMeasure(androidPath, false)
+        // Measure path length for animation
+        val pathMeasure = android.graphics.PathMeasure(path.asAndroidPath(), false)
         val pathLength = pathMeasure.length
         
-        // Calculate stroke width based on canvas size
-        val strokeWidth = canvasWidth * 0.06f
+        val strokeWidth = minOf(w, h) * 0.07f
         
-        // Draw glow effect (slightly ahead for smooth look)
+        // Glow effect
         drawPath(
-            path = composePath,
-            color = Color.White.copy(alpha = 0.4f),
+            path = path,
+            color = Color.White.copy(alpha = 0.3f),
             style = Stroke(
-                width = strokeWidth * 1.8f,
+                width = strokeWidth * 2f,
                 cap = StrokeCap.Round,
                 join = StrokeJoin.Round,
                 pathEffect = PathEffect.dashPathEffect(
@@ -162,9 +182,9 @@ fun CursiveSDrawing(
             )
         )
         
-        // Draw main stroke - the "pen" drawing the S
+        // Main stroke
         drawPath(
-            path = composePath,
+            path = path,
             color = Color.White,
             style = Stroke(
                 width = strokeWidth,
