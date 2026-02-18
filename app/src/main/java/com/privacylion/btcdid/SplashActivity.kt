@@ -16,7 +16,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
 /**
@@ -101,7 +101,7 @@ fun SplashScreen(onAnimationComplete: () -> Unit) {
         CursiveSDrawing(
             typeface = dancingScriptTypeface,
             progress = progress,
-            modifier = Modifier.size(with(LocalDensity.current) { 350.dp })  // BIGGER
+            modifier = Modifier.size(350.dp)  // BIGGER
         )
     }
 }
