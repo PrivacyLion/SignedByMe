@@ -98,50 +98,51 @@ fun CursiveSAnimation(
         val height = size.height
         val strokeWidth = width * 0.08f
         
-        // Build cursive S path - elegant script style
+        // Build ACTUAL cursive S path - from handwriting reference
+        // Cursive S is NOT like a print S - it's a flowing connected form
         val path = Path().apply {
-            // Scale factors
             val cx = width / 2f
             val cy = height / 2f
-            val scale = minOf(width, height) * 0.4f
+            val h = height * 0.8f  // total height
+            val w = width * 0.5f   // total width
             
-            // Cursive S - like handwritten script
-            // Start with entry flourish at top right
-            moveTo(cx + scale * 0.6f, cy - scale * 0.9f)
+            // TRUE CURSIVE CAPITAL S
+            // Based on Palmer/Zaner-Bloser cursive handwriting
             
-            // Entry curve going left and up
-            cubicTo(
-                cx + scale * 0.3f, cy - scale * 1.1f,
-                cx - scale * 0.2f, cy - scale * 1.0f,
-                cx - scale * 0.5f, cy - scale * 0.7f
+            // Start: top center, small entry loop going right then down
+            moveTo(cx, cy - h * 0.45f)
+            
+            // 1. Entry loop - small curve up and right
+            quadraticBezierTo(
+                cx + w * 0.3f, cy - h * 0.5f,   // control: up-right
+                cx + w * 0.35f, cy - h * 0.35f  // end: right side, starting down
             )
             
-            // Top loop curving down and right
+            // 2. Big downward swoop - curves left across the letter
             cubicTo(
-                cx - scale * 0.8f, cy - scale * 0.4f,
-                cx - scale * 0.6f, cy - scale * 0.1f,
-                cx - scale * 0.1f, cy + scale * 0.1f
+                cx + w * 0.4f, cy - h * 0.1f,   // control 1: continuing down-right
+                cx + w * 0.1f, cy + h * 0.05f,  // control 2: curving to center
+                cx - w * 0.2f, cy + h * 0.15f   // end: left of center, below middle
             )
             
-            // Middle diagonal going down-right
+            // 3. Lower curve - sweeps down and right
             cubicTo(
-                cx + scale * 0.4f, cy + scale * 0.3f,
-                cx + scale * 0.7f, cy + scale * 0.5f,
-                cx + scale * 0.5f, cy + scale * 0.8f
+                cx - w * 0.45f, cy + h * 0.25f, // control 1: far left
+                cx - w * 0.4f, cy + h * 0.45f,  // control 2: bottom left
+                cx, cy + h * 0.45f              // end: bottom center
             )
             
-            // Bottom curve going left
+            // 4. Bottom loop - curves right and back up
             cubicTo(
-                cx + scale * 0.3f, cy + scale * 1.1f,
-                cx - scale * 0.2f, cy + scale * 1.0f,
-                cx - scale * 0.5f, cy + scale * 0.8f
+                cx + w * 0.35f, cy + h * 0.45f, // control 1: bottom right
+                cx + w * 0.4f, cy + h * 0.3f,   // control 2: right side going up
+                cx + w * 0.2f, cy + h * 0.15f   // end: exit point
             )
             
-            // Exit flourish going up-left
-            cubicTo(
-                cx - scale * 0.7f, cy + scale * 0.6f,
-                cx - scale * 0.8f, cy + scale * 0.4f,
-                cx - scale * 0.6f, cy + scale * 0.2f
+            // 5. Exit stroke - small upward flourish
+            quadraticBezierTo(
+                cx + w * 0.05f, cy + h * 0.05f, // control: curving up
+                cx - w * 0.1f, cy - h * 0.05f   // end: ready to connect to next letter
             )
         }
         
