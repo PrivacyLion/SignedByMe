@@ -56,10 +56,11 @@ class AnimatedSignatureView(context: android.content.Context) : View(context) {
         alpha = 100
     }
     
-    // Paint for extracting text path
+    // Paint for extracting text path - use script/italic style
     private val textPaint = Paint().apply {
         textSize = 400f
-        typeface = Typeface.create("cursive", Typeface.BOLD_ITALIC)
+        // Try different cursive-style fonts - serif italic tends to be more elegant
+        typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC)
         isAntiAlias = true
     }
     

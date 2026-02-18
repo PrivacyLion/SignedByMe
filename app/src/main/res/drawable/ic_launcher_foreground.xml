@@ -5,32 +5,39 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     
-    <!-- White cursive S -->
+    <!-- Elegant script/cursive S using a cleaner design -->
+    <!-- Based on italic serif letterform -->
     <path
-        android:pathData="M54,28
-            C42,28 34,35 34,44
-            C34,52 40,56 50,60
-            C60,64 66,68 66,76
-            C66,84 58,90 46,90
-            C38,90 32,86 28,80"
-        android:strokeWidth="6"
+        android:pathData="
+            M62,25
+            C56,23 48,24 44,28
+            C38,34 38,42 44,48
+            C48,52 54,54 58,58
+            C66,66 68,76 60,82
+            C54,86 46,86 40,82
+            C36,79 34,75 35,71"
+        android:strokeWidth="8"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
         android:fillColor="#00000000"/>
     
-    <!-- Decorative flourish on top -->
+    <!-- Top flourish - entry stroke -->
     <path
-        android:pathData="M54,28 C58,24 64,22 68,24"
-        android:strokeWidth="4"
+        android:pathData="
+            M62,25
+            C68,24 72,27 74,32"
+        android:strokeWidth="6"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:fillColor="#00000000"/>
     
-    <!-- Decorative flourish on bottom -->
+    <!-- Bottom flourish - exit stroke -->
     <path
-        android:pathData="M28,80 C24,76 22,70 24,66"
-        android:strokeWidth="4"
+        android:pathData="
+            M35,71
+            C32,66 30,60 32,56"
+        android:strokeWidth="6"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:fillColor="#00000000"/>
