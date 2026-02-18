@@ -5,17 +5,18 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     
-    <!-- Cursive Capital S - figure-8 with two loops -->
+    <!-- Cursive Capital S - smaller to fit, correct ending -->
+    <!-- Safe zone is center 66dp, so roughly 21-87 -->
     <path
         android:pathData="
-            M40,72
-            C54,60 58,40 58,30
-            C58,18 34,18 34,30
-            C34,40 44,48 58,56
-            C72,64 72,80 72,84
-            C72,94 48,94 48,84
-            C48,76 60,74 74,76"
-        android:strokeWidth="5"
+            M42,68
+            C50,55 56,40 56,32
+            C56,22 38,22 38,34
+            C38,46 52,52 62,62
+            C70,70 66,80 54,78
+            C44,76 42,66 50,56
+            C56,50 64,52 72,56"
+        android:strokeWidth="4.5"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"

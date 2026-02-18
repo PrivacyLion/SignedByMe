@@ -117,52 +117,52 @@ fun CursiveSDrawing(
         val cy = h / 2f
         val scale = minOf(w, h) * 0.42f  // LARGER
         
-        // CURSIVE CAPITAL S - proper figure-8 shape with two crossing loops
+        // CURSIVE CAPITAL S - alienschooler style
         val path = Path().apply {
             
-            // Start at bottom left
-            moveTo(cx - scale * 0.3f, cy + scale * 0.65f)
+            // 1. Start at bottom left
+            moveTo(cx - scale * 0.3f, cy + scale * 0.6f)
             
-            // Go UP and RIGHT diagonally to top
+            // 2. Go UP and RIGHT diagonally to top
             cubicTo(
-                cx, cy + scale * 0.2f,
-                cx + scale * 0.15f, cy - scale * 0.3f,
-                cx + scale * 0.15f, cy - scale * 0.55f
+                cx, cy + scale * 0.1f,
+                cx + scale * 0.2f, cy - scale * 0.4f,
+                cx + scale * 0.2f, cy - scale * 0.6f
             )
             
-            // TOP LOOP - curve around to the LEFT and back down
+            // 3. TOP LOOP - curve LEFT and back down
             cubicTo(
-                cx + scale * 0.15f, cy - scale * 0.85f,  // up to peak
-                cx - scale * 0.4f, cy - scale * 0.85f,   // across left
-                cx - scale * 0.4f, cy - scale * 0.55f    // down left side
+                cx + scale * 0.2f, cy - scale * 0.9f,   // up to peak
+                cx - scale * 0.35f, cy - scale * 0.9f,  // across left
+                cx - scale * 0.35f, cy - scale * 0.5f   // down left side
             )
             
-            // Come back RIGHT through the middle (first crossing)
+            // 4. Cross through middle going RIGHT and DOWN
             cubicTo(
-                cx - scale * 0.4f, cy - scale * 0.25f,
-                cx - scale * 0.1f, cy - scale * 0.05f,
-                cx + scale * 0.15f, cy + scale * 0.15f
+                cx - scale * 0.35f, cy - scale * 0.1f,
+                cx + scale * 0.1f, cy + scale * 0.2f,
+                cx + scale * 0.35f, cy + scale * 0.5f
             )
             
-            // Continue down to the RIGHT side
+            // 5. BOTTOM LOOP - curve DOWN and LEFT
             cubicTo(
-                cx + scale * 0.4f, cy + scale * 0.35f,
-                cx + scale * 0.4f, cy + scale * 0.65f,
-                cx + scale * 0.4f, cy + scale * 0.75f
+                cx + scale * 0.5f, cy + scale * 0.75f,  // down right
+                cx + scale * 0.3f, cy + scale * 0.95f,  // bottom
+                cx - scale * 0.1f, cy + scale * 0.85f   // coming up left
             )
             
-            // BOTTOM LOOP - curve around to the LEFT
+            // 6. Curve UP and RIGHT - crossing over the diagonal
             cubicTo(
-                cx + scale * 0.4f, cy + scale * 0.95f,   // down to bottom
-                cx - scale * 0.15f, cy + scale * 0.95f,  // across left
-                cx - scale * 0.15f, cy + scale * 0.75f   // up left side
+                cx - scale * 0.3f, cy + scale * 0.75f,
+                cx - scale * 0.25f, cy + scale * 0.5f,
+                cx, cy + scale * 0.35f                   // crosses the diagonal here
             )
             
-            // Exit stroke going RIGHT
+            // 7. EXIT to the RIGHT
             cubicTo(
-                cx - scale * 0.15f, cy + scale * 0.55f,
-                cx + scale * 0.1f, cy + scale * 0.5f,
-                cx + scale * 0.35f, cy + scale * 0.55f
+                cx + scale * 0.15f, cy + scale * 0.25f,
+                cx + scale * 0.35f, cy + scale * 0.3f,
+                cx + scale * 0.5f, cy + scale * 0.35f
             )
         }
         
