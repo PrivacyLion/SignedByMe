@@ -5,36 +5,17 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     
-    <!-- Script/Calligraphic S - traced from Dancing Script style -->
-    <!-- Large, flowing curves like the font -->
+    <!-- Cursive S - matching the animated version -->
+    <!-- Two flowing curves forming script S -->
     <path
         android:pathData="
-            M70,25
-            C70,25 68,18 54,18
-            C38,18 28,28 28,42
-            C28,52 36,58 46,62
-            C56,66 64,72 64,82
-            C64,92 54,98 42,96
-            C32,94 26,88 28,78"
+            M72,24
+            C88,16 20,16 26,42
+            C30,56 78,48 82,66
+            C88,92 20,92 36,78"
         android:strokeWidth="9"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
-        android:fillColor="#00000000"/>
-
-    <!-- Top decorative swash -->
-    <path
-        android:pathData="M70,25 C78,22 82,28 80,36"
-        android:strokeWidth="7"
-        android:strokeColor="#FFFFFF"
-        android:strokeLineCap="round"
-        android:fillColor="#00000000"/>
-        
-    <!-- Bottom decorative swash -->
-    <path
-        android:pathData="M28,78 C22,72 24,62 32,58"
-        android:strokeWidth="7"
-        android:strokeColor="#FFFFFF"
-        android:strokeLineCap="round"
         android:fillColor="#00000000"/>
 </vector>

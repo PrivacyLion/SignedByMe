@@ -113,51 +113,38 @@ fun CursiveSDrawing(
     Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
-        val cx = w / 2f
-        val cy = h / 2f
         
-        // SINGLE-STROKE CURSIVE S - like actual handwriting
-        // This is the path a PEN would follow, not a font outline
+        // CURSIVE S - Based on Grok's recommended Bézier pattern
+        // Two main curves that form the classic script S shape
         val path = Path().apply {
-            // Scale to fit canvas with padding
-            val scale = minOf(w, h) * 0.35f
+            // Scale and center
+            val scale = minOf(w, h) * 0.8f
+            val offsetX = (w - scale) / 2f
+            val offsetY = (h - scale) / 2f
             
-            // Start: top-right, entry stroke
-            moveTo(cx + scale * 0.4f, cy - scale * 1.1f)
+            // Normalized coordinates (0-1) scaled to canvas
+            // Start at top-right area
+            moveTo(offsetX + scale * 0.7f, offsetY + scale * 0.15f)
             
-            // 1. Curve up and left (entry flourish)
+            // Upper curve - sweeps left and down, like top of cursive S
             cubicTo(
-                cx + scale * 0.1f, cy - scale * 1.3f,
-                cx - scale * 0.4f, cy - scale * 1.2f,
-                cx - scale * 0.5f, cy - scale * 0.8f
+                offsetX + scale * 0.85f, offsetY + scale * 0.0f,   // control 1: up and right
+                offsetX + scale * 0.15f, offsetY + scale * 0.0f,   // control 2: across to left
+                offsetX + scale * 0.2f, offsetY + scale * 0.35f    // end: left side, going down
             )
             
-            // 2. Down and around - top bowl curving right
+            // Middle crossing curve - goes right
             cubicTo(
-                cx - scale * 0.6f, cy - scale * 0.4f,
-                cx - scale * 0.4f, cy - scale * 0.1f,
-                cx, cy
+                offsetX + scale * 0.25f, offsetY + scale * 0.55f,  // control 1
+                offsetX + scale * 0.75f, offsetY + scale * 0.45f,  // control 2
+                offsetX + scale * 0.8f, offsetY + scale * 0.65f    // end: right side
             )
             
-            // 3. Continue through middle, curving to bottom right
+            // Lower curve - sweeps left and down, completing the S
             cubicTo(
-                cx + scale * 0.4f, cy + scale * 0.1f,
-                cx + scale * 0.6f, cy + scale * 0.4f,
-                cx + scale * 0.5f, cy + scale * 0.8f
-            )
-            
-            // 4. Bottom curve going left
-            cubicTo(
-                cx + scale * 0.4f, cy + scale * 1.2f,
-                cx - scale * 0.1f, cy + scale * 1.3f,
-                cx - scale * 0.4f, cy + scale * 1.1f
-            )
-            
-            // 5. Exit flourish - curve up
-            cubicTo(
-                cx - scale * 0.6f, cy + scale * 0.9f,
-                cx - scale * 0.5f, cy + scale * 0.6f,
-                cx - scale * 0.3f, cy + scale * 0.5f
+                offsetX + scale * 0.85f, offsetY + scale * 1.0f,   // control 1: down and right
+                offsetX + scale * 0.15f, offsetY + scale * 1.0f,   // control 2: across bottom
+                offsetX + scale * 0.3f, offsetY + scale * 0.85f    // end: bottom left area
             )
         }
         
@@ -165,18 +152,18 @@ fun CursiveSDrawing(
         val pathMeasure = android.graphics.PathMeasure(path.asAndroidPath(), false)
         val pathLength = pathMeasure.length
         
-        val strokeWidth = minOf(w, h) * 0.07f
+        val strokeWidth = minOf(w, h) * 0.08f
         
         // Glow effect
         drawPath(
             path = path,
-            color = Color.White.copy(alpha = 0.3f),
+            color = Color.White.copy(alpha = 0.4f),
             style = Stroke(
                 width = strokeWidth * 2f,
                 cap = StrokeCap.Round,
                 join = StrokeJoin.Round,
                 pathEffect = PathEffect.dashPathEffect(
-                    intervals = floatArrayOf(pathLength * progress, pathLength),
+                    intervals = floatArrayOf(pathLength * progress, pathLength * 2f),
                     phase = 0f
                 )
             )
@@ -191,7 +178,7 @@ fun CursiveSDrawing(
                 cap = StrokeCap.Round,
                 join = StrokeJoin.Round,
                 pathEffect = PathEffect.dashPathEffect(
-                    intervals = floatArrayOf(pathLength * progress, pathLength),
+                    intervals = floatArrayOf(pathLength * progress, pathLength * 2f),
                     phase = 0f
                 )
             )
