@@ -5,16 +5,16 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     
-    <!-- Cursive Capital S - Alienschooler style -->
-    <!-- lower-left → diagonal up → top loop → descend → bottom loop → exit right -->
+    <!-- Cursive Capital S - figure-8 with two loops -->
     <path
         android:pathData="
-            M36,68
-            L62,32
-            C78,24 74,44 54,54
-            C42,60 38,70 46,76
-            C34,84 70,84 74,68
-            L80,62"
+            M40,72
+            C54,60 58,40 58,30
+            C58,18 34,18 34,30
+            C34,40 44,48 58,56
+            C72,64 72,80 72,84
+            C72,94 48,94 48,84
+            C48,76 60,74 74,76"
         android:strokeWidth="5"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"

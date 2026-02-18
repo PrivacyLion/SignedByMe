@@ -117,39 +117,53 @@ fun CursiveSDrawing(
         val cy = h / 2f
         val scale = minOf(w, h) * 0.42f  // LARGER
         
-        // CURSIVE CAPITAL S - Alienschooler style
-        // Single stroke: lower-left → diagonal up → top loop (CCW) → descend → bottom loop (CCW) → exit right
+        // CURSIVE CAPITAL S - proper figure-8 shape with two crossing loops
         val path = Path().apply {
             
-            // 1. START: Lower-left, on baseline
-            moveTo(cx - scale * 0.4f, cy + scale * 0.6f)
+            // Start at bottom left
+            moveTo(cx - scale * 0.3f, cy + scale * 0.65f)
             
-            // 2. DIAGONAL UP: Move up and to the right (45-60° angle)
-            lineTo(cx + scale * 0.2f, cy - scale * 0.5f)
-            
-            // 3. TOP LOOP (CCW): curve right, then down, then left - crossing over ascending stroke
+            // Go UP and RIGHT diagonally to top
             cubicTo(
-                cx + scale * 0.5f, cy - scale * 0.7f,   // control 1: curve right at top
-                cx + scale * 0.4f, cy - scale * 0.3f,   // control 2: coming down right side
-                cx, cy                                   // end: center, crossing the diagonal
+                cx, cy + scale * 0.2f,
+                cx + scale * 0.15f, cy - scale * 0.3f,
+                cx + scale * 0.15f, cy - scale * 0.55f
             )
             
-            // 4. DESCEND: Continue down and slightly left through middle
+            // TOP LOOP - curve around to the LEFT and back down
             cubicTo(
-                cx - scale * 0.3f, cy + scale * 0.2f,   // control 1: going down-left
-                cx - scale * 0.4f, cy + scale * 0.5f,   // control 2: approaching bottom
-                cx - scale * 0.2f, cy + scale * 0.7f    // end: near baseline, left side
+                cx + scale * 0.15f, cy - scale * 0.85f,  // up to peak
+                cx - scale * 0.4f, cy - scale * 0.85f,   // across left
+                cx - scale * 0.4f, cy - scale * 0.55f    // down left side
             )
             
-            // 5. BOTTOM LOOP (CCW): curve left, down below baseline, sweep right, curve up
+            // Come back RIGHT through the middle (first crossing)
             cubicTo(
-                cx - scale * 0.5f, cy + scale * 0.9f,   // control 1: below baseline left
-                cx + scale * 0.3f, cy + scale * 0.9f,   // control 2: sweep right below baseline
-                cx + scale * 0.4f, cy + scale * 0.6f    // end: right side, coming up
+                cx - scale * 0.4f, cy - scale * 0.25f,
+                cx - scale * 0.1f, cy - scale * 0.05f,
+                cx + scale * 0.15f, cy + scale * 0.15f
             )
             
-            // 6. EXIT RIGHT: Continue right, slightly above baseline
-            lineTo(cx + scale * 0.55f, cy + scale * 0.5f)
+            // Continue down to the RIGHT side
+            cubicTo(
+                cx + scale * 0.4f, cy + scale * 0.35f,
+                cx + scale * 0.4f, cy + scale * 0.65f,
+                cx + scale * 0.4f, cy + scale * 0.75f
+            )
+            
+            // BOTTOM LOOP - curve around to the LEFT
+            cubicTo(
+                cx + scale * 0.4f, cy + scale * 0.95f,   // down to bottom
+                cx - scale * 0.15f, cy + scale * 0.95f,  // across left
+                cx - scale * 0.15f, cy + scale * 0.75f   // up left side
+            )
+            
+            // Exit stroke going RIGHT
+            cubicTo(
+                cx - scale * 0.15f, cy + scale * 0.55f,
+                cx + scale * 0.1f, cy + scale * 0.5f,
+                cx + scale * 0.35f, cy + scale * 0.55f
+            )
         }
         
         // Measure path length for animation
