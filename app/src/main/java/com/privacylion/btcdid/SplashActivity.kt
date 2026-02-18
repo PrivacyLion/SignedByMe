@@ -115,47 +115,47 @@ fun CursiveSDrawing(
         val h = size.height
         val cx = w / 2f
         val cy = h / 2f
-        val scale = minOf(w, h) * 0.4f
+        val scale = minOf(w, h) * 0.42f  // LARGER
         
-        // ACTUAL CURSIVE CAPITAL S - based on how it's written by hand
-        // Key: starts at BOTTOM, goes UP, loops at top, crosses over, bottom curve, exit hook
+        // CURSIVE CAPITAL S - D'Nealian/Zaner-Bloser style (alienschooler)
+        // Classic rounded cursive S with flowing curves
         val path = Path().apply {
             
-            // 1. START at bottom-left, pen on paper
-            moveTo(cx - scale * 0.3f, cy + scale * 0.9f)
+            // 1. START at bottom-left
+            moveTo(cx - scale * 0.2f, cy + scale * 0.85f)
             
-            // 2. Diagonal stroke going UP and to the RIGHT
+            // 2. Stroke going UP diagonally to the right
             cubicTo(
-                cx - scale * 0.1f, cy + scale * 0.5f,   // control 1: going up
-                cx + scale * 0.3f, cy - scale * 0.2f,   // control 2: continuing up-right
-                cx + scale * 0.2f, cy - scale * 0.6f    // end: near top, curving left
+                cx - scale * 0.05f, cy + scale * 0.4f,  // control 1
+                cx + scale * 0.35f, cy - scale * 0.1f,  // control 2
+                cx + scale * 0.25f, cy - scale * 0.55f  // end: upper right area
             )
             
-            // 3. LOOP at top - curves left and back down
+            // 3. TOP LOOP - curves left across the top
             cubicTo(
-                cx + scale * 0.1f, cy - scale * 0.95f,  // control 1: top of loop
-                cx - scale * 0.5f, cy - scale * 0.9f,   // control 2: left side of loop
-                cx - scale * 0.4f, cy - scale * 0.5f    // end: coming back down on left
+                cx + scale * 0.15f, cy - scale * 0.9f,  // control 1: peak
+                cx - scale * 0.45f, cy - scale * 0.85f, // control 2: left
+                cx - scale * 0.35f, cy - scale * 0.45f  // end: coming down left side
             )
             
-            // 4. Cross over the first stroke, continue down-right
+            // 4. CROSS through middle going down-right
             cubicTo(
-                cx - scale * 0.3f, cy - scale * 0.1f,   // control 1: crossing middle
-                cx + scale * 0.1f, cy + scale * 0.2f,   // control 2: going right
-                cx + scale * 0.4f, cy + scale * 0.5f    // end: right side, going down
+                cx - scale * 0.25f, cy - scale * 0.05f, // control 1
+                cx + scale * 0.15f, cy + scale * 0.25f, // control 2
+                cx + scale * 0.4f, cy + scale * 0.5f    // end: right side
             )
             
-            // 5. Bottom curve - sweeps left
+            // 5. BOTTOM CURVE - sweeps around to left
             cubicTo(
-                cx + scale * 0.5f, cy + scale * 0.85f,  // control 1: bottom right
-                cx + scale * 0.1f, cy + scale * 1.0f,   // control 2: bottom center
-                cx - scale * 0.2f, cy + scale * 0.85f   // end: bottom left
+                cx + scale * 0.55f, cy + scale * 0.8f,  // control 1: bottom right
+                cx + scale * 0.15f, cy + scale * 0.95f, // control 2: bottom
+                cx - scale * 0.15f, cy + scale * 0.8f   // end: bottom left
             )
             
-            // 6. Exit hook - small curve to connect to next letter
+            // 6. EXIT HOOK - curves up and right
             quadraticBezierTo(
-                cx - scale * 0.35f, cy + scale * 0.7f,  // control
-                cx - scale * 0.15f, cy + scale * 0.6f   // end: hook pointing right
+                cx - scale * 0.3f, cy + scale * 0.65f,  // control
+                cx - scale * 0.1f, cy + scale * 0.55f   // end: pointing right
             )
         }
         

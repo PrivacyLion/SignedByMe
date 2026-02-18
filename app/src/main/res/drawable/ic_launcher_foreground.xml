@@ -5,17 +5,17 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     
-    <!-- ACTUAL CURSIVE CAPITAL S -->
-    <!-- Starts at bottom, goes up, loops at top, crosses over, bottom curve -->
+    <!-- Cursive Capital S - sized to fit in adaptive icon safe zone -->
+    <!-- Safe zone is roughly center 66dp of 108dp, so ~21-87 range -->
     <path
         android:pathData="
-            M38,82
-            C44,62 62,30 58,18
-            C54,6 26,10 30,30
-            C34,48 60,58 72,74
-            C80,86 58,94 44,86
-            Q36,80 46,72"
-        android:strokeWidth="8"
+            M42,75
+            C46,60 58,38 56,28
+            C54,18 36,18 38,32
+            C40,46 58,54 66,66
+            C72,76 60,82 50,78
+            Q44,74 50,68"
+        android:strokeWidth="6"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
