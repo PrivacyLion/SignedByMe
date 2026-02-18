@@ -5,17 +5,16 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     
-    <!-- Cursive Capital S - PrepScholar method -->
-    <!-- 1.Bottom 2.Up 3.Loop down 4.Cross middle 5.Cross bottom 6.Hook right -->
+    <!-- Cursive Capital S - smaller to fit in safe zone (center 66dp) -->
     <path
         android:pathData="
-            M44,66
-            C48,56 52,42 56,30
-            C60,18 36,18 38,34
-            C40,48 54,54 62,60
-            C70,66 66,76 54,74
-            Q60,70 70,72"
-        android:strokeWidth="4.5"
+            M46,64
+            C49,57 52,47 54,38
+            C56,28 42,28 43,38
+            C44,48 54,52 60,57
+            C65,62 62,70 54,68
+            Q58,66 66,68"
+        android:strokeWidth="4"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"

@@ -115,7 +115,7 @@ fun CursiveSDrawing(
         val h = size.height
         val cx = w / 2f
         val cy = h / 2f
-        val scale = minOf(w, h) * 0.42f  // LARGER
+        val scale = minOf(w, h) * 0.84f  // 2X LARGER
         
         // CURSIVE CAPITAL S - PrepScholar method
         // 1. Start BOTTOM  2. Diagonal UP  3. Loop at top going DOWN
