@@ -31,53 +31,28 @@ class SplashActivity : ComponentActivity() {
 }
 
 /**
- * Custom view that draws an animated cursive "S" with handwriting effect.
- * Uses actual cursive font for authentic look.
+ * Custom view that shows animated cursive "S" with fade-in and scale effect.
+ * Uses Dancing Script font for authentic cursive look.
  */
 class AnimatedSignatureView(context: android.content.Context) : View(context) {
-    
-    private val pathPaint = Paint().apply {
-        color = Color.WHITE
-        strokeWidth = 24f  // Thicker stroke
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-        isAntiAlias = true
-    }
-    
-    private val glowPaint = Paint().apply {
-        color = Color.WHITE
-        strokeWidth = 40f  // Thicker glow
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-        isAntiAlias = true
-        maskFilter = BlurMaskFilter(25f, BlurMaskFilter.Blur.NORMAL)
-        alpha = 100
-    }
-    
-    // Paint for extracting text path - use Dancing Script font
-    private lateinit var textPaint: Paint
     
     private val gradientColors = intArrayOf(
         Color.parseColor("#3B82F6"),
         Color.parseColor("#8B5CF6")
     )
     
-    private val sPath = Path()
-    private val pathMeasure = PathMeasure()
-    private val visiblePath = Path()
-    private var pathLength = 0f
-    private var animatedValue = 0f
+    private var animatedAlpha = 0f
+    private var animatedScale = 0.8f
     private var onComplete: (() -> Unit)? = null
     
     private var backgroundGradient: LinearGradient? = null
     private val backgroundPaint = Paint()
     
+    // Text paint for the S
+    private val textPaint: Paint
+    private val glowPaint: Paint
+    
     init {
-        // Disable hardware acceleration for blur effect
-        setLayerType(LAYER_TYPE_SOFTWARE, null)
-        
         // Load Dancing Script font for authentic cursive look
         val dancingScript = try {
             if (android.os.Build.VERSION.SDK_INT >= 26) {
@@ -90,10 +65,25 @@ class AnimatedSignatureView(context: android.content.Context) : View(context) {
         }
         
         textPaint = Paint().apply {
-            textSize = 400f
+            color = Color.WHITE
+            textSize = 300f
             typeface = dancingScript
             isAntiAlias = true
+            textAlign = Paint.Align.CENTER
         }
+        
+        glowPaint = Paint().apply {
+            color = Color.WHITE
+            textSize = 300f
+            typeface = dancingScript
+            isAntiAlias = true
+            textAlign = Paint.Align.CENTER
+            maskFilter = BlurMaskFilter(30f, BlurMaskFilter.Blur.NORMAL)
+            alpha = 80
+        }
+        
+        // Disable hardware acceleration for blur effect
+        setLayerType(LAYER_TYPE_SOFTWARE, null)
     }
     
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -106,37 +96,10 @@ class AnimatedSignatureView(context: android.content.Context) : View(context) {
         )
         backgroundPaint.shader = backgroundGradient
         
-        // Build the cursive S path using actual cursive font
-        buildSignaturePath(w, h)
-        
-        pathMeasure.setPath(sPath, false)
-        pathLength = pathMeasure.length
-    }
-    
-    private fun buildSignaturePath(w: Int, h: Int) {
-        val cx = w / 2f
-        val cy = h / 2f
-        
         // Scale text size based on screen
-        val fontSize = minOf(w, h) * 0.6f
+        val fontSize = minOf(w, h) * 0.5f
         textPaint.textSize = fontSize
-        
-        sPath.reset()
-        
-        // Get the path of the letter "S" from the cursive font
-        textPaint.getTextPath("S", 0, 1, 0f, 0f, sPath)
-        
-        // Measure the path bounds to center it
-        val bounds = RectF()
-        sPath.computeBounds(bounds, true)
-        
-        // Create transformation matrix to center the S
-        val matrix = Matrix()
-        matrix.postTranslate(
-            cx - bounds.centerX(),
-            cy - bounds.centerY()
-        )
-        sPath.transform(matrix)
+        glowPaint.textSize = fontSize
     }
     
     override fun onDraw(canvas: Canvas) {
@@ -145,15 +108,29 @@ class AnimatedSignatureView(context: android.content.Context) : View(context) {
         // Draw gradient background
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), backgroundPaint)
         
-        // Draw the visible portion of the path
-        visiblePath.reset()
-        pathMeasure.getSegment(0f, pathLength * animatedValue, visiblePath, true)
+        val cx = width / 2f
+        val cy = height / 2f
+        
+        // Apply scale transformation
+        canvas.save()
+        canvas.scale(animatedScale, animatedScale, cx, cy)
+        
+        // Set alpha
+        glowPaint.alpha = (80 * animatedAlpha).toInt()
+        textPaint.alpha = (255 * animatedAlpha).toInt()
+        
+        // Calculate vertical center (text draws from baseline)
+        val textBounds = android.graphics.Rect()
+        textPaint.getTextBounds("S", 0, 1, textBounds)
+        val textY = cy + textBounds.height() / 2f
         
         // Draw glow first
-        canvas.drawPath(visiblePath, glowPaint)
+        canvas.drawText("S", cx, textY, glowPaint)
         
-        // Draw main stroke
-        canvas.drawPath(visiblePath, pathPaint)
+        // Draw text
+        canvas.drawText("S", cx, textY, textPaint)
+        
+        canvas.restore()
     }
     
     fun startAnimation(onComplete: () -> Unit) {
@@ -161,11 +138,14 @@ class AnimatedSignatureView(context: android.content.Context) : View(context) {
         
         // Wait a moment before starting
         postDelayed({
+            // Fade in and scale up animation
             ValueAnimator.ofFloat(0f, 1f).apply {
-                duration = 1200 // 1.2 seconds to draw
+                duration = 800
                 interpolator = AccelerateDecelerateInterpolator()
                 addUpdateListener { animator ->
-                    this@AnimatedSignatureView.animatedValue = animator.animatedValue as Float
+                    val value = animator.animatedValue as Float
+                    this@AnimatedSignatureView.animatedAlpha = value
+                    this@AnimatedSignatureView.animatedScale = 0.8f + (0.2f * value)
                     this@AnimatedSignatureView.invalidate()
                 }
                 addListener(object : android.animation.Animator.AnimatorListener {
@@ -176,7 +156,7 @@ class AnimatedSignatureView(context: android.content.Context) : View(context) {
                         // Brief pause to admire, then continue
                         postDelayed({
                             this@AnimatedSignatureView.onComplete?.invoke()
-                        }, 400)
+                        }, 500)
                     }
                 })
                 start()
