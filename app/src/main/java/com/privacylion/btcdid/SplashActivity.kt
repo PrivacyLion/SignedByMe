@@ -152,9 +152,9 @@ class AnimatedSignatureView(context: android.content.Context) : View(context) {
             ValueAnimator.ofFloat(0f, 1f).apply {
                 duration = 1200 // 1.2 seconds to draw
                 interpolator = AccelerateDecelerateInterpolator()
-                addUpdateListener { animation ->
-                    animatedValue = animation.animatedValue as Float
-                    invalidate()
+                addUpdateListener { animator ->
+                    this@AnimatedSignatureView.animatedValue = animator.animatedValue as Float
+                    this@AnimatedSignatureView.invalidate()
                 }
                 addListener(object : android.animation.Animator.AnimatorListener {
                     override fun onAnimationStart(animation: android.animation.Animator) {}
