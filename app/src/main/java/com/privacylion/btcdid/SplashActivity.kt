@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.res.ResourcesCompat
 import kotlinx.coroutines.delay
 
 /**
@@ -44,14 +45,11 @@ class SplashActivity : ComponentActivity() {
 fun SplashScreen(onAnimationComplete: () -> Unit) {
     val context = LocalContext.current
     
-    // Load Dancing Script font
+    // Load Dancing Script font using ResourcesCompat for compatibility
     val dancingScriptTypeface = remember {
         try {
-            if (android.os.Build.VERSION.SDK_INT >= 26) {
-                context.resources.getFont(R.font.dancing_script)
-            } else {
-                Typeface.create("cursive", Typeface.NORMAL)
-            }
+            ResourcesCompat.getFont(context, R.font.dancing_script)
+                ?: Typeface.create("cursive", Typeface.NORMAL)
         } catch (e: Exception) {
             Typeface.create("cursive", Typeface.NORMAL)
         }
@@ -131,11 +129,11 @@ fun CursiveSDrawing(
         val bounds = android.graphics.RectF()
         androidPath.computeBounds(bounds, true)
         
-        // Transform to center on canvas
+        // Transform to center on canvas (text baseline adjustment)
         val matrix = android.graphics.Matrix()
         matrix.postTranslate(
             (canvasWidth - bounds.width()) / 2f - bounds.left,
-            (canvasHeight - bounds.height()) / 2f - bounds.top + bounds.height()
+            (canvasHeight + bounds.height()) / 2f - bounds.bottom
         )
         androidPath.transform(matrix)
         
