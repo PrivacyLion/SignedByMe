@@ -2,4 +2,13 @@
 <resources>
 
     <style name="Theme.BTC_DID" parent="android:Theme.Material.Light.NoActionBar" />
+    
+    <!-- Splash screen theme - no action bar, gradient background -->
+    <style name="Theme.SignedByMe.Splash" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@drawable/splash_background</item>
+        <item name="android:statusBarColor">#3B82F6</item>
+        <item name="android:navigationBarColor">#8B5CF6</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowFullscreen">true</item>
+    </style>
 </resources>
