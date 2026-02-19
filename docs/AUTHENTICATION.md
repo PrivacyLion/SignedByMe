@@ -7,10 +7,29 @@ Detailed walkthrough of the SignedByMe authentication sequence.
 ## Overview
 
 SignedByMe uses a hybrid flow combining:
-- **OIDC Authorization Code** for token exchange
-- **Lightning Network** for payment verification
-- **STWO Zero-Knowledge Proofs** for identity attestation
-- **Merkle Proofs** for optional group membership
+- **Decentralized Identifiers (DIDs)** — User-controlled cryptographic identity
+- **STWO Zero-Knowledge Proofs** — Cryptographic proof of DID ownership
+- **Lightning Network** — Payment verification + user compensation
+- **OIDC Authorization Code** — Standard token exchange
+- **Merkle Proofs** — Optional group membership verification
+
+### What is a DID?
+
+A DID (Decentralized Identifier) is a self-sovereign identity:
+
+```
+did:key:z6MkhaXgBZDvotDUGZjQ8WCNfD8GmYzGdL6aLNsqRCj3KSEy
+└─────┘ └──────────────────────────────────────────────────┘
+ method              multibase-encoded public key
+```
+
+**Key properties:**
+- **User-controlled** — User holds the private key, not a provider
+- **Portable** — Works across any service that accepts DIDs
+- **Uncensorable** — No central authority can revoke it
+- **Cryptographic** — Identity is proven mathematically, not by "trust me"
+
+The DID becomes the `sub` (subject) claim in the ID token. All proofs are cryptographically bound to this DID.
 
 ---
 
@@ -41,25 +60,32 @@ SignedByMe uses a hybrid flow combining:
      │ 5. User scans ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─▶│               │
      │    QR code                                     │               │
      │               │               │                │               │
-     │               │               │ 6. Submit STWO │               │
-     │               │               │    proof +     │               │
-     │               │               │    invoice     │               │
+     │               │               │ 6. App generates:              │
+     │               │               │    • STWO proof (proves DID    │
+     │               │               │      ownership via ZK-STARK)   │
+     │               │               │    • Lightning invoice         │
+     │               │               │    • Binding signature         │
      │               │               │◀───────────────│               │
      │               │               │                │               │
-     │               │               │ 7. Verify      │               │
-     │               │               │    proof       │               │
+     │               │               │ 7. API verifies:               │
+     │               │               │    • STWO proof valid          │
+     │               │               │    • DID matches proof         │
+     │               │               │    • Binding is correct        │
      │               │               │────┐           │               │
      │               │               │    │           │               │
      │               │               │◀───┘           │               │
      │               │               │                │               │
-     │               │               │ 8. Pay invoice │               │
+     │               │               │ 8. Pay user's  │               │
+     │               │               │    invoice     │               │
      │               │               │───────────────────────────────▶│
      │               │               │                │               │
      │               │               │ 9. Preimage    │               │
+     │               │               │    (payment    │               │
+     │               │               │     proof)     │               │
      │               │               │◀───────────────────────────────│
      │               │               │                │               │
-     │               │               │ 10. Session    │               │
-     │               │               │     complete   │               │
+     │               │               │ 10. Notify app │               │
+     │               │               │     (paid!)    │               │
      │               │               │───────────────▶│               │
      │               │               │                │               │
      │               │ 11. Poll:     │                │               │
@@ -68,13 +94,16 @@ SignedByMe uses a hybrid flow combining:
      │               │◀──────────────│                │               │
      │               │               │                │               │
      │               │ 12. Exchange  │                │               │
-     │               │     code      │                │               │
+     │               │     code for  │                │               │
+     │               │     ID token  │                │               │
      │               │──────────────▶│                │               │
      │               │               │                │               │
      │               │ 13. ID Token  │                │               │
+     │               │     (sub=DID) │                │               │
      │               │◀──────────────│                │               │
      │               │               │                │               │
      │ 14. Logged in │               │                │               │
+     │     as DID    │               │                │               │
      │◀──────────────│               │                │               │
      │               │               │                │               │
 ```

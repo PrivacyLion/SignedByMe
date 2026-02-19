@@ -1,7 +1,11 @@
 # Merkle Witness Spec (SignedByMe)
 
 **Version:** 1  
-**Status:** FROZEN — do not change without mobile + verifier coordination
+**Status:** 🔒 FROZEN (Stable) — do not change without mobile + verifier coordination
+
+> **What "FROZEN" means:** This spec is production-locked and stable. The wire format is 
+> finalized. Any changes require coordinated updates to the mobile app, sbm-tree CLI, 
+> and server verifier. This is a GOOD thing—it means you can rely on this format.
 
 ## Scope
 
