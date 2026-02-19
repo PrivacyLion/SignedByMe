@@ -28,3 +28,6 @@ captures/
 
 # Screenshots (don't commit to repo)
 /Screenshot*.png
+
+# macOS Finder metadata
+**/.DS_Store
