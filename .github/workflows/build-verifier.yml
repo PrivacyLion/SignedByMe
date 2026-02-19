@@ -1,0 +1,28 @@
+name: Build STWO Verifier
+
+on:
+  push:
+    paths:
+      - 'native/btcdid_core/src/**'
+      - '.github/workflows/build-verifier.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+ 
+ runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+      - name: Build verifier binary
+                          
+ working-directory: native/btcdid_core
+        run: cargo build --release --features real-stwo --bin stwo_verifier
+      - name: Upload verifier artifact
+        uses: actions/upload-artifact@v4
+        
+ with:
+          name: stwo_verifier-linux-x86_64
+          path: native/btcdid_core/target/release/stwo_verifier
+          retention-days: 90
