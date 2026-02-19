@@ -250,7 +250,3 @@ If you're unsure whether your use case is permitted, please reach out before shi
 Full license: [`LICENSE`](./LICENSE)  
 Apache 2.0 text (future): [`LICENSE-APACHE`](./LICENSE-APACHE)  
 Trademarks: [`TRADEMARK.md`](./TRADEMARK.md)
-
----
-
-*Built by [Privacy Lion](https://privacy-lion.com)*
