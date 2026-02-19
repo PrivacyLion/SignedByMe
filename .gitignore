@@ -5,7 +5,7 @@ var/
 .venv/
 __pycache__/
 *.pyc
-_vm_stage/var/
+api/var/
 
 # --- ANDROID / GRADLE ---
 /.gradle/
