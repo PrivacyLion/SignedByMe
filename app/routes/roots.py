@@ -14,8 +14,10 @@ from typing import Optional
 import time
 import json
 import os
+import logging
 from pathlib import Path
 
+logger = logging.getLogger("roots")
 router = APIRouter(tags=["roots"])
 
 # Config paths
@@ -98,7 +100,7 @@ def load_roots() -> list[dict]:
             data = json.loads(ROOTS_PATH.read_text())
             return data.get("roots", [])
         except Exception as e:
-            print(f"Warning: Could not load roots.json: {e}")
+            logger.warning(f"Could not load roots.json: {e}")
     return []
 
 
@@ -276,7 +278,7 @@ def publish_root(
     roots.append(root_entry)
     save_roots(roots)
     
-    print(f"Root published: {body.root_id} for client {client_id}")
+    logger.info(f"Root published: {body.root_id} for client {client_id}")
     return {"ok": True, "root_id": body.root_id, "client_id": client_id}
 
 
@@ -308,7 +310,7 @@ def add_root_admin(body: RootEntry):
     roots.append(body.dict())
     save_roots(roots)
     
-    print(f"Root added (admin): {body.root_id}")
+    logger.info(f"Root added (admin): {body.root_id}")
     return {"ok": True, "root_id": body.root_id}
 
 
@@ -332,7 +334,7 @@ def update_root(root_id: str, patch: RootPatch):
                 r["description"] = patch.description
             
             save_roots(roots)
-            print(f"Root updated: {root_id}")
+            logger.info(f"Root updated: {root_id}")
             return {"ok": True, "root_id": root_id}
     
     raise HTTPException(404, f"Root not found: {root_id}")
@@ -353,5 +355,5 @@ def delete_root(root_id: str):
         raise HTTPException(404, f"Root not found: {root_id}")
     
     save_roots(new_roots)
-    print(f"Root deleted: {root_id}")
+    logger.info(f"Root deleted: {root_id}")
     return {"ok": True, "root_id": root_id, "deleted": True}

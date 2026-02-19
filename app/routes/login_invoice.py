@@ -21,12 +21,15 @@ import hashlib
 import json
 import secrets
 import os
+import logging
 from pathlib import Path
 import shelve
 
 from .roots import get_canonical_root, get_purpose_id, PURPOSE_NONE
 from . import session as session_module
 from ..lib import strike
+
+logger = logging.getLogger("login_invoice")
 
 router = APIRouter(tags=["login"])
 
@@ -53,18 +56,18 @@ async def process_payout_if_enabled(
     
     # Check if payout is enabled for this client
     if not reward_policy.get("enabled"):
-        print(f"Payout skipped: reward not enabled for client {client_id}")
+        logger.info(f"Payout skipped: reward not enabled for client {client_id}")
         return None
     
     provider = reward_policy.get("provider")
     if provider != "strike":
-        print(f"Payout skipped: unknown provider '{provider}' for client {client_id}")
+        logger.info(f"Payout skipped: unknown provider '{provider}' for client {client_id}")
         return {"status": "skipped", "reason": f"unknown provider: {provider}"}
     
     # Get amount from SERVER config (never trust client-provided amount)
     amount_sats = reward_policy.get("amount_sats", 0)
     if amount_sats <= 0:
-        print(f"Payout skipped: amount_sats is {amount_sats} for client {client_id}")
+        logger.info(f"Payout skipped: amount_sats is {amount_sats} for client {client_id}")
         return {"status": "skipped", "reason": "amount_sats not configured"}
     
     # Call Strike (non-blocking, idempotent)
@@ -93,12 +96,12 @@ async def process_payout_if_enabled(
             payout_result=payout_result
         )
         
-        print(f"Payout result for session {session_id}: {payout_result}")
+        logger.info(f"Payout result for session {session_id}: {payout_result}")
         return payout_result
         
     except Exception as e:
         error_result = {"status": "failed", "error": str(e)}
-        print(f"Payout error for session {session_id}: {e}")
+        logger.warning(f"Payout error for session {session_id}: {e}")
         
         # Log failure
         session_module.log_payout_attempt(
@@ -137,7 +140,7 @@ def load_clients() -> dict:
         try:
             clients = json.loads(CLIENTS_PATH.read_text())
         except Exception as e:
-            print(f"Warning: Could not load clients.json: {e}")
+            logger.warning(f" Could not load clients.json: {e}")
     
     # Override/extend with env var
     env_clients = os.environ.get("SBM_CLIENTS_JSON")
@@ -146,7 +149,7 @@ def load_clients() -> dict:
             env_data = json.loads(env_clients)
             clients.update(env_data)
         except Exception as e:
-            print(f"Warning: Could not parse SBM_CLIENTS_JSON: {e}")
+            logger.warning(f" Could not parse SBM_CLIENTS_JSON: {e}")
     
     return clients
 
@@ -355,7 +358,7 @@ def verify_stwo_proof(
         return is_valid, schema_version, message
         
     except Exception as e:
-        print(f"STWO verification error: {e}")
+        logger.info(f"STWO verification error: {e}")
         return False, 0, str(e)
 
 
@@ -385,7 +388,7 @@ def verify_binding_signature(
         
         return True
     except Exception as e:
-        print(f"Binding verification error: {e}")
+        logger.warning(f"Binding verification error: {e}")
         return False
 
 
@@ -511,7 +514,7 @@ def verify_membership_proof(
     Calls the Rust membership_verifier binary via subprocess.
     """
     if not has_membership_verifier():
-        print(f"Membership verifier not found at {MEMBERSHIP_VERIFIER_PATH}, returning False")
+        logger.warning(f"Membership verifier not found at {MEMBERSHIP_VERIFIER_PATH}, returning False")
         return False
     
     # Build request JSON
@@ -535,20 +538,20 @@ def verify_membership_proof(
         stderr = result.stderr.strip()
         
         if result.returncode == 0 and stdout == "VALID":
-            print(f"Membership proof VALID")
+            logger.debug(f"Membership proof VALID")
             return True
         elif result.returncode == 1 and stdout == "INVALID":
-            print(f"Membership proof INVALID")
+            logger.warning(f"Membership proof INVALID")
             return False
         else:
-            print(f"Membership verification error: {stderr or stdout}")
+            logger.error(f"Membership verification error: {stderr or stdout}")
             return False
             
     except subprocess.TimeoutExpired:
-        print("Membership verification timed out")
+        logger.error("Membership verification timed out")
         return False
     except Exception as e:
-        print(f"Membership verification exception: {e}")
+        logger.error(f"Membership verification exception: {e}")
         return False
 
 
@@ -653,7 +656,7 @@ async def submit_invoice(body: LoginInvoiceRequest):
         except ValueError:
             raise HTTPException(400, "payment_hash_hex must be valid hex")
         payment_hash = body.payment_hash_hex
-        print(f"DEV: Using test payment_hash override: {payment_hash[:16]}...")
+        logger.debug(f"DEV: Using test payment_hash override: {payment_hash[:16]}...")
     elif body.payment_hash_hex:
         # Env flag not set but payment_hash_hex provided - ignore silently
         payment_hash = extract_payment_hash(body.invoice)
@@ -662,7 +665,7 @@ async def submit_invoice(body: LoginInvoiceRequest):
     
     # Verify STWO proof if provided
     if body.stwo_proof:
-        print(f"DEBUG STWO proof received (first 500 chars): {body.stwo_proof[:500]}")
+        logger.debug(f"STWO proof received for session {body.session_id} (len={len(body.stwo_proof)})")
         stwo_verified, schema_version, verify_msg = verify_stwo_proof(
             body.stwo_proof,
             body.did,
@@ -671,12 +674,12 @@ async def submit_invoice(body: LoginInvoiceRequest):
         )
         
         if stwo_verified:
-            print(f"STWO verification passed (v{schema_version}): {verify_msg}")
+            logger.info(f"STWO verification passed (v{schema_version}): {verify_msg}")
             # For v3+, binding is enforced in the hash - no separate signature needed
             if schema_version >= 3:
                 binding_verified = True
         else:
-            print(f"STWO proof verification failed for session {body.session_id}: {verify_msg}")
+            logger.warning(f"STWO proof verification failed for session {body.session_id}: {verify_msg}")
     
     # Legacy: Verify binding signature if STWO proof was provided (v2)
     if body.stwo_proof and body.binding_signature and body.nonce and not binding_verified:
@@ -735,9 +738,9 @@ async def submit_invoice(body: LoginInvoiceRequest):
         if membership_verified:
             membership_purpose = body.membership.purpose
             membership_root_id = body.membership.root_id
-            print(f"Membership verified: purpose={membership_purpose}, root={membership_root_id}")
+            logger.info(f"Membership verified: purpose={membership_purpose}, root={membership_root_id}")
         else:
-            print(f"Membership proof failed for session {body.session_id}")
+            logger.warning(f"Membership proof failed for session {body.session_id}")
     
     # Verify DLC contract if provided
     dlc_verified = False
@@ -761,11 +764,11 @@ async def submit_invoice(body: LoginInvoiceRequest):
                     user_amount_sats = (body.amount_sats * user_pct) // 100
                     operator_amount_sats = body.amount_sats - user_amount_sats
                 
-                print(f"DLC contract verified: {contract_id} (90/10 split)")
+                logger.info(f"DLC contract verified: {contract_id} (90/10 split)")
             else:
-                print(f"DLC contract mismatch: DID or amount doesn't match")
+                logger.info(f"DLC contract mismatch: DID or amount doesn't match")
         except Exception as e:
-            print(f"DLC verification error: {e}")
+            logger.info(f"DLC verification error: {e}")
     
     # Store/update session
     session_data = {
@@ -1110,7 +1113,7 @@ def confirm_payment(
             "membership_root_id": session.get("membership_root_id"),
         }
     
-    print(f"Payment confirmed for session {session_id}: auth_code issued")
+    logger.info(f"Payment confirmed for session {session_id}: auth_code issued")
     
     return ConfirmPaymentResponse(
         ok=True,

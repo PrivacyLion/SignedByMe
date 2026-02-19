@@ -10,8 +10,10 @@ import json
 import hashlib
 import secrets
 import base64
+import logging
 import httpx
 from pathlib import Path
+from ..lib.crypto import verify_binding_signature as crypto_verify_binding
 
 router = APIRouter(tags=["enterprise"])
 
@@ -312,74 +314,26 @@ class LoginConfirmResponse(BaseModel):
 
 
 # =============================================================================
-# secp256k1 Signature Verification
+# secp256k1 Signature Verification (uses shared crypto lib)
 # =============================================================================
 
 def _verify_secp256k1_signature(pubkey_hex: str, message_hash: bytes, signature_hex: str) -> bool:
     """
-    Verify secp256k1 signature using cryptography library.
+    Verify secp256k1 signature over a pre-hashed message.
+    Uses the shared coincurve-based verification from crypto.py.
     
     Args:
         pubkey_hex: Compressed (33 bytes) or uncompressed (65 bytes) public key
-        message_hash: 32-byte message hash
-        signature_hex: DER or compact signature
+        message_hash: 32-byte message hash (already hashed)
+        signature_hex: Compact signature (64 bytes)
     
     Returns:
         True if signature is valid
     """
-    try:
-        from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.primitives import hashes
-        from cryptography.hazmat.backends import default_backend
-        from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
-        from cryptography.exceptions import InvalidSignature
-        
-        pubkey_bytes = bytes.fromhex(pubkey_hex)
-        sig_bytes = bytes.fromhex(signature_hex)
-        
-        # Load public key
-        if len(pubkey_bytes) == 33:
-            # Compressed public key - need to decompress
-            # Use cryptography's from_encoded_point
-            public_key = ec.EllipticCurvePublicKey.from_encoded_point(
-                ec.SECP256K1(), pubkey_bytes
-            )
-        elif len(pubkey_bytes) == 65:
-            # Uncompressed public key
-            public_key = ec.EllipticCurvePublicKey.from_encoded_point(
-                ec.SECP256K1(), pubkey_bytes
-            )
-        else:
-            return False
-        
-        # Handle signature format
-        if len(sig_bytes) == 64:
-            # Compact format (r || s)
-            r = int.from_bytes(sig_bytes[:32], 'big')
-            s = int.from_bytes(sig_bytes[32:], 'big')
-            
-            # Convert to DER
-            from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
-            der_sig = encode_dss_signature(r, s)
-        else:
-            # Assume DER format
-            der_sig = sig_bytes
-        
-        # Verify using ECDSA with prehashed message
-        from cryptography.hazmat.primitives.asymmetric import utils
-        
-        public_key.verify(
-            der_sig,
-            message_hash,
-            ec.ECDSA(utils.Prehashed(hashes.SHA256()))
-        )
-        
-        return True
-        
-    except (InvalidSignature, Exception) as e:
-        import logging
-        logging.debug(f"Signature verification failed: {e}")
-        return False
+    is_valid, msg = crypto_verify_binding(message_hash, pubkey_hex, signature_hex)
+    if not is_valid:
+        logging.debug(f"Signature verification failed: {msg}")
+    return is_valid
 
 
 # =============================================================================

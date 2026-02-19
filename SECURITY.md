@@ -26,10 +26,9 @@
 - Legacy stub now performs real verification when coincurve is installed
 
 ### 3. API_SECRET Default Fallback
-**Status:** ⚠️ MITIGATED (warns in logs)  
-**Location:** `api/app/lib/crypto.py`  
-**Issue:** Falls back to "dev-secret" if env var not set, with warning.  
-**Production:** Must set `API_SECRET` environment variable with a strong random secret.
+**Status:** ✅ CONFIGURED (2026-02-19)  
+**Location:** `/opt/sbm-api/.env`  
+**Resolution:** Production `API_SECRET` set on VPS. Code still warns if missing.
 
 ## Medium Issues
 
@@ -84,11 +83,34 @@ This prevents Sybil attacks and ensures only pre-approved identities can authent
 - [x] Deploy `stwo_verifier` binary to VPS
 - [x] Add rate limiting to API (slowapi)
 - [x] Install `coincurve` on VPS
-- [ ] Set `API_SECRET` environment variable ← **DO THIS NOW**
-- [ ] Review and sanitize all log statements
-- [ ] Enable HSTS headers
-- [ ] Security review of OIDC implementation
+- [x] Set `API_SECRET` environment variable (2026-02-19)
+- [x] Review and sanitize all log statements (2026-02-19)
+- [ ] Enable HSTS headers ← **Add to Caddy config**
+- [x] Security review of OIDC implementation (2026-02-19)
 - [ ] Penetration testing
+
+## OIDC Security Review (2026-02-19)
+
+**Reviewed:** `app/oidc_endpoints.py`
+
+### Good Practices ✅
+- PKCE S256 support for public clients
+- One-time auth codes (deleted after use)
+- 5-minute code expiry
+- Redirect URI allowlist validation
+- HTTPS-only redirects enforced
+- Nonce validation with regex (1-128 chars, base64url-safe)
+- Cache-Control: no-store on all token responses
+- RS256 JWT signing with key rotation support (kid)
+- Issuer/expiry validation with 60s clock skew tolerance
+
+### Minor Issues (Low Risk)
+1. **Unused access_token:** SignedByMe flow issues random access_token but /userinfo expects JWT. Not exploitable, just non-functional.
+2. **Code DB cleanup:** Expired codes aren't proactively cleaned. Low disk impact.
+
+### Recommendations
+- Add periodic cleanup job for expired codes (cron)
+- Consider removing access_token from SignedByMe response if unused
 
 ## Reporting Security Issues
 
