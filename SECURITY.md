@@ -85,7 +85,7 @@ This prevents Sybil attacks and ensures only pre-approved identities can authent
 - [x] Install `coincurve` on VPS
 - [x] Set `API_SECRET` environment variable (2026-02-19)
 - [x] Review and sanitize all log statements (2026-02-19)
-- [ ] Enable HSTS headers ← **Add to Caddy config**
+- [x] Enable HSTS headers (2026-02-19, Caddy config)
 - [x] Security review of OIDC implementation (2026-02-19)
 - [ ] Penetration testing
 
