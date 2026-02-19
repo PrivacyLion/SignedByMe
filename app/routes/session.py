@@ -76,7 +76,7 @@ class CreateSessionResponse(BaseModel):
     amount_sats: int
     employer_name: str
     expires_at: int
-    require_membership: bool = False
+    require_membership: bool = True  # Mandatory by default
 
 
 class SessionStatusResponse(BaseModel):
@@ -117,8 +117,8 @@ async def create_session(
     reward_policy = client_config.get("reward_policy", {})
     amount_sats = reward_policy.get("amount_sats", 0) if reward_policy.get("enabled") else 0
     
-    # Get membership requirement
-    require_membership = client_config.get("require_membership", False)
+    # Get membership requirement (mandatory by default for security)
+    require_membership = client_config.get("require_membership", True)
     default_root_id = client_config.get("default_root_id")
     
     # Create session

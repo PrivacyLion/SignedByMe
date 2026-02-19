@@ -410,8 +410,8 @@ def start_login_session(
     # Determine required root (explicit > client default > none)
     required_root_id = body.required_root_id or client_config.get("default_root_id")
     
-    # INVARIANT: If client requires membership, a root MUST be resolvable
-    if client_config.get("require_membership", False) and not required_root_id:
+    # INVARIANT: If client requires membership (default: yes), a root MUST be resolvable
+    if client_config.get("require_membership", True) and not required_root_id:
         raise HTTPException(
             400, 
             f"Client {client_id} has require_membership=true but no root_id provided and no default_root_id configured"
@@ -1039,8 +1039,8 @@ def confirm_payment(
         if not (session.get("stwo_verified") and session.get("binding_verified")):
             raise HTTPException(400, "Session not verified - waiting for user proof")
         
-        # === NEW: Enforce membership policy ===
-        if client_config.get("require_membership", False):
+        # === NEW: Enforce membership policy (mandatory by default) ===
+        if client_config.get("require_membership", True):
             if not session.get("membership_verified"):
                 raise HTTPException(
                     400, 

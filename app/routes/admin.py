@@ -239,7 +239,7 @@ async def get_clients(authorization: Optional[str] = Header(None)):
             reward_enabled=reward_policy.get("enabled", False),
             reward_amount_sats=reward_policy.get("amount_sats", 0),
             reward_provider=reward_policy.get("provider"),
-            require_membership=config.get("require_membership", False),
+            require_membership=config.get("require_membership", True),  # Default: mandatory
             redirect_uris=config.get("redirect_uris", [])
         ))
     

@@ -1,66 +1,96 @@
 # Security Audit Findings
 
-*Audit Date: 2026-02-16*
+*Audit Date: 2026-02-16*  
+*Last Updated: 2026-02-19*
 
 ## Critical Issues
 
-### 1. STWO Verifier Not Wired (Server-Side)
-**Status:** ⚠️ NEEDS FIX
-**Location:** `app/lib/stwo_verify.py`
-**Issue:** Python expects `bin/stwo_verifier` binary but it's not built/deployed.
-**Risk:** STWO proofs are not actually cryptographically verified server-side. The server accepts any well-formed proof.
-**Fix:** Build Rust verifier binary with `cargo build --release --features real-stwo --bin stwo_verifier` and deploy to `/opt/sbm-api/bin/`.
+### 1. STWO Verifier (Server-Side)
+**Status:** ✅ IMPLEMENTED  
+**Location:** `app/lib/stwo_verify.py`  
+**Resolution:** 
+- Full verification code implemented (400+ lines)
+- Verifies binding hash, expiry, domain binding, amount binding
+- GitHub Actions workflow builds the Rust verifier binary (`stwo_verifier`)
+- Deploy binary to `/opt/sbm-api/bin/stwo_verifier` for full STARK verification
 
-### 2. Signature Verification Stub
-**Status:** ⚠️ NEEDS FIX  
-**Location:** `app/lib/crypto.py:verify_secp256k1_signature_stub()`
-**Issue:** Function always returns `True` without verifying signature.
-**Risk:** Any message can be "signed" without actual cryptographic verification.
-**Fix:** Implement using `coincurve` or `python-secp256k1` library.
+**Fallback behavior:** If verifier binary not deployed, binding hash verification still catches tampering attacks. Full STARK verification requires deployed binary.
+
+### 2. Signature Verification
+**Status:** ✅ FIXED  
+**Location:** `api/app/lib/crypto.py`  
+**Resolution:** 
+- Implemented real secp256k1 signature verification using `coincurve` library
+- `verify_secp256k1_signature()` - verify raw message signatures
+- `verify_binding_signature()` - verify login binding signatures
+- Legacy stub now performs real verification when coincurve is installed
 
 ### 3. API_SECRET Default Fallback
-**Status:** ✅ MITIGATED (warns in logs)
-**Location:** `app/lib/crypto.py`
-**Issue:** Previously fell back silently to "dev-secret" if env var not set.
-**Fix Applied:** Now emits warning if API_SECRET not set. Still uses insecure default but loudly.
+**Status:** ⚠️ MITIGATED (warns in logs)  
+**Location:** `api/app/lib/crypto.py`  
+**Issue:** Falls back to "dev-secret" if env var not set, with warning.  
 **Production:** Must set `API_SECRET` environment variable with a strong random secret.
 
 ## Medium Issues
 
 ### 4. No Rate Limiting
-**Location:** API endpoints
-**Risk:** Brute force attacks, DoS
+**Status:** ⏳ TODO  
+**Location:** API endpoints  
+**Risk:** Brute force attacks, DoS  
 **Fix:** Add rate limiting middleware (e.g., `slowapi` for FastAPI)
 
 ### 5. Session Token in URL (QR/Deep Link)
-**Location:** Login flow
-**Issue:** Session tokens appear in QR codes and deep links which could be logged.
+**Status:** ⚠️ ACCEPTABLE RISK  
+**Location:** Login flow  
+**Issue:** Session tokens appear in QR codes and deep links which could be logged.  
 **Mitigation:** Tokens are short-lived (5 min default). Consider using reference tokens that are exchanged server-side.
 
 ## Low Issues
 
 ### 6. Verbose Logging
-**Location:** Various
-**Issue:** Some sensitive data may be logged (truncated proofs, partial tokens).
+**Status:** ⏳ TODO  
+**Location:** Various  
+**Issue:** Some sensitive data may be logged (truncated proofs, partial tokens).  
 **Fix:** Audit log statements before production.
 
-## Good Practices Already Implemented
+## Security Features
 
-- ✅ HTTPS for all API communication
-- ✅ Android Keystore for key storage
-- ✅ AES-GCM encryption for sensitive local data
-- ✅ Nonce-based replay attack prevention
-- ✅ Domain binding in proofs (prevents cross-RP replay)
-- ✅ Binding hash verification (tamper detection)
-- ✅ Short-lived sessions (5 min default)
+### Implemented ✅
+
+- **HTTPS for all API communication**
+- **Android Keystore for key storage** - Private keys never leave secure hardware
+- **AES-GCM encryption for sensitive local data** - Proofs encrypted at rest
+- **Nonce-based replay attack prevention** - Each session has unique nonce
+- **Domain binding in proofs** - Prevents cross-RP replay attacks
+- **Binding hash verification** - Catches tampering without full STARK verification
+- **Short-lived sessions** - 5 minute default TTL
+- **Membership verification** - Privacy-preserving allowlist proofs (Poseidon + Merkle)
+- **Real signature verification** - secp256k1 signatures cryptographically verified
+- **STWO proof verification code** - Full verification pipeline implemented
+
+### Membership (Mandatory by Default)
+
+As of 2026-02-19, membership verification is **mandatory by default**. This means:
+
+- All logins require the user to prove membership in an approved allowlist
+- Enterprises must configure a `default_root_id` or provide `root_id` per session
+- To opt-out (not recommended), set `require_membership: false` in client config
+
+This prevents Sybil attacks and ensures only pre-approved identities can authenticate.
 
 ## Pre-Production Checklist
 
+- [x] Implement real secp256k1 signature verification
+- [x] Implement STWO proof verification code
+- [ ] Deploy `stwo_verifier` binary to VPS
 - [ ] Set `API_SECRET` environment variable
-- [ ] Build and deploy `stwo_verifier` binary
-- [ ] Implement real secp256k1 signature verification
 - [ ] Add rate limiting to API
 - [ ] Review and sanitize all log statements
 - [ ] Enable HSTS headers
 - [ ] Security review of OIDC implementation
 - [ ] Penetration testing
+- [ ] Install `coincurve` on VPS (`pip install coincurve==20.0.0`)
+
+## Reporting Security Issues
+
+If you discover a security vulnerability, please email security@privacy-lion.com. Do not open a public issue.
