@@ -33,11 +33,10 @@
 
 ## Medium Issues
 
-### 4. No Rate Limiting
-**Status:** ⏳ TODO  
-**Location:** API endpoints  
-**Risk:** Brute force attacks, DoS  
-**Fix:** Add rate limiting middleware (e.g., `slowapi` for FastAPI)
+### 4. Rate Limiting
+**Status:** ✅ IMPLEMENTED  
+**Location:** `app/main.py`  
+**Resolution:** Added `slowapi` rate limiter — 100 requests/minute per IP by default
 
 ### 5. Session Token in URL (QR/Deep Link)
 **Status:** ⚠️ ACCEPTABLE RISK  
@@ -82,14 +81,14 @@ This prevents Sybil attacks and ensures only pre-approved identities can authent
 
 - [x] Implement real secp256k1 signature verification
 - [x] Implement STWO proof verification code
-- [ ] Deploy `stwo_verifier` binary to VPS
-- [ ] Set `API_SECRET` environment variable
-- [ ] Add rate limiting to API
+- [x] Deploy `stwo_verifier` binary to VPS
+- [x] Add rate limiting to API (slowapi)
+- [x] Install `coincurve` on VPS
+- [ ] Set `API_SECRET` environment variable ← **DO THIS NOW**
 - [ ] Review and sanitize all log statements
 - [ ] Enable HSTS headers
 - [ ] Security review of OIDC implementation
 - [ ] Penetration testing
-- [ ] Install `coincurve` on VPS (`pip install coincurve==20.0.0`)
 
 ## Reporting Security Issues
 

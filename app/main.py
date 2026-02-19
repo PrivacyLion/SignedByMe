@@ -1,8 +1,12 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pathlib import Path
+
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from .routes.auth import router as auth_router
 from .routes.unlock import router as unlock_router
@@ -17,7 +21,12 @@ from .routes.admin import router as admin_router
 from app.oidc_discovery import router as oidc_router
 from app.oidc_endpoints import router as oidc_endpoints_router
 
+# Rate limiter: 100 requests per minute per IP for general endpoints
+limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
+
 app = FastAPI(title="BTC DID — Stateless Auth API", version="0.1.0")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Static site directory
 SITE_DIR = Path(__file__).resolve().parents[1] / "site"

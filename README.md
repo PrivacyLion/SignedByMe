@@ -115,7 +115,9 @@ sequenceDiagram
     App-->>App: Show "Earned 500 sats!" 🎉
 ```
 
-### Membership Proof Flow
+### Membership Proof Flow (Mandatory)
+
+> **Note:** Membership verification is **mandatory by default**. Users must prove they're in an enterprise's pre-approved allowlist to log in. This prevents Sybil attacks and ensures only authorized identities can authenticate.
 
 ```mermaid
 sequenceDiagram
@@ -132,7 +134,7 @@ sequenceDiagram
     API-->>App: enrollment_id, root_id
     App->>App: Store enrollment locally
 
-    Note over App,Rust: At Login (if membership required)
+    Note over App,Rust: At Login (membership required)
     App->>API: GET /v1/membership/witness?client_id=X&root_id=Y
     API-->>App: Merkle witness (siblings, index)
     App->>Rust: proveMembership(leaf_secret, witness, root)
@@ -141,6 +143,8 @@ sequenceDiagram
     App->>API: Include membership_proof in login request
     API->>API: Verify membership without learning identity
 ```
+
+**Privacy guarantee:** The API verifies "this user is in your allowlist" without learning *which* user. Zero-knowledge membership proof.
 
 ---
 
@@ -164,6 +168,7 @@ At verification:
 ✓ Binding signature matches DID
 ✓ Payment hash matches paid invoice
 ✓ Nonce prevents replay
+✓ Membership proof valid (user in allowlist)
 ```
 
 ---
@@ -172,25 +177,28 @@ At verification:
 
 ```
 btc-did/
-├── app/                          # Android app (Kotlin)
-│   └── src/main/java/.../
-│       ├── MainActivity.kt       # Main UI (4,600 lines)
-│       ├── SplashActivity.kt     # Animated cursive S splash
-│       ├── DidWalletManager.kt   # DID + proof management
-│       ├── BreezWalletManager.kt # Lightning wallet
-│       ├── NativeBridge.kt       # Rust JNI bindings
-│       └── BackupStateManager.kt # Backup prompts
+├── app/                          # Android app + API (mixed)
+│   ├── src/main/java/.../        # Android Kotlin code
+│   │   ├── MainActivity.kt       # Main UI
+│   │   ├── DidWalletManager.kt   # DID + proof management
+│   │   ├── BreezWalletManager.kt # Lightning wallet
+│   │   └── NativeBridge.kt       # Rust JNI bindings
+│   ├── main.py                   # FastAPI entry point
+│   ├── routes/                   # API endpoints
+│   │   ├── login_invoice.py      # Login flow
+│   │   ├── membership.py         # Membership enrollment/proofs
+│   │   ├── session.py            # Session management
+│   │   └── roots.py              # Merkle root registry
+│   └── lib/                      # API utilities
+│       ├── crypto.py             # Signature verification
+│       └── stwo_verify.py        # STWO proof verification
 ├── native/btcdid_core/           # Rust library
 │   └── src/
 │       ├── lib.rs                # JNI exports
 │       ├── stwo_*.rs             # STWO prover
 │       └── membership.rs         # Merkle proofs
-├── api/                          # FastAPI backend
-│   └── app/
-│       ├── main.py
-│       └── routes/
-│           ├── login_invoice.py
-│           └── membership.py
+├── site/                         # Demo website
+├── DID_BTC/                      # iOS app (Swift)
 └── docs/
 ```
 
@@ -221,9 +229,11 @@ btc-did/
 
 - ✅ Android app complete
 - ✅ Real STWO proofs (~1ms on device)
-- ✅ Merkle membership proofs
-- ✅ API deployed
-- ⏳ iOS version (in progress)
+- ✅ Merkle membership proofs (mandatory by default)
+- ✅ Real signature verification (secp256k1)
+- ✅ STWO verifier deployed (full STARK verification)
+- ✅ API deployed with rate limiting
+- ⏳ iOS version (planned)
 
 ---
 

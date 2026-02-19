@@ -24,7 +24,7 @@ echo "== Install deps + restart API =="
 ssh ${VM_USER}@${VM_IP} '
   set -e
   cd /opt/sbm-api
-  /opt/sbm-api/.venv/bin/pip install -q httpx python-multipart cryptography
+  /opt/sbm-api/.venv/bin/pip install -q httpx python-multipart cryptography slowapi coincurve
   systemctl restart sbm-api
 '
 
