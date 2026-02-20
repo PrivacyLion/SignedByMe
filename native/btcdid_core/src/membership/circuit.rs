@@ -915,29 +915,22 @@ mod tests {
         assert_eq!(circuit_state, plonky3_state, "Init linear diverged!");
         
         // === Get Plonky3's actual round constants ===
-        // We need to see what constants Poseidon2Hasher actually uses
+        // CRITICAL: Must use StandardUniform<M31> sampling, not u32 conversion!
         use rand_p3::SeedableRng;
+        use rand_p3::distr::{Distribution, StandardUniform};
         let mut rng = rand_p3::rngs::StdRng::seed_from_u64(1);
         
-        // Sample constants the same way Plonky3 does
-        use rand_p3::RngExt;
         let mut plonky3_external_initial: Vec<[M31; 16]> = Vec::new();
         let mut plonky3_external_terminal: Vec<[M31; 16]> = Vec::new();
         
         // Initial external constants (4 rounds × 16 elements)
         for _ in 0..4 {
-            let rc: [M31; 16] = core::array::from_fn(|_| {
-                let val: u32 = rng.random();
-                M31::new(val)
-            });
+            let rc: [M31; 16] = core::array::from_fn(|_| StandardUniform.sample(&mut rng));
             plonky3_external_initial.push(rc);
         }
         // Terminal external constants (4 rounds × 16 elements)
         for _ in 0..4 {
-            let rc: [M31; 16] = core::array::from_fn(|_| {
-                let val: u32 = rng.random();
-                M31::new(val)
-            });
+            let rc: [M31; 16] = core::array::from_fn(|_| StandardUniform.sample(&mut rng));
             plonky3_external_terminal.push(rc);
         }
         
@@ -974,11 +967,10 @@ mod tests {
         // === Now trace internal rounds ===
         println!("\n=== Internal rounds ===");
         
-        // Get internal constants the same way Plonky3 does
+        // Get internal constants the same way Plonky3 does (StandardUniform<M31>)
         let mut plonky3_internal_constants: Vec<M31> = Vec::new();
         for _ in 0..PARTIAL_ROUNDS {
-            let val: u32 = rng.random();
-            plonky3_internal_constants.push(M31::new(val));
+            plonky3_internal_constants.push(StandardUniform.sample(&mut rng));
         }
         
         println!("Plonky3 internal constant 0: {}", plonky3_internal_constants[0].as_canonical_u32());
