@@ -7,6 +7,7 @@ use jni::sys::{jbyteArray, jstring, jlong, jboolean};
 use jni::JNIEnv;
 
 use sha2::{Digest, Sha256};
+use bitcoin_hashes::Hash; // For to_byte_array()
 
 // Module declarations
 pub mod key_manager;
