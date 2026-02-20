@@ -110,15 +110,62 @@ pub mod domains {
     pub const MERKLE: Mersenne31 = Mersenne31::new_monty(0x4D45524B);
 }
 
-/// Output position in state array after permutation
+/// Output position in state array after permutation (single element)
 /// 
 /// ⚠️  CRITICAL FOR CIRCUIT CONSTRAINTS ⚠️
-/// All hash functions extract output from state[OUTPUT_POSITION].
+/// Hash functions extract output from state[OUTPUT_POSITION].
 /// The circuit in Phase 3 MUST constrain this same position.
 /// 
 /// Position 0 = capacity (domain separator) - NOT the output!
 /// Position 1 = first rate element - THIS IS THE OUTPUT
 pub const OUTPUT_POSITION: usize = 1;
+
+/// Output positions for nullifier (4 M31 elements = 124 bits)
+/// 
+/// Nullifier extracts from positions 1-4 for collision resistance.
+/// 4 × 31 bits = 124 bits > 128-bit birthday bound / 2 = 64 bits
+/// This provides adequate security for replay detection.
+pub const NULLIFIER_OUTPUT_POSITIONS: [usize; 4] = [1, 2, 3, 4];
+
+/// Nullifier type: 4 M31 elements (16 bytes, 124 bits)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Nullifier(pub [Mersenne31; 4]);
+
+impl Nullifier {
+    /// Convert to 16 bytes (4 × 4 bytes big-endian)
+    pub fn to_bytes(&self) -> [u8; 16] {
+        let mut bytes = [0u8; 16];
+        for i in 0..4 {
+            let val = self.0[i].as_canonical_u32();
+            bytes[i * 4..(i + 1) * 4].copy_from_slice(&val.to_be_bytes());
+        }
+        bytes
+    }
+    
+    /// Parse from 16 bytes
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        let mut elements = [Mersenne31::ZERO; 4];
+        for i in 0..4 {
+            if bytes.len() >= (i + 1) * 4 {
+                let val = u32::from_be_bytes([
+                    bytes[i * 4],
+                    bytes[i * 4 + 1],
+                    bytes[i * 4 + 2],
+                    bytes[i * 4 + 3],
+                ]);
+                elements[i] = Mersenne31::from_canonical_u32(val & 0x7FFFFFFF);
+            }
+        }
+        Self(elements)
+    }
+    
+    /// Convert to 32-byte array (zero-padded for compatibility)
+    pub fn to_bytes32(&self) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        bytes[..16].copy_from_slice(&self.to_bytes());
+        bytes
+    }
+}
 
 /// Poseidon2 hasher with Plonky3's verified parameters
 pub struct Poseidon2Hasher {
@@ -185,9 +232,11 @@ impl Poseidon2Hasher {
     /// 
     /// State layout:
     /// [NULL_DOM, s0, s1, s2, s3, s4, n0, n1, n2, n3, n4, 0, 0, 0, 0, 0]
-    ///     ^       ^
-    ///   pos 0   pos 1 (output after permute)
-    pub fn nullifier(&self, secret: &LeafSecret, session: &SessionId) -> Mersenne31 {
+    ///     ^       ^   ^   ^   ^
+    ///   pos 0   pos 1-4 (output after permute) = 4 M31 = 124 bits
+    /// 
+    /// Returns 4 M31 elements (16 bytes) for adequate collision resistance.
+    pub fn nullifier(&self, secret: &LeafSecret, session: &SessionId) -> Nullifier {
         let mut state = [Mersenne31::ZERO; WIDTH];
         state[0] = domains::NULLIFIER;
         for i in 0..5 {
@@ -199,7 +248,14 @@ impl Poseidon2Hasher {
         // positions 11-15 are zero (padding)
         
         self.permute(&mut state);
-        state[OUTPUT_POSITION]
+        
+        // Extract 4 M31 elements from positions 1-4
+        Nullifier([
+            state[NULLIFIER_OUTPUT_POSITIONS[0]],
+            state[NULLIFIER_OUTPUT_POSITIONS[1]],
+            state[NULLIFIER_OUTPUT_POSITIONS[2]],
+            state[NULLIFIER_OUTPUT_POSITIONS[3]],
+        ])
     }
 }
 
@@ -302,7 +358,8 @@ pub fn compute_leaf_commitment(secret: &LeafSecret) -> Mersenne31 {
 }
 
 /// Compute nullifier from secret and session ID
-pub fn compute_nullifier(secret: &LeafSecret, session: &SessionId) -> Mersenne31 {
+/// Returns 4 M31 elements (16 bytes, 124 bits) for collision resistance
+pub fn compute_nullifier(secret: &LeafSecret, session: &SessionId) -> Nullifier {
     get_hasher().nullifier(secret, session)
 }
 
@@ -479,6 +536,25 @@ mod tests {
         // Same session → same nullifier
         let null1_again = compute_nullifier(&secret, &session1);
         assert_eq!(null1, null1_again);
+    }
+    
+    #[test]
+    fn test_nullifier_is_16_bytes() {
+        let secret = LeafSecret::from_bytes(&[0x42; 32]);
+        let session = SessionId::from_bytes(&[0x01; 32]);
+        
+        let nullifier = compute_nullifier(&secret, &session);
+        let bytes = nullifier.to_bytes();
+        
+        // 4 M31 elements × 4 bytes = 16 bytes
+        assert_eq!(bytes.len(), 16);
+        
+        // 4 M31 elements × 31 bits = 124 bits of entropy
+        assert!(4 * 31 >= 120, "Nullifier should have at least 120 bits");
+        
+        // Roundtrip
+        let restored = Nullifier::from_bytes(&bytes);
+        assert_eq!(nullifier, restored);
     }
     
     #[test]

@@ -18,7 +18,7 @@ use std::env;
 use std::process::exit;
 
 use btcdid_core::membership::poseidon2_m31::{
-    LeafSecret, SessionId,
+    LeafSecret, SessionId, Nullifier,
     poseidon2_hash_pair, compute_leaf_commitment, compute_nullifier,
     build_merkle_tree, m31_to_bytes, m31_from_bytes,
 };
@@ -96,6 +96,7 @@ fn main() {
             if args.len() != 4 {
                 eprintln!("Usage: poseidon_hash nullifier <secret_hex> <session_hex>");
                 eprintln!("  Inputs: 32-byte hex values");
+                eprintln!("  Output: 16-byte hex (4 M31 elements = 124 bits)");
                 exit(1);
             }
             let secret_bytes = match parse_hex_32(&args[2]) {
@@ -110,7 +111,8 @@ fn main() {
             let secret = LeafSecret::from_bytes(&secret_bytes);
             let session = SessionId::from_bytes(&session_bytes);
             let result = compute_nullifier(&secret, &session);
-            println!("{}", hex::encode(m31_to_bytes(result)));
+            // Output 16 bytes (4 M31 elements)
+            println!("{}", hex::encode(result.to_bytes()));
         }
         
         "merkle_root" => {
@@ -151,15 +153,20 @@ fn print_usage() {
     eprintln!("Usage: poseidon_hash <command> [args...]");
     eprintln!();
     eprintln!("Commands:");
-    eprintln!("  pair <left_hex> <right_hex>           Hash two M31 values (Merkle)");
-    eprintln!("  leaf_commit <secret_hex>              Compute leaf commitment");
-    eprintln!("  nullifier <secret_hex> <session_hex>  Compute nullifier");
-    eprintln!("  merkle_root <leaf1_hex> ...           Build Merkle tree root");
+    eprintln!("  pair <left_hex> <right_hex>           Hash two M31 values → 4 bytes");
+    eprintln!("  leaf_commit <secret_hex>              Compute leaf commitment → 4 bytes");
+    eprintln!("  nullifier <secret_hex> <session_hex>  Compute nullifier → 16 bytes");
+    eprintln!("  merkle_root <leaf1_hex> ...           Build Merkle tree root → 4 bytes");
+    eprintln!();
+    eprintln!("Output sizes:");
+    eprintln!("  pair, leaf_commit, merkle_root: 4 bytes (1 M31, 31 bits)");
+    eprintln!("  nullifier: 16 bytes (4 M31 elements, 124 bits)");
     eprintln!();
     eprintln!("State Layout (WIDTH=16):");
     eprintln!("  Position 0: Domain separator (capacity)");
     eprintln!("  Positions 1-15: Rate elements (inputs + padding)");
-    eprintln!("  Output: Position 1");
+    eprintln!("  Single output: Position 1");
+    eprintln!("  Nullifier output: Positions 1-4");
     eprintln!();
     eprintln!("Domains:");
     eprintln!("  LEAF: 0x4C454146  NULLIFIER: 0x4E554C4C  MERKLE: 0x4D45524B");

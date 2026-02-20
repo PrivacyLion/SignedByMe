@@ -117,6 +117,8 @@ class TestPoseidon2Integration:
         null2 = call_cli(["nullifier", secret, session2])
         null1_again = call_cli(["nullifier", secret, session1])
         
+        # Nullifier is now 16 bytes (4 M31 elements)
+        assert len(null1) == 16, "Nullifier should be 16 bytes"
         assert null1 != null2, "Different sessions should give different nullifiers"
         assert null1 == null1_again, "Same session should give same nullifier"
     
@@ -161,14 +163,15 @@ class TestPoseidon2Integration:
         
         assert py_commit[:4] == cli_commit, "Python API should match CLI for leaf_commit"
         
-        # Test nullifier
+        # Test nullifier (now 16 bytes)
         secret = bytes.fromhex("42" * 32)
         session = bytes.fromhex("01" * 32)
         
         py_null = compute_nullifier(secret, session)
         cli_null = call_cli(["nullifier", "42" * 32, "01" * 32])
         
-        assert py_null[:4] == cli_null, "Python API should match CLI for nullifier"
+        assert len(cli_null) == 16, "CLI nullifier should be 16 bytes"
+        assert py_null[:16] == cli_null, "Python API should match CLI for nullifier"
     
     def test_sbm_tree_matches_cli(self):
         """Test sbm_tree.py produces same results as CLI."""

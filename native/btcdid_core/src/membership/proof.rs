@@ -12,7 +12,7 @@
 //!
 //! PROOF STRUCTURE (v3 - BETA with leaf included):
 //! - proof_version: 1 byte (0x03)
-//! - nullifier: 4 bytes (Poseidon2-M31, for replay detection)
+//! - nullifier: 16 bytes (4 M31 elements = 124 bits, for replay detection)
 //! - session_id: 20 bytes (5 M31 elements, public input)
 //! - leaf: 32 bytes (TEMPORARY - will be removed in v4 when STWO proves it)
 //! - depth: 1 byte
@@ -40,7 +40,7 @@
 use sha2::{Sha256, Digest};
 use super::merkle_hash;
 use super::poseidon2_m31::{
-    M31, LeafSecret, SessionId,
+    M31, LeafSecret, SessionId, Nullifier,
     compute_leaf_commitment, compute_nullifier as poseidon_nullifier,
     m31_to_bytes, m31_from_bytes,
 };
@@ -108,13 +108,14 @@ impl MembershipWitness {
     }
     
     /// Compute session-specific nullifier using Poseidon2-M31
-    /// Returns M31 element (4 bytes) - saves ~30,000 constraints vs SHA-256!
+    /// Returns 4 M31 elements (16 bytes = 124 bits) for collision resistance
     /// 
     /// Uses Plonky3's verified Poseidon2 implementation.
+    /// Extracts from state positions 1-4 after permutation.
     /// 
     /// PRIVACY: Different for each session, prevents cross-session linkability.
     /// REPLAY PROTECTION: Can be checked for uniqueness within a session.
-    pub fn compute_nullifier_poseidon(&self, session_id: &[u8; 32]) -> M31 {
+    pub fn compute_nullifier_poseidon(&self, session_id: &[u8; 32]) -> Nullifier {
         let secret = LeafSecret::from_bytes(&self.leaf_secret);
         let session = SessionId::from_bytes(session_id);
         poseidon_nullifier(&secret, &session)
@@ -153,13 +154,15 @@ impl MembershipWitness {
 /// 
 /// v3 FORMAT (BETA - includes leaf for verification):
 /// - version: 1 byte (0x03)
-/// - nullifier: 4 bytes (M31 Poseidon2 output)
+/// - nullifier: 16 bytes (4 M31 elements = 124 bits)
 /// - session_id: 20 bytes (5 M31 elements, public input)
 /// - leaf: 32 bytes (TEMPORARY - enables Merkle verification before STWO)
 /// - depth: 1 byte
 /// - merkle_path: depth * 33 bytes (32 sibling + 1 is_right)
 /// - binding_hash: 32 bytes
 /// - purpose_id: 1 byte
+/// 
+/// v3 minimum size: 1 + 16 + 20 + 32 + 1 + 32 + 1 = 103 bytes (no siblings)
 /// 
 /// Note: v4 will remove leaf once STWO circuit proves Merkle membership.
 /// The nullifier provides unlinkability across sessions.
@@ -188,26 +191,26 @@ impl MembershipProof {
     }
     
     /// Extract nullifier from proof (for replay checking)
-    /// Returns M31 element (4 bytes) for v3 proofs
-    pub fn get_nullifier_m31(&self) -> Option<M31> {
+    /// Returns Nullifier (4 M31 elements = 16 bytes) for v3 proofs
+    pub fn get_nullifier_typed(&self) -> Option<Nullifier> {
         if self.data.is_empty() {
             return None;
         }
         
         let version = self.data[0];
         if version == 0x03 {
-            // v3: nullifier is 4 bytes at offset 1
-            if self.data.len() < 5 {
+            // v3: nullifier is 16 bytes at offset 1
+            if self.data.len() < 17 {
                 return None;
             }
-            Some(m31_from_bytes(&self.data[1..5]))
+            Some(Nullifier::from_bytes(&self.data[1..17]))
         } else {
             None
         }
     }
     
     /// Extract nullifier as 32-byte array (for compatibility)
-    /// v3 proofs: zero-pads the 4-byte M31 nullifier
+    /// v3 proofs: zero-pads the 16-byte nullifier to 32 bytes
     /// v2 proofs: returns the 32-byte SHA-256 nullifier
     pub fn get_nullifier(&self) -> Option<[u8; 32]> {
         if self.data.is_empty() {
@@ -216,12 +219,12 @@ impl MembershipProof {
         
         let version = self.data[0];
         if version == 0x03 {
-            // v3: 4-byte nullifier, zero-pad to 32
-            if self.data.len() < 5 {
+            // v3: 16-byte nullifier, zero-pad to 32
+            if self.data.len() < 17 {
                 return None;
             }
             let mut nullifier = [0u8; 32];
-            nullifier[..4].copy_from_slice(&self.data[1..5]);
+            nullifier[..16].copy_from_slice(&self.data[1..17]);
             Some(nullifier)
         } else if version == 0x02 {
             // v2: 32-byte nullifier
@@ -242,12 +245,12 @@ impl MembershipProof {
             return None;
         }
         
-        // v3: session_id is 20 bytes at offset 5 (after version + nullifier)
-        if self.data.len() < 25 {
+        // v3: session_id is 20 bytes at offset 17 (after version + nullifier(16))
+        if self.data.len() < 37 {
             return None;
         }
         let mut session = [0u8; 20];
-        session.copy_from_slice(&self.data[5..25]);
+        session.copy_from_slice(&self.data[17..37]);
         Some(session)
     }
     
@@ -260,12 +263,12 @@ impl MembershipProof {
             return None;
         }
         
-        // v3: leaf is 32 bytes at offset 25 (after version + nullifier + session_id)
-        if self.data.len() < 57 {
+        // v3: leaf is 32 bytes at offset 37 (after version + nullifier(16) + session_id(20))
+        if self.data.len() < 69 {
             return None;
         }
         let mut leaf = [0u8; 32];
-        leaf.copy_from_slice(&self.data[25..57]);
+        leaf.copy_from_slice(&self.data[37..69]);
         Some(leaf)
     }
 }
@@ -286,13 +289,15 @@ impl MembershipProof {
 /// 
 /// # v3 Format (BETA - includes leaf for verification)
 /// - version: 1 byte (0x03)
-/// - nullifier: 4 bytes (Poseidon2-M31)
+/// - nullifier: 16 bytes (4 M31 elements = 124 bits)
 /// - session_id: 20 bytes (5 M31 elements, PUBLIC INPUT)
 /// - leaf: 32 bytes (TEMPORARY - enables verification before STWO)
 /// - depth: 1 byte
 /// - merkle_path: depth * 33 bytes
 /// - binding_hash: 32 bytes
 /// - purpose_id: 1 byte
+/// 
+/// Minimum size: 1 + 16 + 20 + 32 + 1 + 32 + 1 = 103 bytes (no siblings)
 /// 
 /// Note: v4 will remove leaf once STWO circuit is ready.
 pub fn prove_membership(
@@ -319,8 +324,8 @@ pub fn prove_membership(
         return Err("Merkle path does not lead to expected root".into());
     }
     
-    // Compute Poseidon2 nullifier (for replay detection)
-    let nullifier_m31 = witness.compute_nullifier_poseidon(session_id);
+    // Compute Poseidon2 nullifier (4 M31 = 16 bytes = 124 bits)
+    let nullifier = witness.compute_nullifier_poseidon(session_id);
     
     // Convert session_id to 5 M31 elements (20 bytes)
     let session = SessionId::from_bytes(session_id);
@@ -328,13 +333,13 @@ pub fn prove_membership(
     
     // Build proof data (v3 format - includes leaf for BETA)
     let depth = merkle_siblings.len();
-    let mut proof_data = Vec::with_capacity(1 + 4 + 20 + 32 + 1 + depth * 33 + 32 + 1);
+    let mut proof_data = Vec::with_capacity(1 + 16 + 20 + 32 + 1 + depth * 33 + 32 + 1);
     
     // Version
     proof_data.push(PROOF_VERSION);
     
-    // Nullifier (4 bytes M31)
-    proof_data.extend_from_slice(&m31_to_bytes(nullifier_m31));
+    // Nullifier (16 bytes = 4 M31 elements)
+    proof_data.extend_from_slice(&nullifier.to_bytes());
     
     // Session ID (20 bytes, PUBLIC INPUT)
     proof_data.extend_from_slice(&session_bytes);
@@ -410,7 +415,7 @@ pub fn verify_membership(
 /// 
 /// v3 format:
 /// - version: 1 byte (0x03)
-/// - nullifier: 4 bytes (M31)
+/// - nullifier: 16 bytes (4 M31 = 124 bits)
 /// - session_id: 20 bytes
 /// - leaf: 32 bytes (TEMPORARY)
 /// - depth: 1 byte
@@ -425,17 +430,17 @@ fn verify_membership_v3(
     purpose_id: u8,
     known_nullifiers: Option<&std::collections::HashSet<[u8; 32]>>,
 ) -> Result<bool, String> {
-    // v3 minimum: version(1) + nullifier(4) + session(20) + leaf(32) + depth(1) + binding(32) + purpose(1) = 91
-    if data.len() < 91 {
+    // v3 minimum: version(1) + nullifier(16) + session(20) + leaf(32) + depth(1) + binding(32) + purpose(1) = 103
+    if data.len() < 103 {
         return Err("Proof too short for v3".into());
     }
     
-    // Parse nullifier (4 bytes M31)
-    let _nullifier_m31 = m31_from_bytes(&data[1..5]);
+    // Parse nullifier (16 bytes = 4 M31 elements)
+    let _nullifier = Nullifier::from_bytes(&data[1..17]);
     
     // Parse session_id from proof (20 bytes = 5 M31 elements)
     let mut proof_session = [0u8; 20];
-    proof_session.copy_from_slice(&data[5..25]);
+    proof_session.copy_from_slice(&data[17..37]);
     
     // CRITICAL: Verify session_id matches expected (prevents nullifier manipulation)
     let expected_session = SessionId::from_bytes(session_id);
@@ -443,9 +448,9 @@ fn verify_membership_v3(
         return Ok(false); // Session mismatch - possible attack
     }
     
-    // Convert nullifier to 32-byte format for replay checking
+    // Convert nullifier to 32-byte format for replay checking (16 bytes + 16 zeros)
     let mut nullifier_32 = [0u8; 32];
-    nullifier_32[..4].copy_from_slice(&data[1..5]);
+    nullifier_32[..16].copy_from_slice(&data[1..17]);
     
     // Check replay
     if let Some(nullifiers) = known_nullifiers {
@@ -456,11 +461,11 @@ fn verify_membership_v3(
     
     // Parse leaf (32 bytes - TEMPORARY for v3 BETA)
     let mut leaf = [0u8; 32];
-    leaf.copy_from_slice(&data[25..57]);
+    leaf.copy_from_slice(&data[37..69]);
     
     // Parse depth and path
-    let depth = data[57] as usize;
-    let path_start = 58;
+    let depth = data[69] as usize;
+    let path_start = 70;
     let path_end = path_start + depth * 33;
     
     if data.len() < path_end + 33 {
@@ -719,10 +724,10 @@ mod tests {
         
         assert!(valid, "Proof should be valid");
         
-        // Verify nullifier is extractable (M31 version)
-        let nullifier_m31 = proof.get_nullifier_m31().expect("Should have M31 nullifier");
+        // Verify nullifier is extractable (4 M31 = 16 bytes)
+        let nullifier = proof.get_nullifier_typed().expect("Should have nullifier");
         let expected_nullifier = witness.compute_nullifier_poseidon(&session_id);
-        assert_eq!(nullifier_m31, expected_nullifier);
+        assert_eq!(nullifier, expected_nullifier);
         
         // Verify session_id is extractable
         let proof_session = proof.get_session_id().expect("Should have session_id");
@@ -895,9 +900,9 @@ mod tests {
             &secret, &[], &[], &root, &binding_hash, &session_id, 1
         ).unwrap();
         
-        // v3 BETA: version(1) + nullifier(4) + session(20) + leaf(32) + depth(1) + binding(32) + purpose(1) = 91
-        // v4 (future): removes leaf (-32), so will be 59 bytes
-        assert_eq!(proof.data.len(), 91, "v3 BETA proof with no siblings should be 91 bytes");
+        // v3 BETA: version(1) + nullifier(16) + session(20) + leaf(32) + depth(1) + binding(32) + purpose(1) = 103
+        // v4 (future): removes leaf (-32), so will be 71 bytes
+        assert_eq!(proof.data.len(), 103, "v3 BETA proof with no siblings should be 103 bytes");
     }
     
     #[test]

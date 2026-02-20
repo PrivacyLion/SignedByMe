@@ -112,7 +112,7 @@ def compute_nullifier(leaf_secret: bytes, session_id: bytes) -> bytes:
     cross-session linkability while allowing replay detection
     within a session.
     
-    Output: 4-byte M31 nullifier (zero-padded to 32 bytes for compatibility)
+    Output: 16-byte nullifier (4 M31 elements = 124 bits), zero-padded to 32 bytes
     """
     if len(leaf_secret) != 32:
         raise ValueError(f"leaf_secret must be 32 bytes, got {len(leaf_secret)}")
@@ -123,7 +123,7 @@ def compute_nullifier(leaf_secret: bytes, session_id: bytes) -> bytes:
     session_hex = session_id.hex()
     result = _call_poseidon_hash(["nullifier", secret_hex, session_hex])
     
-    # Zero-pad to 32 bytes for compatibility
+    # Result is 16 bytes, zero-pad to 32 bytes for compatibility
     return result.ljust(32, b'\x00')
 
 

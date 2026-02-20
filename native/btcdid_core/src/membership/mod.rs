@@ -34,13 +34,13 @@ pub use merkle_hash::{hash_pair as merkle_hash_pair, hash_leaf, verify_proof as 
 // Merkle tree operations - native M31 API (preferred for new code)
 pub use merkle_hash::{hash_pair_m31, build_tree_m31, verify_proof_m31, get_path_m31, leaf_commitment_m31};
 pub use poseidon2_m31::{
-    M31, Poseidon2Hasher, LeafSecret, SessionId,
+    M31, Poseidon2Hasher, LeafSecret, SessionId, Nullifier,
     poseidon2_hash_pair, compute_leaf_commitment, compute_nullifier,
     verify_merkle_proof as verify_poseidon_merkle_proof,
     build_merkle_tree as build_poseidon_merkle_tree,
     get_merkle_path as get_poseidon_merkle_path,
     m31_to_bytes, m31_from_bytes,
-    domains, OUTPUT_POSITION, WIDTH,
+    domains, OUTPUT_POSITION, NULLIFIER_OUTPUT_POSITIONS, WIDTH,
 };
 pub use poseidon::{poseidon_hash_pair, poseidon_hash_bytes, PoseidonHasher, FieldElement};  // Legacy
 pub use merkle::{MerkleTree, MerklePath, PathSibling, verify_merkle_path};
