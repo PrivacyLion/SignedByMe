@@ -126,8 +126,23 @@ fn internal_rc(r: usize) -> M31 {
 }
 
 /// Get internal diagonal matrix V values
+/// 
+/// Plonky3 uses HARDCODED optimized values for Mersenne31 (NOT random):
+/// V = [-2, 1, 2, 4, 8, 16, 32, 64, 128, 256, 1024, 4096, 8192, 16384, 32768, 65536]
+/// 
+/// These are specifically chosen for efficient multiplication (shifts) in AVX2/AVX512/NEON.
+/// See: plonky3/mersenne-31/src/poseidon2.rs
 fn internal_diag(i: usize) -> M31 {
-    super::poseidon2_m31::get_internal_diag()[i]
+    const INTERNAL_DIAG: [i64; 16] = [
+        -2, 1, 2, 4, 8, 16, 32, 64, 128, 256, 1024, 4096, 8192, 16384, 32768, 65536
+    ];
+    // Convert to M31 (handle negative value for -2)
+    if INTERNAL_DIAG[i] < 0 {
+        // -2 mod (2^31 - 1) = 2^31 - 1 - 2 = 2147483645
+        M31::new(((1i64 << 31) - 1 + INTERNAL_DIAG[i]) as u32)
+    } else {
+        M31::new(INTERNAL_DIAG[i] as u32)
+    }
 }
 
 // ============================================================================
