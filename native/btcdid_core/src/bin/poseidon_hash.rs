@@ -3,23 +3,24 @@
 //! This binary is the SINGLE SOURCE OF TRUTH for Poseidon2 hashing.
 //! Python API calls this via subprocess to ensure consistency.
 //!
+//! Uses Plonky3's verified Poseidon2 implementation with Xoroshiro128Plus(seed=1)
+//! round constants, matching their test vectors exactly.
+//!
 //! Usage:
 //!   poseidon_hash pair <left_hex> <right_hex>
 //!   poseidon_hash leaf_commit <secret_hex>
 //!   poseidon_hash nullifier <secret_hex> <session_id_hex>
 //!   poseidon_hash merkle_root <leaf1_hex> <leaf2_hex> ...
 //!
-//! All inputs are hex-encoded 32-byte values.
-//! Output is hex-encoded result.
+//! All inputs are hex-encoded. Outputs are hex-encoded M31 values (4 bytes).
 
 use std::env;
 use std::process::exit;
 
-// Import from the library
 use btcdid_core::membership::poseidon2_m31::{
-    M31, Poseidon2Params, LeafSecret, SessionId,
+    LeafSecret, SessionId,
     poseidon2_hash_pair, compute_leaf_commitment, compute_nullifier,
-    build_merkle_tree,
+    build_merkle_tree, m31_to_bytes, m31_from_bytes,
 };
 
 fn parse_hex_32(s: &str) -> Result<[u8; 32], String> {
@@ -32,53 +33,53 @@ fn parse_hex_32(s: &str) -> Result<[u8; 32], String> {
     Ok(arr)
 }
 
-fn m31_to_hex(val: M31) -> String {
-    // Return as 4-byte big-endian hex
-    hex::encode(val.to_bytes_be())
+fn parse_hex_4(s: &str) -> Result<[u8; 4], String> {
+    let bytes = hex::decode(s).map_err(|e| format!("Invalid hex: {}", e))?;
+    if bytes.len() < 4 {
+        return Err(format!("Expected at least 4 bytes, got {}", bytes.len()));
+    }
+    let mut arr = [0u8; 4];
+    arr.copy_from_slice(&bytes[..4]);
+    Ok(arr)
 }
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     
     if args.len() < 2 {
-        eprintln!("Usage: poseidon_hash <command> [args...]");
-        eprintln!("Commands:");
-        eprintln!("  pair <left_hex> <right_hex>           - Hash two values");
-        eprintln!("  leaf_commit <secret_hex>              - Compute leaf commitment");
-        eprintln!("  nullifier <secret_hex> <session_hex>  - Compute nullifier");
-        eprintln!("  merkle_root <leaf1_hex> ...           - Build Merkle tree");
+        print_usage();
         exit(1);
     }
     
-    let params = Poseidon2Params::new();
     let command = &args[1];
     
     match command.as_str() {
         "pair" => {
             if args.len() != 4 {
                 eprintln!("Usage: poseidon_hash pair <left_hex> <right_hex>");
+                eprintln!("  Inputs: 4-byte hex values (M31 elements)");
                 exit(1);
             }
-            let left = match parse_hex_32(&args[2]) {
+            let left_bytes = match parse_hex_4(&args[2]) {
                 Ok(v) => v,
                 Err(e) => { eprintln!("Error: {}", e); exit(1); }
             };
-            let right = match parse_hex_32(&args[3]) {
+            let right_bytes = match parse_hex_4(&args[3]) {
                 Ok(v) => v,
                 Err(e) => { eprintln!("Error: {}", e); exit(1); }
             };
             
-            // Convert to M31 elements
-            let left_m31 = M31::from_bytes_be(&left[..4]);
-            let right_m31 = M31::from_bytes_be(&right[..4]);
+            let left = m31_from_bytes(&left_bytes);
+            let right = m31_from_bytes(&right_bytes);
             
-            let result = poseidon2_hash_pair(&params, left_m31, right_m31);
-            println!("{}", m31_to_hex(result));
+            let result = poseidon2_hash_pair(left, right);
+            println!("{}", hex::encode(m31_to_bytes(result)));
         }
         
         "leaf_commit" => {
             if args.len() != 3 {
                 eprintln!("Usage: poseidon_hash leaf_commit <secret_hex>");
+                eprintln!("  Input: 32-byte hex secret");
                 exit(1);
             }
             let secret_bytes = match parse_hex_32(&args[2]) {
@@ -87,13 +88,14 @@ fn main() {
             };
             
             let secret = LeafSecret::from_bytes(&secret_bytes);
-            let result = compute_leaf_commitment(&params, &secret);
-            println!("{}", m31_to_hex(result));
+            let result = compute_leaf_commitment(&secret);
+            println!("{}", hex::encode(m31_to_bytes(result)));
         }
         
         "nullifier" => {
             if args.len() != 4 {
                 eprintln!("Usage: poseidon_hash nullifier <secret_hex> <session_hex>");
+                eprintln!("  Inputs: 32-byte hex values");
                 exit(1);
             }
             let secret_bytes = match parse_hex_32(&args[2]) {
@@ -107,51 +109,58 @@ fn main() {
             
             let secret = LeafSecret::from_bytes(&secret_bytes);
             let session = SessionId::from_bytes(&session_bytes);
-            let result = compute_nullifier(&params, &secret, &session);
-            println!("{}", m31_to_hex(result));
+            let result = compute_nullifier(&secret, &session);
+            println!("{}", hex::encode(m31_to_bytes(result)));
         }
         
         "merkle_root" => {
             if args.len() < 3 {
                 eprintln!("Usage: poseidon_hash merkle_root <leaf1_hex> [leaf2_hex ...]");
+                eprintln!("  Inputs: 4-byte hex M31 values");
                 exit(1);
             }
             
-            let mut leaves: Vec<M31> = Vec::new();
+            let mut leaves = Vec::new();
             for i in 2..args.len() {
-                let leaf_bytes = match parse_hex_32(&args[i]) {
+                let leaf_bytes = match parse_hex_4(&args[i]) {
                     Ok(v) => v,
                     Err(e) => { eprintln!("Error parsing leaf {}: {}", i - 1, e); exit(1); }
                 };
-                // Use first 4 bytes as M31
-                leaves.push(M31::from_bytes_be(&leaf_bytes[..4]));
+                leaves.push(m31_from_bytes(&leaf_bytes));
             }
             
-            let root = build_merkle_tree(&params, &leaves);
-            println!("{}", m31_to_hex(root));
+            let root = build_merkle_tree(&leaves);
+            println!("{}", hex::encode(m31_to_bytes(root)));
+        }
+        
+        "help" | "--help" | "-h" => {
+            print_usage();
         }
         
         _ => {
             eprintln!("Unknown command: {}", command);
-            eprintln!("Use: pair, leaf_commit, nullifier, merkle_root");
+            print_usage();
             exit(1);
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_pair_deterministic() {
-        let params = Poseidon2Params::new();
-        let a = M31::new(123);
-        let b = M31::new(456);
-        
-        let h1 = poseidon2_hash_pair(&params, a, b);
-        let h2 = poseidon2_hash_pair(&params, a, b);
-        
-        assert_eq!(h1, h2);
-    }
+fn print_usage() {
+    eprintln!("Poseidon2-M31 Hash CLI (Plonky3 verified parameters)");
+    eprintln!();
+    eprintln!("Usage: poseidon_hash <command> [args...]");
+    eprintln!();
+    eprintln!("Commands:");
+    eprintln!("  pair <left_hex> <right_hex>           Hash two M31 values (Merkle)");
+    eprintln!("  leaf_commit <secret_hex>              Compute leaf commitment");
+    eprintln!("  nullifier <secret_hex> <session_hex>  Compute nullifier");
+    eprintln!("  merkle_root <leaf1_hex> ...           Build Merkle tree root");
+    eprintln!();
+    eprintln!("State Layout (WIDTH=16):");
+    eprintln!("  Position 0: Domain separator (capacity)");
+    eprintln!("  Positions 1-15: Rate elements (inputs + padding)");
+    eprintln!("  Output: Position 1");
+    eprintln!();
+    eprintln!("Domains:");
+    eprintln!("  LEAF: 0x4C454146  NULLIFIER: 0x4E554C4C  MERKLE: 0x4D45524B");
 }

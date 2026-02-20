@@ -29,10 +29,11 @@ pub mod jni;
 pub use binding::{compute_binding_hash_v4, hash_field, SCHEMA_VERSION_V4, DOMAIN_SEPARATOR_V4};
 pub use merkle_hash::{hash_pair as merkle_hash_pair, hash_leaf, verify_proof as verify_merkle_proof, build_tree};
 pub use poseidon2_m31::{
-    M31, Poseidon2Params, LeafSecret, SessionId,
+    M31, Poseidon2Hasher, LeafSecret, SessionId,
     poseidon2_hash_pair, compute_leaf_commitment, compute_nullifier,
     verify_merkle_proof as verify_poseidon_merkle_proof,
     build_merkle_tree as build_poseidon_merkle_tree,
+    m31_to_bytes, m31_from_bytes,
 };
 pub use poseidon::{poseidon_hash_pair, poseidon_hash_bytes, PoseidonHasher, FieldElement};  // Legacy
 pub use merkle::{MerkleTree, MerklePath, PathSibling, verify_merkle_path};

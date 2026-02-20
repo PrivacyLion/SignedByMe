@@ -32,19 +32,14 @@
 use sha2::{Sha256, Digest};
 use super::merkle_hash;
 use super::poseidon2_m31::{
-    M31, Poseidon2Params, LeafSecret, SessionId,
+    M31, LeafSecret, SessionId,
     compute_leaf_commitment, compute_nullifier as poseidon_nullifier,
+    m31_to_bytes, m31_from_bytes,
 };
 
 /// Proof format version (breaking changes increment this)
 /// v3: Switched nullifier and leaf commitment to Poseidon2-M31
 pub const PROOF_VERSION: u8 = 0x03;
-
-/// Poseidon2 parameters (initialized once, used for all operations)
-fn get_poseidon_params() -> Poseidon2Params {
-    // TODO: Cache this in a lazy_static or similar
-    Poseidon2Params::new()
-}
 
 /// Domain separator for nullifier computation (legacy SHA-256)
 const NULLIFIER_DOMAIN: &[u8] = b"nullifier:";
@@ -88,10 +83,11 @@ pub struct MembershipWitness {
 impl MembershipWitness {
     /// Compute the leaf commitment from secret using Poseidon2-M31
     /// Returns M31 element (4 bytes) for ZK efficiency
+    /// 
+    /// Uses Plonky3's verified Poseidon2 implementation.
     pub fn compute_leaf_poseidon(&self) -> M31 {
-        let params = get_poseidon_params();
         let secret = LeafSecret::from_bytes(&self.leaf_secret);
-        compute_leaf_commitment(&params, &secret)
+        compute_leaf_commitment(&secret)
     }
     
     /// Compute the leaf commitment from secret (legacy SHA-256 version)
@@ -106,13 +102,14 @@ impl MembershipWitness {
     /// Compute session-specific nullifier using Poseidon2-M31
     /// Returns M31 element (4 bytes) - saves ~30,000 constraints vs SHA-256!
     /// 
+    /// Uses Plonky3's verified Poseidon2 implementation.
+    /// 
     /// PRIVACY: Different for each session, prevents cross-session linkability.
     /// REPLAY PROTECTION: Can be checked for uniqueness within a session.
     pub fn compute_nullifier_poseidon(&self, session_id: &[u8; 32]) -> M31 {
-        let params = get_poseidon_params();
         let secret = LeafSecret::from_bytes(&self.leaf_secret);
         let session = SessionId::from_bytes(session_id);
-        poseidon_nullifier(&params, &secret, &session)
+        poseidon_nullifier(&secret, &session)
     }
     
     /// Compute session-specific nullifier (legacy SHA-256 version)
@@ -194,7 +191,7 @@ impl MembershipProof {
             if self.data.len() < 5 {
                 return None;
             }
-            Some(M31::from_bytes_be(&self.data[1..5]))
+            Some(m31_from_bytes(&self.data[1..5]))
         } else {
             None
         }
@@ -304,7 +301,7 @@ pub fn prove_membership(
     proof_data.push(PROOF_VERSION);
     
     // Nullifier (4 bytes M31)
-    proof_data.extend_from_slice(&nullifier_m31.to_bytes_be());
+    proof_data.extend_from_slice(&m31_to_bytes(nullifier_m31));
     
     // Session ID (20 bytes, PUBLIC INPUT)
     proof_data.extend_from_slice(&session_bytes);
@@ -389,7 +386,7 @@ fn verify_membership_v3(
     }
     
     // Parse nullifier (4 bytes M31)
-    let nullifier_m31 = M31::from_bytes_be(&data[1..5]);
+    let nullifier_m31 = m31_from_bytes(&data[1..5]);
     
     // Parse session_id from proof (20 bytes = 5 M31 elements)
     let mut proof_session = [0u8; 20];
@@ -403,7 +400,7 @@ fn verify_membership_v3(
     
     // Convert nullifier to 32-byte format for replay checking
     let mut nullifier_32 = [0u8; 32];
-    nullifier_32[..4].copy_from_slice(&nullifier_m31.to_bytes_be());
+    nullifier_32[..4].copy_from_slice(&m31_to_bytes(nullifier_m31));
     
     // Check replay
     if let Some(nullifiers) = known_nullifiers {
