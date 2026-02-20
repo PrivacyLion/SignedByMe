@@ -1012,7 +1012,10 @@ fun SignedByMeApp(
                                         )
                                         
                                         // Generate membership proof
-                                        val proofBase64 = didMgr.generateMembershipProof(witness, bindingHash)
+                                        // Convert sessionId to 32 bytes via SHA256 (consistent with server)
+                                        val sessionIdBytes = java.security.MessageDigest.getInstance("SHA-256")
+                                            .digest(sessionId.toByteArray(Charsets.UTF_8))
+                                        val proofBase64 = didMgr.generateMembershipProof(witness, bindingHash, sessionIdBytes)
                                         if (proofBase64 != null) {
                                             membershipBundle = MembershipBundle(
                                                 rootId = requiredRootId,

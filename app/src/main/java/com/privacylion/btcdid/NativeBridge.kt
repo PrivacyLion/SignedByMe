@@ -310,6 +310,7 @@ object NativeBridge {
      * @param pathIndices 20 bytes: 0=sibling is left, 1=sibling is right
      * @param root 32-byte Merkle root (from server/witness)
      * @param bindingHash 32-byte V4 binding hash (computed via computeBindingHashV4)
+     * @param sessionId 32-byte session ID (for nullifier computation)
      * @param purposeId 0=none, 1=allowlist, 2=issuer_batch, 3=revocation
      * @return Membership proof bytes (base64-encode for API submission)
      */
@@ -319,6 +320,7 @@ object NativeBridge {
         pathIndices: ByteArray,
         root: ByteArray,
         bindingHash: ByteArray,
+        sessionId: ByteArray,
         purposeId: Int
     ): ByteArray
 

@@ -990,8 +990,14 @@ class DidWalletManager(private val context: Context) {
      */
     fun generateMembershipProof(
         witness: WitnessData,
-        bindingHash: ByteArray
+        bindingHash: ByteArray,
+        sessionId: ByteArray
     ): String? {
+        if (sessionId.size != 32) {
+            android.util.Log.e("SignedByMe", "sessionId must be 32 bytes, got ${sessionId.size}")
+            return null
+        }
+        
         val leafSecret = loadLeafSecret() ?: run {
             android.util.Log.e("SignedByMe", "No leaf secret found for membership proof")
             return null
@@ -1013,6 +1019,7 @@ class DidWalletManager(private val context: Context) {
                 pathIndices = witness.pathBits,
                 root = rootBytes,
                 bindingHash = bindingHash,
+                sessionId = sessionId,
                 purposeId = witness.purposeId
             )
             
