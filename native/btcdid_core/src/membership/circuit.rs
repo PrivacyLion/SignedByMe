@@ -256,6 +256,10 @@ impl PermutationWitness {
         let mut state = input;
         let mut round_states = Vec::with_capacity(TOTAL_ROUNDS);
         
+        // CRITICAL: Initial external linear layer (Poseidon2 spec requirement)
+        // This is applied BEFORE any rounds begin
+        external_linear(&mut state);
+        
         // First half of full rounds
         for r in 0..FULL_ROUNDS_FIRST {
             // Add round constants
