@@ -518,18 +518,21 @@ static INTERNAL_DIAG: OnceLock<Vec<Mersenne31>> = OnceLock::new();
 
 /// Generate external round constants using Plonky3's RNG
 /// 
-/// CRITICAL: Do NOT mask with & 0x7FFFFFFF - let Mersenne31::new() handle reduction.
-/// The mask causes off-by-one errors that break compatibility with Plonky3.
+/// CRITICAL: Must use StandardUniform<Mersenne31> sampling, NOT u32 conversion!
+/// Plonky3 samples M31 as: (next_u32() >> 1) with rejection of 0x7FFFFFFF
+/// Sampling u32 and converting via new() produces DIFFERENT sequences!
 fn generate_external_constants() -> Vec<Mersenne31> {
     use rand_p3::{Rng, RngExt, SeedableRng};
+    use rand_p3::distr::{Distribution, StandardUniform};
     let mut rng = rand_p3::rngs::StdRng::seed_from_u64(1);
     
     let total_external_rounds = FULL_ROUNDS_FIRST + FULL_ROUNDS_LAST;
     let mut constants = Vec::with_capacity(total_external_rounds * WIDTH);
     
+    // Sample M31 directly using StandardUniform (matches Plonky3's sampling)
     for _ in 0..(total_external_rounds * WIDTH) {
-        let val: u32 = rng.random();
-        constants.push(Mersenne31::new(val));  // No mask! Let new() reduce properly
+        let val: Mersenne31 = StandardUniform.sample(&mut rng);
+        constants.push(val);
     }
     
     constants
@@ -538,19 +541,20 @@ fn generate_external_constants() -> Vec<Mersenne31> {
 /// Generate internal round constants using Plonky3's RNG
 fn generate_internal_constants() -> Vec<Mersenne31> {
     use rand_p3::{Rng, RngExt, SeedableRng};
+    use rand_p3::distr::{Distribution, StandardUniform};
     // Internal constants come after external constants in the RNG sequence
     let mut rng = rand_p3::rngs::StdRng::seed_from_u64(1);
     
-    // Skip external constants
+    // Skip external constants (must use same sampling as generate_external_constants)
     let total_external_rounds = FULL_ROUNDS_FIRST + FULL_ROUNDS_LAST;
     for _ in 0..(total_external_rounds * WIDTH) {
-        let _: u32 = rng.random();
+        let _: Mersenne31 = StandardUniform.sample(&mut rng);
     }
     
     let mut constants = Vec::with_capacity(PARTIAL_ROUNDS);
     for _ in 0..PARTIAL_ROUNDS {
-        let val: u32 = rng.random();
-        constants.push(Mersenne31::new(val));  // No mask!
+        let val: Mersenne31 = StandardUniform.sample(&mut rng);
+        constants.push(val);
     }
     
     constants
