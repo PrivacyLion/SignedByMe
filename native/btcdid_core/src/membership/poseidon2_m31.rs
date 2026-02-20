@@ -765,13 +765,10 @@ mod tests {
         assert_ne!(state1[1], state2[1], "Different domains should produce different outputs");
     }
     
-    /// This test verifies our hash matches Plonky3's test vectors
-    /// From: mersenne-31/src/poseidon2.rs test_poseidon2_width_16_random
+    /// Test permutation produces non-trivial, consistent output
+    /// Note: We use StdRng for constants, not Xoroshiro128Plus like Plonky3's test suite
     #[test]
-    fn test_hasher_deterministic() {
-        // Test that hasher produces consistent output
-        // Note: We use StdRng for constants, not Xoroshiro128Plus like Plonky3's test suite,
-        // so our outputs differ from Plonky3 test vectors but are internally consistent.
+    fn test_permutation_consistency() {
         let hasher = Poseidon2Hasher::new();
         
         // Simple test input
