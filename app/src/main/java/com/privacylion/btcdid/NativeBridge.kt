@@ -99,14 +99,48 @@ object NativeBridge {
     @JvmStatic external fun hasRealStwo(): Boolean
     
     /**
-     * Generate a REAL STWO identity proof v3 with full security bindings.
+     * Generate a REAL STWO identity proof v4 with SHA-256 STARK circuit.
      * This creates a cryptographically sound zero-knowledge proof that:
-     * 1. Binds the DID to the wallet address
-     * 2. Includes the payment hash for the login session
-     * 3. Binds the exact amount (prevents payment substitution)
-     * 4. Binds the enterprise domain (prevents cross-RP replay)
-     * 5. Includes session nonce (prevents replay attacks)
-     * 6. Has an expiry timestamp bound into the hash (prevents extension)
+     * 1. Proves knowledge of the binding hash preimage (via SHA-256 STARK)
+     * 2. Binds the DID to the wallet address
+     * 3. Binds to specific client/session (prevents cross-enterprise replay)
+     * 4. Includes the payment hash for the login session
+     * 5. Binds the exact amount (prevents payment substitution)
+     * 6. Binds the enterprise domain (prevents cross-RP replay)
+     * 7. Includes session nonce (prevents replay attacks)
+     * 8. Has an expiry timestamp bound into the hash
+     * 9. Binds membership root (if applicable)
+     * 
+     * @param didPubkeyHex The DID public key (hex encoded, 33 bytes compressed)
+     * @param walletAddress The wallet address (e.g., Spark address)
+     * @param clientId The enterprise client ID (from session)
+     * @param sessionId The session ID (from QR/deep link)
+     * @param paymentHashHex The Lightning payment hash (32 bytes hex)
+     * @param amountSats The payment amount in satoshis
+     * @param expiresAt Unix timestamp when the proof expires
+     * @param eaDomain Enterprise/RP domain (e.g., "acmecorp.com")
+     * @param nonceHex Session nonce (16 bytes hex = 32 chars)
+     * @param purposeId Membership purpose: 0=none, 1=allowlist, 2=issuer_batch, 3=revocation
+     * @param rootId Membership root ID (empty if no membership required)
+     * @return JSON string with the real STWO v4 proof (SHA-256 STARK circuit)
+     */
+    @JvmStatic external fun generateRealIdentityProofV4(
+        didPubkeyHex: String,
+        walletAddress: String,
+        clientId: String,
+        sessionId: String,
+        paymentHashHex: String,
+        amountSats: Long,
+        expiresAt: Long,
+        eaDomain: String,
+        nonceHex: String,
+        purposeId: Long,
+        rootId: String
+    ): String
+    
+    /**
+     * Generate a REAL STWO identity proof v3 (legacy format).
+     * For new code, prefer generateRealIdentityProofV4 which uses SHA-256 STARK circuit.
      * 
      * @param didPubkeyHex The DID public key (hex encoded)
      * @param walletAddress The wallet address (e.g., Spark address)
@@ -220,6 +254,18 @@ object NativeBridge {
     // ============================================================================
     // Lightning Payments
     // ============================================================================
+    
+    /**
+     * Extract payment hash from a BOLT11 invoice using proper decoding.
+     * 
+     * SECURITY: This uses actual BOLT11 bech32 decoding, not string hashing.
+     * The payment hash is the 'p' tagged field in the invoice data.
+     * 
+     * @param bolt11 The BOLT11 invoice string (starts with "ln")
+     * @return The payment hash as 64-character hex string
+     * @throws Exception if invoice cannot be parsed
+     */
+    @JvmStatic external fun extractPaymentHashFromBolt11(bolt11: String): String
     
     /**
      * Generate a new preimage and payment hash

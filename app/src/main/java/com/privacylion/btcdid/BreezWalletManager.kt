@@ -178,14 +178,55 @@ class BreezWalletManager(private val context: Context) {
     
     /**
      * Extract payment hash from a bolt11 invoice.
-     * The payment hash is the 'p' tagged field (52 chars base32 = 32 bytes).
+     * 
+     * SECURITY: Uses Breez SDK's parseInput for proper BOLT11 decoding.
+     * The payment hash is a critical cryptographic binding - must be the real value.
+     * 
+     * @param bolt11 The BOLT11 invoice string
+     * @return The payment hash as 64-character hex string
+     * @throws IllegalArgumentException if invoice cannot be parsed
      */
-    fun extractPaymentHash(bolt11: String): String {
-        // For now, generate a deterministic hash from the invoice
-        // TODO: Properly decode bech32 and extract the 'p' field
-        val hash = java.security.MessageDigest.getInstance("SHA-256")
-            .digest(bolt11.toByteArray())
-        return hash.joinToString("") { "%02x".format(it) }
+    suspend fun extractPaymentHash(bolt11: String): String = withContext(Dispatchers.IO) {
+        val breezSdk = sdk ?: throw IllegalStateException("Breez SDK not initialized")
+        
+        try {
+            // Use Breez SDK to parse the invoice properly
+            val parsed = breezSdk.parseInput(bolt11)
+            
+            when (parsed) {
+                is InputType.Bolt11 -> {
+                    val invoice = parsed.invoice
+                    invoice.paymentHash
+                }
+                else -> {
+                    throw IllegalArgumentException("Input is not a BOLT11 invoice")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse BOLT11 invoice: ${e.message}")
+            throw IllegalArgumentException("Failed to extract payment hash: ${e.message}")
+        }
+    }
+    
+    /**
+     * Synchronous fallback for extracting payment hash when SDK not available.
+     * Uses manual BOLT11 parsing as last resort.
+     * 
+     * SECURITY: Prefer extractPaymentHash() which uses proper SDK parsing.
+     */
+    fun extractPaymentHashSync(bolt11: String): String {
+        // Fallback: Use native Rust decoder if available
+        // This is more reliable than manual parsing
+        try {
+            // Call native function for proper BOLT11 decoding
+            return NativeBridge.extractPaymentHashFromBolt11(bolt11)
+        } catch (e: Exception) {
+            Log.w(TAG, "Native BOLT11 decode failed, using fallback: ${e.message}")
+        }
+        
+        // Last resort: Manual bech32 parsing
+        // NOTE: This is error-prone and should be avoided
+        throw IllegalArgumentException("Cannot extract payment hash - Breez SDK not initialized and native decoder unavailable")
     }
     
     /**
@@ -356,11 +397,13 @@ class BreezWalletManager(private val context: Context) {
     }
     
     /**
-     * Parse a BOLT11 invoice to get its details without paying
-     * NOTE: Simple parsing - extracts what we can from the invoice string
+     * Parse a BOLT11 invoice using Breez SDK for proper decoding.
+     * 
+     * SECURITY: Uses SDK's parseInput for proper BOLT11 decoding.
+     * Never use string manipulation to extract payment hash.
      * 
      * @param bolt11Invoice The invoice to parse
-     * @return Parsed invoice details
+     * @return Parsed invoice details with accurate payment hash
      */
     suspend fun parseInvoice(bolt11Invoice: String): Result<InvoiceDetails> = withContext(Dispatchers.IO) {
         try {
@@ -369,16 +412,41 @@ class BreezWalletManager(private val context: Context) {
                 return@withContext Result.failure(Exception("Not a valid Lightning invoice"))
             }
             
-            // For now, return a basic parsed result
-            // The actual amount will be determined when sending
-            // TODO: Use proper BOLT11 decoder if available in SDK
-            Result.success(InvoiceDetails(
-                amountSats = null, // Amount may be encoded in invoice
-                description = "Lightning Payment",
-                paymentHash = bolt11Invoice.takeLast(64),
-                expiry = 3600UL,
-                isExpired = false
-            ))
+            val breezSdk = sdk
+            if (breezSdk != null) {
+                // Use Breez SDK for proper parsing
+                val parsed = breezSdk.parseInput(bolt11Invoice)
+                
+                when (parsed) {
+                    is InputType.Bolt11 -> {
+                        val invoice = parsed.invoice
+                        return@withContext Result.success(InvoiceDetails(
+                            amountSats = invoice.amountMsat?.let { it / 1000UL },
+                            description = invoice.description ?: "Lightning Payment",
+                            paymentHash = invoice.paymentHash,
+                            expiry = invoice.expiry,
+                            isExpired = invoice.isExpired
+                        ))
+                    }
+                    else -> {
+                        return@withContext Result.failure(Exception("Input is not a BOLT11 invoice"))
+                    }
+                }
+            } else {
+                // Fallback: Use native Rust decoder
+                try {
+                    val paymentHash = NativeBridge.extractPaymentHashFromBolt11(bolt11Invoice)
+                    return@withContext Result.success(InvoiceDetails(
+                        amountSats = null,
+                        description = "Lightning Payment",
+                        paymentHash = paymentHash,
+                        expiry = 3600UL,
+                        isExpired = false
+                    ))
+                } catch (e: Exception) {
+                    return@withContext Result.failure(Exception("Breez SDK not initialized and native decoder failed: ${e.message}"))
+                }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse invoice", e)
             Result.failure(e)

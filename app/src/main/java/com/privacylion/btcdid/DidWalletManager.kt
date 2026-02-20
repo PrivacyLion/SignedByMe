@@ -381,15 +381,86 @@ class DidWalletManager(private val context: Context) {
     }
     
     /**
-     * Generate a real STWO login proof v3 for authentication.
-     * This creates a cryptographically sound Circle STARK proof with full security bindings:
-     * - The user's DID
-     * - Their wallet address
-     * - The specific payment hash for this login session
+     * Generate a real STWO login proof v4 for authentication.
+     * This creates a cryptographically sound SHA-256 STARK proof that PROVES
+     * knowledge of the binding hash preimage (not just x == x).
+     * 
+     * Full security bindings:
+     * - The user's DID (proves identity)
+     * - Their wallet address (proves wallet ownership)
+     * - Client ID (prevents cross-enterprise replay)
+     * - Session ID (prevents cross-session replay)
+     * - The specific payment hash (proves payment)
      * - The exact amount (prevents payment substitution)
      * - The enterprise domain (prevents cross-RP replay)
      * - Session nonce (prevents replay attacks)
      * - Expiry timestamp bound into hash (prevents extension)
+     * - Membership root (if membership required)
+     * 
+     * @param walletAddress The user's wallet address
+     * @param clientId The enterprise client ID (from session)
+     * @param sessionId The session ID (from QR/deep link)
+     * @param paymentHashHex The payment hash from the invoice (32 bytes hex)
+     * @param amountSats The payment amount in satoshis
+     * @param eaDomain The enterprise/RP domain (e.g., "acmecorp.com")
+     * @param nonceHex Session nonce (16 bytes hex = 32 chars)
+     * @param purposeId Membership purpose: 0=none, 1=allowlist, 2=issuer_batch, 3=revocation
+     * @param rootId Membership root ID (empty if no membership required)
+     * @param expiryMinutes How many minutes until the proof expires (default: 5)
+     * @return JSON with the real STWO v4 proof (SHA-256 STARK circuit)
+     */
+    fun generateLoginProofV4(
+        walletAddress: String,
+        clientId: String,
+        sessionId: String,
+        paymentHashHex: String,
+        amountSats: Long,
+        eaDomain: String,
+        nonceHex: String,
+        purposeId: Long = 0,
+        rootId: String = "",
+        expiryMinutes: Long = 5
+    ): String {
+        val did = getPublicDID() ?: throw IllegalStateException("No DID created")
+        val didPubkeyHex = did.removePrefix("did:btcr:")
+        
+        // Calculate expiry timestamp
+        val expiresAt = System.currentTimeMillis() / 1000 + (expiryMinutes * 60)
+        
+        android.util.Log.i("DidWalletManager", "generateLoginProofV4 called: client=$clientId, session=$sessionId, wallet=$walletAddress, amount=$amountSats")
+        
+        return try {
+            val hasReal = NativeBridge.hasRealStwo()
+            if (hasReal) {
+                android.util.Log.i("DidWalletManager", "Generating REAL STWO v4 SHA-256 STARK proof...")
+                val proof = NativeBridge.generateRealIdentityProofV4(
+                    didPubkeyHex,
+                    walletAddress,
+                    clientId,
+                    sessionId,
+                    paymentHashHex,
+                    amountSats,
+                    expiresAt,
+                    eaDomain,
+                    nonceHex,
+                    purposeId,
+                    rootId
+                )
+                android.util.Log.i("DidWalletManager", "Real STWO v4 proof generated successfully!")
+                proof
+            } else {
+                android.util.Log.e("DidWalletManager", "Real STWO not available - v4 proofs require real STWO")
+                """{"status":"error","error":"Real STWO required for v4 proofs - mock proofs not supported"}"""
+            }
+        } catch (t: Throwable) {
+            android.util.Log.e("DidWalletManager", "v4 proof generation failed", t)
+            """{"status":"error","error":"${t.message ?: "Failed to generate v4 proof"}"}"""
+        }
+    }
+    
+    /**
+     * Generate a real STWO login proof v3 for authentication (legacy).
+     * For new code, prefer generateLoginProofV4 which uses SHA-256 STARK circuit.
      * 
      * @param walletAddress The user's wallet address
      * @param paymentHashHex The payment hash from the enterprise's invoice (32 bytes hex)

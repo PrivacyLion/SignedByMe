@@ -438,6 +438,39 @@ pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_verifyPayment(
     env.new_string(json).unwrap().into_raw()
 }
 
+/// Extract payment hash from a BOLT11 invoice using proper decoding
+/// 
+/// SECURITY: This uses the lightning-invoice crate for proper BOLT11 parsing.
+/// Never use string hashing to extract payment hash.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_extractPaymentHashFromBolt11(
+    mut env: JNIEnv,
+    _clazz: JClass,
+    bolt11: JString,
+) -> jstring {
+    use lightning_invoice::Bolt11Invoice;
+    use std::str::FromStr;
+    
+    let invoice_str = match env.get_string(&bolt11) {
+        Ok(s) => s.to_string_lossy().into_owned(),
+        Err(_) => return env.new_string("error:invalid_string").unwrap().into_raw(),
+    };
+    
+    // Parse the BOLT11 invoice
+    match Bolt11Invoice::from_str(&invoice_str) {
+        Ok(invoice) => {
+            // Extract the payment hash
+            let payment_hash = invoice.payment_hash();
+            let hash_hex = hex::encode(payment_hash.0);
+            env.new_string(hash_hex).unwrap().into_raw()
+        }
+        Err(e) => {
+            let error_msg = format!("error:bolt11_parse_failed:{}", e);
+            env.new_string(error_msg).unwrap().into_raw()
+        }
+    }
+}
+
 /// Create a Payment Request Package (PRP)
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_createPrp(
