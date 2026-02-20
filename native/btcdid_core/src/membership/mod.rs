@@ -26,6 +26,10 @@ pub mod merkle;
 pub mod proof;
 pub mod jni;
 
+// Phase 3: STWO circuit for real ZK proofs
+#[cfg(feature = "real-stwo")]
+pub mod circuit;
+
 pub use binding::{compute_binding_hash_v4, hash_field, SCHEMA_VERSION_V4, DOMAIN_SEPARATOR_V4};
 
 // Merkle tree operations - byte array API (compatibility)
@@ -41,6 +45,9 @@ pub use poseidon2_m31::{
     get_merkle_path as get_poseidon_merkle_path,
     m31_to_bytes, m31_from_bytes,
     domains, OUTPUT_POSITION, NULLIFIER_OUTPUT_POSITIONS, WIDTH,
+    RATE, FULL_ROUNDS_FIRST, FULL_ROUNDS_LAST, PARTIAL_ROUNDS,
+    DOMAIN_LEAF, DOMAIN_NULL, DOMAIN_MERK,
+    get_external_constants, get_internal_constants, get_internal_diag,
 };
 pub use poseidon::{poseidon_hash_pair, poseidon_hash_bytes, PoseidonHasher, FieldElement};  // Legacy
 pub use merkle::{MerkleTree, MerklePath, PathSibling, verify_merkle_path};

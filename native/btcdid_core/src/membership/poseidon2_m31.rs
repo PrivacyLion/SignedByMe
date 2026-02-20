@@ -86,6 +86,23 @@ pub type Poseidon2M31 = p3_mersenne_31::Poseidon2Mersenne31<16>;
 /// Width of Poseidon2 state
 pub const WIDTH: usize = 16;
 
+/// Rate (absorb capacity) - positions 1-15
+pub const RATE: usize = WIDTH - 1;
+
+/// Number of full rounds in first half (external rounds)
+pub const FULL_ROUNDS_FIRST: usize = 4;
+
+/// Number of full rounds in second half (external rounds)
+pub const FULL_ROUNDS_LAST: usize = 4;
+
+/// Number of partial rounds (internal rounds)
+pub const PARTIAL_ROUNDS: usize = 14;
+
+/// Domain separator raw values for circuit use
+pub const DOMAIN_LEAF: u32 = 0x4C454146;
+pub const DOMAIN_NULL: u32 = 0x4E554C4C;
+pub const DOMAIN_MERK: u32 = 0x4D45524B;
+
 /// Domain separators (ASCII encoded as M31)
 /// 
 /// ⚠️  SINGLE SOURCE OF TRUTH ⚠️
@@ -479,6 +496,110 @@ pub fn m31_from_bytes(bytes: &[u8]) -> Mersenne31 {
     let val = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
     Mersenne31::new(val & 0x7FFFFFFF)
 }
+
+// =============================================================================
+// Round Constants for Circuit (Phase 3)
+// =============================================================================
+
+// Note: These are placeholder implementations. The actual round constants
+// come from Plonky3's Poseidon2 implementation via the RNG.
+// For circuit constraints, we generate them deterministically from seed 1.
+
+use std::sync::OnceLock;
+
+/// External round constants (8 rounds × 16 elements = 128 values)
+static EXTERNAL_CONSTANTS: OnceLock<Vec<Mersenne31>> = OnceLock::new();
+
+/// Internal round constants (14 rounds × 1 element = 14 values)
+static INTERNAL_CONSTANTS: OnceLock<Vec<Mersenne31>> = OnceLock::new();
+
+/// Internal diagonal values (16 elements)
+static INTERNAL_DIAG: OnceLock<Vec<Mersenne31>> = OnceLock::new();
+
+/// Generate external round constants using Plonky3's RNG
+fn generate_external_constants() -> Vec<Mersenne31> {
+    use rand_p3::{Rng, SeedableRng};
+    let mut rng = rand_p3::rngs::StdRng::seed_from_u64(1);
+    
+    let total_external_rounds = FULL_ROUNDS_FIRST + FULL_ROUNDS_LAST;
+    let mut constants = Vec::with_capacity(total_external_rounds * WIDTH);
+    
+    for _ in 0..(total_external_rounds * WIDTH) {
+        let val: u32 = rng.r#gen();
+        constants.push(Mersenne31::new(val & 0x7FFFFFFF));
+    }
+    
+    constants
+}
+
+/// Generate internal round constants using Plonky3's RNG
+fn generate_internal_constants() -> Vec<Mersenne31> {
+    use rand_p3::{Rng, SeedableRng};
+    // Internal constants come after external constants in the RNG sequence
+    let mut rng = rand_p3::rngs::StdRng::seed_from_u64(1);
+    
+    // Skip external constants
+    let total_external_rounds = FULL_ROUNDS_FIRST + FULL_ROUNDS_LAST;
+    for _ in 0..(total_external_rounds * WIDTH) {
+        let _: u32 = rng.r#gen();
+    }
+    
+    let mut constants = Vec::with_capacity(PARTIAL_ROUNDS);
+    for _ in 0..PARTIAL_ROUNDS {
+        let val: u32 = rng.r#gen();
+        constants.push(Mersenne31::new(val & 0x7FFFFFFF));
+    }
+    
+    constants
+}
+
+/// Generate internal diagonal values
+fn generate_internal_diag() -> Vec<Mersenne31> {
+    use rand_p3::{Rng, SeedableRng};
+    // Diagonal comes after both external and internal constants
+    let mut rng = rand_p3::rngs::StdRng::seed_from_u64(1);
+    
+    // Skip external constants
+    let total_external_rounds = FULL_ROUNDS_FIRST + FULL_ROUNDS_LAST;
+    for _ in 0..(total_external_rounds * WIDTH) {
+        let _: u32 = rng.r#gen();
+    }
+    
+    // Skip internal constants
+    for _ in 0..PARTIAL_ROUNDS {
+        let _: u32 = rng.r#gen();
+    }
+    
+    let mut diag = Vec::with_capacity(WIDTH);
+    for _ in 0..WIDTH {
+        let val: u32 = rng.r#gen();
+        diag.push(Mersenne31::new(val & 0x7FFFFFFF));
+    }
+    
+    diag
+}
+
+/// Get external round constants (lazily initialized)
+pub fn get_external_constants() -> &'static [Mersenne31] {
+    EXTERNAL_CONSTANTS.get_or_init(generate_external_constants)
+}
+
+/// Get internal round constants (lazily initialized)
+pub fn get_internal_constants() -> &'static [Mersenne31] {
+    INTERNAL_CONSTANTS.get_or_init(generate_internal_constants)
+}
+
+/// Get internal diagonal values (lazily initialized)
+pub fn get_internal_diag() -> &'static [Mersenne31] {
+    INTERNAL_DIAG.get_or_init(generate_internal_diag)
+}
+
+// =============================================================================
+// Re-export Poseidon2Hasher methods for circuit module
+// =============================================================================
+
+/// Type alias for the hasher (for external use)
+pub type Poseidon2M31Hasher = Poseidon2Hasher;
 
 // =============================================================================
 // Tests
