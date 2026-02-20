@@ -1017,6 +1017,42 @@ mod tests {
             }
         }
         
+        // === Final 4 external rounds ===
+        println!("\n=== Final external rounds ===");
+        
+        // Circuit uses external_rc with indices 4-7 for terminal rounds
+        // Plonky3 uses terminal constants (which we generated as plonky3_external_terminal)
+        for round in 0..FULL_ROUNDS_LAST {
+            let rc_idx = FULL_ROUNDS_FIRST + round;  // 4, 5, 6, 7
+            
+            // Circuit
+            for i in 0..WIDTH {
+                circuit_state[i] = circuit_state[i] + external_rc(rc_idx, i);
+            }
+            for i in 0..WIDTH {
+                circuit_state[i] = sbox(circuit_state[i]);
+            }
+            external_linear(&mut circuit_state);
+            
+            // Plonky3
+            for i in 0..WIDTH {
+                add_rc_and_sbox_generic::<M31, M31, 5>(&mut plonky3_state[i], plonky3_external_terminal[round][i]);
+            }
+            mds_light_permutation(&mut plonky3_state, &MDSMat4);
+            
+            println!("After final ext round {} (circuit):  {:?}", round, circuit_state.map(|x| x.as_canonical_u32())[..4].to_vec());
+            println!("After final ext round {} (plonky3):  {:?}", round, plonky3_state.map(|x| x.as_canonical_u32())[..4].to_vec());
+            
+            // Also print the constants being used
+            println!("  Circuit RC[{}]: {:?}", rc_idx, (0..4).map(|i| external_rc(rc_idx, i).as_canonical_u32()).collect::<Vec<_>>());
+            println!("  Plonky3 terminal[{}]: {:?}", round, plonky3_external_terminal[round].map(|x| x.as_canonical_u32())[..4].to_vec());
+            
+            if circuit_state != plonky3_state {
+                println!("!!! DIVERGED at final external round {} !!!", round);
+                break;
+            }
+        }
+        
         // === Full outputs ===
         let hasher = Poseidon2Hasher::new();
         let mut real_state = input;
