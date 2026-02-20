@@ -517,6 +517,9 @@ static INTERNAL_CONSTANTS: OnceLock<Vec<Mersenne31>> = OnceLock::new();
 static INTERNAL_DIAG: OnceLock<Vec<Mersenne31>> = OnceLock::new();
 
 /// Generate external round constants using Plonky3's RNG
+/// 
+/// CRITICAL: Do NOT mask with & 0x7FFFFFFF - let Mersenne31::new() handle reduction.
+/// The mask causes off-by-one errors that break compatibility with Plonky3.
 fn generate_external_constants() -> Vec<Mersenne31> {
     use rand_p3::{Rng, RngExt, SeedableRng};
     let mut rng = rand_p3::rngs::StdRng::seed_from_u64(1);
@@ -526,7 +529,7 @@ fn generate_external_constants() -> Vec<Mersenne31> {
     
     for _ in 0..(total_external_rounds * WIDTH) {
         let val: u32 = rng.random();
-        constants.push(Mersenne31::new(val & 0x7FFFFFFF));
+        constants.push(Mersenne31::new(val));  // No mask! Let new() reduce properly
     }
     
     constants
@@ -547,7 +550,7 @@ fn generate_internal_constants() -> Vec<Mersenne31> {
     let mut constants = Vec::with_capacity(PARTIAL_ROUNDS);
     for _ in 0..PARTIAL_ROUNDS {
         let val: u32 = rng.random();
-        constants.push(Mersenne31::new(val & 0x7FFFFFFF));
+        constants.push(Mersenne31::new(val));  // No mask!
     }
     
     constants
