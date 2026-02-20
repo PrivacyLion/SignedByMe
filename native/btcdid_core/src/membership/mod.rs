@@ -27,12 +27,18 @@ pub mod proof;
 pub mod jni;
 
 pub use binding::{compute_binding_hash_v4, hash_field, SCHEMA_VERSION_V4, DOMAIN_SEPARATOR_V4};
-pub use merkle_hash::{hash_pair as merkle_hash_pair, hash_leaf, verify_proof as verify_merkle_proof, build_tree};
+
+// Merkle tree operations - byte array API (compatibility)
+pub use merkle_hash::{hash_pair as merkle_hash_pair, hash_leaf, verify_proof as verify_merkle_proof, build_tree, get_path};
+
+// Merkle tree operations - native M31 API (preferred for new code)
+pub use merkle_hash::{hash_pair_m31, build_tree_m31, verify_proof_m31, get_path_m31, leaf_commitment_m31};
 pub use poseidon2_m31::{
     M31, Poseidon2Hasher, LeafSecret, SessionId,
     poseidon2_hash_pair, compute_leaf_commitment, compute_nullifier,
     verify_merkle_proof as verify_poseidon_merkle_proof,
     build_merkle_tree as build_poseidon_merkle_tree,
+    get_merkle_path as get_poseidon_merkle_path,
     m31_to_bytes, m31_from_bytes,
     domains, OUTPUT_POSITION, WIDTH,
 };
