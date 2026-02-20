@@ -34,6 +34,7 @@ pub use poseidon2_m31::{
     verify_merkle_proof as verify_poseidon_merkle_proof,
     build_merkle_tree as build_poseidon_merkle_tree,
     m31_to_bytes, m31_from_bytes,
+    domains, OUTPUT_POSITION, WIDTH,
 };
 pub use poseidon::{poseidon_hash_pair, poseidon_hash_bytes, PoseidonHasher, FieldElement};  // Legacy
 pub use merkle::{MerkleTree, MerklePath, PathSibling, verify_merkle_path};

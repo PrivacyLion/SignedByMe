@@ -89,6 +89,14 @@ pub type Poseidon2M31 = p3_mersenne_31::Poseidon2Mersenne31<16>;
 pub const WIDTH: usize = 16;
 
 /// Domain separators (ASCII encoded as M31)
+/// 
+/// ⚠️  SINGLE SOURCE OF TRUTH ⚠️
+/// These constants MUST be used everywhere Poseidon2 hashing occurs:
+/// - Rust: This module (hash functions use these directly)
+/// - Python: Calls Rust CLI (`poseidon_hash`), which uses this module
+/// - Circuit: Phase 3 constraints MUST reference these same values
+/// 
+/// If you add a new domain, add it here and nowhere else.
 pub mod domains {
     use super::Mersenne31;
     
@@ -101,6 +109,16 @@ pub mod domains {
     /// Merkle hash: "MERK" = 0x4D45524B
     pub const MERKLE: Mersenne31 = Mersenne31::new_monty(0x4D45524B);
 }
+
+/// Output position in state array after permutation
+/// 
+/// ⚠️  CRITICAL FOR CIRCUIT CONSTRAINTS ⚠️
+/// All hash functions extract output from state[OUTPUT_POSITION].
+/// The circuit in Phase 3 MUST constrain this same position.
+/// 
+/// Position 0 = capacity (domain separator) - NOT the output!
+/// Position 1 = first rate element - THIS IS THE OUTPUT
+pub const OUTPUT_POSITION: usize = 1;
 
 /// Poseidon2 hasher with Plonky3's verified parameters
 pub struct Poseidon2Hasher {
@@ -131,6 +149,9 @@ impl Poseidon2Hasher {
     /// 
     /// State layout:
     /// [MERKLE_DOM, left, right, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    ///      ^         ^    ^
+    ///    pos 0     pos 1  pos 2
+    ///   (capacity) (output) 
     pub fn hash_pair(&self, left: Mersenne31, right: Mersenne31) -> Mersenne31 {
         let mut state = [Mersenne31::ZERO; WIDTH];
         state[0] = domains::MERKLE;
@@ -139,13 +160,15 @@ impl Poseidon2Hasher {
         // positions 3-15 are zero (padding)
         
         self.permute(&mut state);
-        state[1] // Extract from rate position
+        state[OUTPUT_POSITION]
     }
     
     /// Compute leaf commitment from secret
     /// 
     /// State layout:
     /// [LEAF_DOM, s0, s1, s2, s3, s4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    ///     ^       ^
+    ///   pos 0   pos 1 (output after permute)
     pub fn leaf_commitment(&self, secret: &LeafSecret) -> Mersenne31 {
         let mut state = [Mersenne31::ZERO; WIDTH];
         state[0] = domains::LEAF;
@@ -155,13 +178,15 @@ impl Poseidon2Hasher {
         // positions 6-15 are zero (padding)
         
         self.permute(&mut state);
-        state[1]
+        state[OUTPUT_POSITION]
     }
     
     /// Compute nullifier from secret and session ID
     /// 
     /// State layout:
     /// [NULL_DOM, s0, s1, s2, s3, s4, n0, n1, n2, n3, n4, 0, 0, 0, 0, 0]
+    ///     ^       ^
+    ///   pos 0   pos 1 (output after permute)
     pub fn nullifier(&self, secret: &LeafSecret, session: &SessionId) -> Mersenne31 {
         let mut state = [Mersenne31::ZERO; WIDTH];
         state[0] = domains::NULLIFIER;
@@ -174,7 +199,7 @@ impl Poseidon2Hasher {
         // positions 11-15 are zero (padding)
         
         self.permute(&mut state);
-        state[1]
+        state[OUTPUT_POSITION]
     }
 }
 
