@@ -7,7 +7,6 @@ use jni::sys::{jbyteArray, jstring, jlong, jboolean};
 use jni::JNIEnv;
 
 use sha2::{Digest, Sha256};
-use bitcoin::hashes::Hash; // For to_byte_array()
 
 // Module declarations
 pub mod key_manager;
@@ -463,7 +462,8 @@ pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_extractPaymentHa
             // Extract the payment hash
             let payment_hash = invoice.payment_hash();
             // Use as_byte_array() since the inner field is private
-            let hash_hex = hex::encode(payment_hash.to_byte_array());
+            // Use slice indexing to avoid bitcoin_hashes version conflicts
+            let hash_hex = hex::encode(&payment_hash[..]);
             env.new_string(hash_hex).unwrap().into_raw()
         }
         Err(e) => {
