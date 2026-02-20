@@ -350,7 +350,7 @@ impl MembershipWitness {
         }
         
         // 1. Compute leaf commitment
-        let mut leaf_input = [M31::zero(); WIDTH];
+        let mut leaf_input = [M31::new(0); WIDTH];
         leaf_input[0] = M31::new(DOMAIN_LEAF);
         for i in 0..LEAF_SECRET_LEN {
             leaf_input[1 + i] = leaf_secret[i];
@@ -359,7 +359,7 @@ impl MembershipWitness {
         let leaf_commitment = leaf_perm.output()[1]; // Output from position 1
         
         // 2. Compute nullifier
-        let mut null_input = [M31::zero(); WIDTH];
+        let mut null_input = [M31::new(0); WIDTH];
         null_input[0] = M31::new(DOMAIN_NULL);
         for i in 0..LEAF_SECRET_LEN {
             null_input[1 + i] = leaf_secret[i];
@@ -387,7 +387,7 @@ impl MembershipWitness {
                 (current, sibling)
             };
             
-            let mut merkle_input = [M31::zero(); WIDTH];
+            let mut merkle_input = [M31::new(0); WIDTH];
             merkle_input[0] = M31::new(DOMAIN_MERK);
             merkle_input[1] = left;
             merkle_input[2] = right;
@@ -505,7 +505,7 @@ pub fn generate_trace(witness: &MembershipWitness) -> Vec<Col<CpuBackend, BaseFi
     // Path bits
     for i in 0..TREE_DEPTH {
         trace[COL_PATH_BITS_START + i].as_mut_slice()[0] = 
-            if witness.path_bits[i] { BaseField::one() } else { BaseField::zero() };
+            if witness.path_bits[i] { BaseField::from_u32_unchecked(1) } else { BaseField::from_u32_unchecked(0) };
     }
     
     // Root
@@ -657,7 +657,7 @@ pub fn verify_membership(
 
 /// Convert 32 bytes to an array of M31 elements
 fn bytes_to_m31_array<const N: usize>(bytes: &[u8; 32]) -> Result<[M31; N]> {
-    let mut result = [M31::zero(); N];
+    let mut result = [M31::new(0); N];
     for i in 0..N.min(8) {
         let offset = i * 4;
         if offset + 4 <= 32 {
@@ -686,7 +686,7 @@ mod tests {
     
     #[test]
     fn test_permutation_witness() {
-        let mut input = [M31::zero(); WIDTH];
+        let mut input = [M31::new(0); WIDTH];
         input[0] = M31::new(DOMAIN_LEAF);
         input[1] = M31::new(12345);
         
@@ -708,11 +708,11 @@ mod tests {
         ];
         
         // Create a simple 1-level tree for testing
-        let mut siblings = vec![M31::zero(); TREE_DEPTH];
+        let mut siblings = vec![M31::new(0); TREE_DEPTH];
         let path_bits = vec![false; TREE_DEPTH];
         
         // Compute expected root manually
-        let mut leaf_input = [M31::zero(); WIDTH];
+        let mut leaf_input = [M31::new(0); WIDTH];
         leaf_input[0] = M31::new(DOMAIN_LEAF);
         for i in 0..LEAF_SECRET_LEN {
             leaf_input[1 + i] = leaf_secret[i];
@@ -721,7 +721,7 @@ mod tests {
         let mut current = leaf_perm.output()[1];
         
         for i in 0..TREE_DEPTH {
-            let mut merkle_input = [M31::zero(); WIDTH];
+            let mut merkle_input = [M31::new(0); WIDTH];
             merkle_input[0] = M31::new(DOMAIN_MERK);
             merkle_input[1] = current;
             merkle_input[2] = siblings[i];
@@ -731,7 +731,7 @@ mod tests {
         }
         
         let root = current;
-        let binding_hash = [M31::zero(); 8];
+        let binding_hash = [M31::new(0); 8];
         
         let witness = MembershipWitness::generate(
             leaf_secret,
@@ -759,7 +759,7 @@ mod tests {
         let hasher = Poseidon2Hasher::new();
         
         // Test case 1: Leaf commitment input
-        let mut input = [M31::zero(); WIDTH];
+        let mut input = [M31::new(0); WIDTH];
         input[0] = M31::new(DOMAIN_LEAF);
         input[1] = M31::new(0x12345678);
         input[2] = M31::new(0x9ABCDEF0 & 0x7FFFFFFF);
@@ -811,7 +811,7 @@ mod tests {
         use super::super::poseidon2_m31::Poseidon2Hasher;
         
         // Create a simple input and apply ONLY the linear layer
-        let mut state1 = [M31::new(i as u32) for i in 1..=16];
+        let mut state1 = core::array::from_fn(|i| M31::new((i + 1) as u32));
         let mut state2 = state1;
         
         // Our implementation
@@ -829,7 +829,7 @@ mod tests {
         assert_ne!(state1[5], M31::new(6), "Linear layer should change state");
         
         // Verify idempotent behavior (applying twice gives different result)
-        let mut state3 = [M31::new(i as u32) for i in 1..=16];
+        let mut state3 = core::array::from_fn(|i| M31::new((i + 1) as u32));
         external_linear(&mut state3);
         external_linear(&mut state3);
         assert_ne!(state1, state3, "Two applications should differ from one");
@@ -838,7 +838,7 @@ mod tests {
     /// Test internal linear layer formula
     #[test]
     fn test_internal_linear_formula() {
-        let mut state = [M31::new(i as u32) for i in 1..=16];
+        let mut state = core::array::from_fn(|i| M31::new((i + 1) as u32));
         let original = state;
         
         internal_linear(&mut state);

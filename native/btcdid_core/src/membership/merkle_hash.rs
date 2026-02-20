@@ -198,8 +198,8 @@ mod tests {
     
     #[test]
     fn test_m31_api_matches_byte_api() {
-        let a = Mersenne31::from_canonical_u32(12345);
-        let b = Mersenne31::from_canonical_u32(67890);
+        let a = Mersenne31::new(12345);
+        let b = Mersenne31::new(67890);
         
         // M31 API
         let result_m31 = hash_pair_m31(a, b);
@@ -266,7 +266,7 @@ mod tests {
     fn test_m31_tree_operations() {
         // Direct M31 API test
         let leaves: Vec<M31> = (1..=4)
-            .map(|i| Mersenne31::from_canonical_u32(i))
+            .map(|i| Mersenne31::new(i))
             .collect();
         
         let root = build_tree_m31(&leaves);

@@ -525,7 +525,7 @@ fn generate_external_constants() -> Vec<Mersenne31> {
     let mut constants = Vec::with_capacity(total_external_rounds * WIDTH);
     
     for _ in 0..(total_external_rounds * WIDTH) {
-        let val: u32 = rng.r#gen();
+        let val: u32 = rng.random();
         constants.push(Mersenne31::new(val & 0x7FFFFFFF));
     }
     
@@ -541,12 +541,12 @@ fn generate_internal_constants() -> Vec<Mersenne31> {
     // Skip external constants
     let total_external_rounds = FULL_ROUNDS_FIRST + FULL_ROUNDS_LAST;
     for _ in 0..(total_external_rounds * WIDTH) {
-        let _: u32 = rng.r#gen();
+        let _: u32 = rng.random();
     }
     
     let mut constants = Vec::with_capacity(PARTIAL_ROUNDS);
     for _ in 0..PARTIAL_ROUNDS {
-        let val: u32 = rng.r#gen();
+        let val: u32 = rng.random();
         constants.push(Mersenne31::new(val & 0x7FFFFFFF));
     }
     
@@ -562,17 +562,17 @@ fn generate_internal_diag() -> Vec<Mersenne31> {
     // Skip external constants
     let total_external_rounds = FULL_ROUNDS_FIRST + FULL_ROUNDS_LAST;
     for _ in 0..(total_external_rounds * WIDTH) {
-        let _: u32 = rng.r#gen();
+        let _: u32 = rng.random();
     }
     
     // Skip internal constants
     for _ in 0..PARTIAL_ROUNDS {
-        let _: u32 = rng.r#gen();
+        let _: u32 = rng.random();
     }
     
     let mut diag = Vec::with_capacity(WIDTH);
     for _ in 0..WIDTH {
-        let val: u32 = rng.r#gen();
+        let val: u32 = rng.random();
         diag.push(Mersenne31::new(val & 0x7FFFFFFF));
     }
     
