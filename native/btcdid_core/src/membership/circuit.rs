@@ -971,6 +971,52 @@ mod tests {
             }
         }
         
+        // === Now trace internal rounds ===
+        println!("\n=== Internal rounds ===");
+        
+        // Get internal constants the same way Plonky3 does
+        let mut plonky3_internal_constants: Vec<M31> = Vec::new();
+        for _ in 0..PARTIAL_ROUNDS {
+            let val: u32 = rng.random();
+            plonky3_internal_constants.push(M31::new(val));
+        }
+        
+        println!("Plonky3 internal constant 0: {}", plonky3_internal_constants[0].as_canonical_u32());
+        println!("Circuit internal constant 0: {}", internal_rc(0).as_canonical_u32());
+        
+        for round in 0..PARTIAL_ROUNDS {
+            // Circuit: add RC to element 0, sbox element 0, internal linear
+            circuit_state[0] = circuit_state[0] + internal_rc(round);
+            circuit_state[0] = sbox(circuit_state[0]);
+            internal_linear(&mut circuit_state);
+            
+            // Plonky3: same operations with plonky3's constants
+            add_rc_and_sbox_generic::<M31, M31, 5>(&mut plonky3_state[0], plonky3_internal_constants[round]);
+            // Apply Plonky3's internal linear layer (the diffusion matrix)
+            // This is the key - we need to use the same formula
+            let sum: M31 = plonky3_state.iter().copied().sum();
+            // Plonky3's internal diagonal: [-2, 1, 2, 4, 8, 16, 32, 64, 128, 256, 1024, 4096, 8192, 16384, 32768, 65536]
+            let p3_diag: [i64; 16] = [-2, 1, 2, 4, 8, 16, 32, 64, 128, 256, 1024, 4096, 8192, 16384, 32768, 65536];
+            for i in 0..WIDTH {
+                let diag_val = if p3_diag[i] < 0 {
+                    M31::new(((1i64 << 31) - 1 + p3_diag[i]) as u32)
+                } else {
+                    M31::new(p3_diag[i] as u32)
+                };
+                plonky3_state[i] = plonky3_state[i] * diag_val + sum;
+            }
+            
+            if round < 2 || circuit_state != plonky3_state {
+                println!("After internal round {} (circuit):  {:?}", round, circuit_state.map(|x| x.as_canonical_u32())[..4].to_vec());
+                println!("After internal round {} (plonky3):  {:?}", round, plonky3_state.map(|x| x.as_canonical_u32())[..4].to_vec());
+            }
+            
+            if circuit_state != plonky3_state {
+                println!("!!! DIVERGED at internal round {} !!!", round);
+                break;
+            }
+        }
+        
         // === Full outputs ===
         let hasher = Poseidon2Hasher::new();
         let mut real_state = input;
