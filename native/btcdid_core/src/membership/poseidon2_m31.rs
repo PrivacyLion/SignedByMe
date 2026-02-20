@@ -518,7 +518,7 @@ static INTERNAL_DIAG: OnceLock<Vec<Mersenne31>> = OnceLock::new();
 
 /// Generate external round constants using Plonky3's RNG
 fn generate_external_constants() -> Vec<Mersenne31> {
-    use rand_p3::{Rng, SeedableRng};
+    use rand_p3::{Rng, RngExt, SeedableRng};
     let mut rng = rand_p3::rngs::StdRng::seed_from_u64(1);
     
     let total_external_rounds = FULL_ROUNDS_FIRST + FULL_ROUNDS_LAST;
@@ -534,7 +534,7 @@ fn generate_external_constants() -> Vec<Mersenne31> {
 
 /// Generate internal round constants using Plonky3's RNG
 fn generate_internal_constants() -> Vec<Mersenne31> {
-    use rand_p3::{Rng, SeedableRng};
+    use rand_p3::{Rng, RngExt, SeedableRng};
     // Internal constants come after external constants in the RNG sequence
     let mut rng = rand_p3::rngs::StdRng::seed_from_u64(1);
     
@@ -555,7 +555,7 @@ fn generate_internal_constants() -> Vec<Mersenne31> {
 
 /// Generate internal diagonal values
 fn generate_internal_diag() -> Vec<Mersenne31> {
-    use rand_p3::{Rng, SeedableRng};
+    use rand_p3::{Rng, RngExt, SeedableRng};
     // Diagonal comes after both external and internal constants
     let mut rng = rand_p3::rngs::StdRng::seed_from_u64(1);
     
