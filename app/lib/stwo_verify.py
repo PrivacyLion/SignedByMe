@@ -472,12 +472,16 @@ def verify_any_proof(
         if has_real_verifier():
             return verify_stwo_proof(proof_json)
         else:
-            # No verifier, but we've verified binding hash, expiry, domain, amount
-            schema_version = get_schema_version(proof)
-            return True, f"Proof binding verified (schema v{schema_version}, verifier binary not available for full STARK verification)"
+            # SECURITY: Fail closed when verifier not available
+            # Don't silently pass - the STARK proof is the core security guarantee
+            import logging
+            logging.getLogger(__name__).error(
+                "SECURITY: STWO verifier binary not available - cannot verify proof"
+            )
+            return False, "STWO verifier not available - cannot verify cryptographic proof"
     else:
-        # Legacy mock proof
-        return verify_mock_proof(proof_json)
+        # Legacy mock proof - reject in production
+        return False, "Mock proofs not accepted - real STWO proof required"
 
 
 def verify_proof_for_login(
@@ -539,11 +543,16 @@ def verify_proof_for_login(
         if proof_payment_hash.lower() != expected_payment_hash.lower():
             return False, f"Payment hash mismatch"
     
-    # Run full STARK verification if verifier available
+    # Run full STARK verification - REQUIRED
     if has_real_verifier():
         stark_valid, stark_msg = verify_stwo_proof(proof_json)
         if not stark_valid:
             return False, f"STARK verification failed: {stark_msg}"
         return True, "Full cryptographic verification passed (schema v3)"
     
-    return True, "Binding verification passed (schema v3, STARK verifier not available)"
+    # SECURITY: Fail closed when verifier not available
+    import logging
+    logging.getLogger(__name__).error(
+        "SECURITY: STWO verifier not available - login verification failed"
+    )
+    return False, "STWO verifier not available - cannot complete login verification"

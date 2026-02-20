@@ -39,7 +39,13 @@ TREES_FILE = DATA_DIR / "trees.json"  # Stores tree data with witnesses
 BUILD_STATE_FILE = DATA_DIR / "build_state.json"  # Tracks last build times
 
 # Admin API key (separate from enterprise keys)
-ADMIN_API_KEY = os.getenv("SBM_ADMIN_KEY", "sbm_admin_dev_key")
+# SECURITY: No default - must be set in production
+ADMIN_API_KEY = os.getenv("SBM_ADMIN_KEY")
+if not ADMIN_API_KEY:
+    import logging
+    logging.getLogger(__name__).warning(
+        "SBM_ADMIN_KEY not set - admin endpoints will be disabled"
+    )
 
 # Token/challenge config
 ENROLLMENT_TOKEN_TTL_SECONDS = 30 * 60  # 30 minutes
@@ -138,7 +144,18 @@ def validate_enterprise_key(api_key: Optional[str]) -> tuple[str, dict]:
 
 
 def validate_admin_key(api_key: str):
-    """Validate admin API key."""
+    """
+    Validate admin API key.
+    
+    SECURITY: Fails if SBM_ADMIN_KEY is not set in environment.
+    """
+    if not ADMIN_API_KEY:
+        raise HTTPException(
+            503, 
+            "Admin endpoints disabled - SBM_ADMIN_KEY not configured"
+        )
+    if not api_key:
+        raise HTTPException(401, "Missing admin API key")
     if api_key != ADMIN_API_KEY:
         raise HTTPException(401, "Invalid admin key")
 
@@ -259,12 +276,18 @@ class ListEnrollmentsResponse(BaseModel):
 # Tree building
 # =============================================================================
 
-def poseidon_hash_pair(left: bytes, right: bytes) -> bytes:
+def merkle_hash_pair(left: bytes, right: bytes) -> bytes:
     """
-    Placeholder Poseidon hash using SHA256.
-    TODO: Call Rust Poseidon via subprocess for production.
+    Compute Merkle tree internal node hash.
+    
+    Uses SHA-256 with domain separator for Merkle tree nodes.
+    This is NOT Poseidon - we use SHA-256 consistently across
+    the entire codebase for simplicity and compatibility.
+    
+    The domain separator "merkle:" ensures this hash is distinct
+    from other SHA-256 uses in the system.
     """
-    return hashlib.sha256(b"poseidon:" + left + right).digest()
+    return hashlib.sha256(b"merkle:" + left + right).digest()
 
 
 def build_merkle_tree_with_witnesses(leaves: List[bytes]) -> tuple[bytes, List[dict]]:
@@ -292,7 +315,7 @@ def build_merkle_tree_with_witnesses(leaves: List[bytes]) -> tuple[bytes, List[d
         for i in range(0, len(current), 2):
             left = current[i]
             right = current[i + 1] if i + 1 < len(current) else bytes(32)
-            parent = poseidon_hash_pair(left, right)
+            parent = merkle_hash_pair(left, right)
             next_layer.append(parent)
         layers.append(next_layer)
         current = next_layer
@@ -369,7 +392,7 @@ def do_build_tree(client_id: str, purpose: str) -> Optional[dict]:
         "purpose": purpose,
         "purpose_id": get_purpose_id(purpose),
         "root": root_hex,
-        "hash_alg": "poseidon",
+        "hash_alg": "sha256-merkle",
         "depth": len(witnesses[0]["siblings"]) if witnesses else 0,
         "leaf_count": len(leaves),
         "client_id": client_id,

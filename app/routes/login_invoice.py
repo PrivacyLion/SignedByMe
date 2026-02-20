@@ -291,17 +291,33 @@ def generate_nonce() -> str:
 
 def extract_payment_hash(invoice: str) -> str:
     """
-    Extract payment hash from BOLT11 invoice.
-    For now, we use a simple heuristic - in production use a proper decoder.
+    Extract payment hash from BOLT11 invoice using proper decoding.
+    
+    SECURITY: Uses bolt11 library for real decoding instead of hashing the invoice string.
+    The payment hash is a critical cryptographic binding - must be the real value.
     """
-    # Payment hash is typically the last 64 hex chars before any trailing data
-    # This is a simplification - real implementation should decode BOLT11
-    clean = invoice.strip().lower()
-    if clean.startswith("lnbc") or clean.startswith("lntb"):
-        # Try to extract from the invoice structure
-        # For demo purposes, hash the invoice itself
-        return sha256_hex(invoice)[:64]
-    return sha256_hex(invoice)[:64]
+    try:
+        from bolt11 import decode as bolt11_decode
+        
+        decoded = bolt11_decode(invoice.strip())
+        if hasattr(decoded, 'payment_hash') and decoded.payment_hash:
+            return decoded.payment_hash
+        
+        # Fallback: some decoders use different attribute names
+        if hasattr(decoded, 'paymenthash') and decoded.paymenthash:
+            return decoded.paymenthash
+            
+        logger.warning(f"BOLT11 decode succeeded but no payment_hash found")
+        raise ValueError("No payment_hash in decoded invoice")
+        
+    except ImportError:
+        logger.error("SECURITY: bolt11 library not installed - using fallback")
+        # Fallback: extract from bech32 data (less reliable but better than hashing)
+        # The payment hash is in the tagged data, tagged with 'p'
+        raise ValueError("bolt11 library required for payment hash extraction")
+    except Exception as e:
+        logger.error(f"BOLT11 decode error: {e}")
+        raise ValueError(f"Failed to decode BOLT11 invoice: {e}")
 
 
 def verify_stwo_proof(
@@ -371,24 +387,52 @@ def verify_binding_signature(
 ) -> bool:
     """
     Verify the binding signature that links the proof to the payment.
-    In production, this would verify the secp256k1 signature.
-    For now, we do basic validation.
+    Uses real secp256k1 signature verification.
     
-    NOTE: For v3 proofs, the binding is cryptographically enforced in the
-    H_bind hash itself, so this is mainly for legacy v2 compatibility.
+    NOTE: For v3+ proofs, the binding is cryptographically enforced in the
+    H_bind hash itself. This provides additional verification for the signature
+    that binds the proof to the specific payment.
+    
+    SECURITY: Fails closed if verification cannot be performed.
     """
+    from ..lib.crypto import verify_binding_signature as crypto_verify_binding
+    
     try:
-        # Compute expected binding data
-        proof_hash = sha256_hex(proof_json)
-        
-        # The binding should include proof_hash, payment_hash, and nonce
-        # For now, just check the signature is present and non-empty
-        if not signature or len(signature) < 20:
+        # Basic validation
+        if not signature or len(signature) < 128:  # 64 bytes = 128 hex chars
+            logger.warning("Binding signature too short or missing")
             return False
         
-        return True
+        if not did:
+            logger.warning("DID required for binding verification")
+            return False
+        
+        # Extract pubkey from DID (format: did:btcr:<pubkey_hex>)
+        did_pubkey = did.replace("did:btcr:", "")
+        if len(did_pubkey) < 66:  # 33 bytes compressed = 66 hex chars
+            logger.warning(f"Invalid DID pubkey length: {len(did_pubkey)}")
+            return False
+        
+        # Compute the binding hash that should have been signed
+        # binding_data = proof_hash || payment_hash || nonce
+        import hashlib
+        proof_hash = hashlib.sha256(proof_json.encode()).digest()
+        payment_bytes = bytes.fromhex(payment_hash) if payment_hash else b''
+        nonce_bytes = bytes.fromhex(nonce) if nonce else b''
+        
+        binding_data = proof_hash + payment_bytes + nonce_bytes
+        binding_hash = hashlib.sha256(binding_data).digest()
+        
+        # Verify signature
+        is_valid, message = crypto_verify_binding(binding_hash, did_pubkey, signature)
+        
+        if not is_valid:
+            logger.warning(f"Binding signature verification failed: {message}")
+        
+        return is_valid
+        
     except Exception as e:
-        logger.warning(f"Binding verification error: {e}")
+        logger.error(f"Binding verification error: {e}")
         return False
 
 
@@ -920,24 +964,47 @@ def get_session(
 
 
 @router.post("/v1/login/session/{session_id}/paid")
-def mark_session_paid(session_id: str, preimage: str = ""):
+def mark_session_paid(
+    session_id: str,
+    preimage: str,  # REQUIRED - must provide preimage to prove payment
+    x_api_key: str = Header(..., alias="X-API-Key")
+):
     """
     Mark a session as paid (called when payment is detected).
-    Optionally verify preimage matches payment hash.
+    
+    SECURITY:
+    - Requires API key authentication (enterprise must own the session)
+    - Requires preimage to prove actual payment
+    - Verifies preimage matches payment hash
     """
+    # Authenticate
+    client_id, _ = validate_api_key(x_api_key)
+    
     with shelve.open(SESSIONS_DB, writeback=True) as sessions:
         session = sessions.get(session_id)
         if not session:
             raise HTTPException(404, "Session not found")
         
-        # Optionally verify preimage
-        if preimage:
-            computed_hash = sha256_hex(bytes.fromhex(preimage).hex())
-            if computed_hash != session["payment_hash"]:
+        # SECURITY: Verify caller owns this session
+        if session.get("client_id") != client_id:
+            raise HTTPException(403, "Not authorized for this session")
+        
+        # SECURITY: Require preimage (no default)
+        if not preimage:
+            raise HTTPException(400, "Preimage required to prove payment")
+        
+        # SECURITY: Verify preimage matches payment hash
+        try:
+            preimage_bytes = bytes.fromhex(preimage)
+            computed_hash = hashlib.sha256(preimage_bytes).hexdigest()
+            if computed_hash != session.get("payment_hash"):
                 raise HTTPException(400, "Preimage doesn't match payment hash")
+        except ValueError:
+            raise HTTPException(400, "Invalid preimage hex format")
         
         session["paid"] = True
         session["paid_at"] = int(time.time())
+        session["preimage_verified"] = True
         sessions[session_id] = session
         
         return {
@@ -946,7 +1013,8 @@ def mark_session_paid(session_id: str, preimage: str = ""):
             "status": "paid",
             "verified": session.get("stwo_verified", False) and session.get("binding_verified", False),
             "schema_version": session.get("schema_version", 2),
-            "did": session.get("did", "")
+            "did": session.get("did", ""),
+            "preimage_verified": True
         }
 
 
@@ -1131,29 +1199,50 @@ def confirm_payment(
 
 
 @router.get("/v1/login/sessions")
-def list_sessions(enterprise: str = None, limit: int = 50):
+def list_sessions(
+    x_api_key: str = Header(..., alias="X-API-Key"),
+    limit: int = 50
+):
     """
-    List recent login sessions (admin/debug endpoint).
-    Optionally filter by enterprise.
+    List recent login sessions for the authenticated client.
+    
+    SECURITY:
+    - Requires API key authentication
+    - Only returns sessions belonging to the authenticated client
+    - Sensitive fields (DID) are only shown for owned sessions
+    
+    Admin access: Set SBM_ADMIN_KEY env var and use that key to see all sessions.
     """
+    # Check for admin key first
+    admin_key = os.environ.get("SBM_ADMIN_KEY")
+    is_admin = admin_key and x_api_key == admin_key
+    
+    if is_admin:
+        client_id = None  # Admin sees all
+    else:
+        # Regular client authentication
+        client_id, _ = validate_api_key(x_api_key)
+    
     results = []
     with shelve.open(SESSIONS_DB) as sessions:
         for key in list(sessions.keys())[-limit:]:
             session = sessions[key]
-            if enterprise and session.get("enterprise") != enterprise:
+            
+            # Filter to client's sessions unless admin
+            if client_id and session.get("client_id") != client_id:
                 continue
+            
             results.append({
                 "session_id": key,
                 "did": session.get("did", ""),
+                "client_id": session.get("client_id", ""),
                 "enterprise": session.get("enterprise", ""),
                 "verified": session.get("stwo_verified", False) and session.get("binding_verified", False),
                 "dlc_verified": session.get("dlc_verified", False),
-                "contract_id": session.get("contract_id"),
                 "schema_version": session.get("schema_version", 2),
                 "amount_sats": session.get("amount_sats"),
                 "user_amount_sats": session.get("user_amount_sats"),
                 "paid": session.get("paid", False),
-                "audit_hash": session.get("audit_hash"),
                 "created_at": session.get("created_at", 0)
             })
     

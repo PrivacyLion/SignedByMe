@@ -6,3 +6,4 @@ passlib==1.7.4
 pyjwt==2.9.0
 slowapi==0.1.9
 coincurve==20.0.0
+bolt11==2.1.0

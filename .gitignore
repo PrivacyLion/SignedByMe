@@ -7,6 +7,14 @@ __pycache__/
 *.pyc
 app/var/
 
+# Client configuration with API keys (use clients.json.example as template)
+clients.json
+
+# Environment files with secrets
+.env
+.env.local
+.env.production
+
 # --- ANDROID / GRADLE ---
 /.gradle/
 /build/

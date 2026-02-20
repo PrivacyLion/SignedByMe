@@ -1,0 +1,23 @@
+{
+  "acme": {
+    "name": "Acme Corp",
+    "api_key": "REPLACE_WITH_SECURE_API_KEY",
+    "ea_domain": "acme.example.com",
+    "redirect_uris": [
+      "https://acme.example.com/callback",
+      "http://localhost:3000/callback"
+    ],
+    "require_membership": true,
+    "default_root_id": "acme-allowlist-production",
+    "membership_policy": {
+      "auto_approve": false,
+      "auto_build_interval_hours": 24,
+      "auto_build_threshold": 10
+    },
+    "reward_policy": {
+      "enabled": false,
+      "provider": "strike",
+      "amount_sats": 100
+    }
+  }
+}

@@ -2,9 +2,15 @@
 //!
 //! This module provides:
 //! - V4 binding hash computation (must match Python exactly)
-//! - Poseidon hash for Merkle trees (STWO-compatible)
+//! - SHA-256 based Merkle tree hashing (consistent across all platforms)
 //! - Merkle tree construction and path verification
 //! - Membership proof generation and verification
+//!
+//! IMPORTANT: We use SHA-256 (not Poseidon) for Merkle trees.
+//! This ensures consistency between:
+//! - Rust native library
+//! - Python API server
+//! - Verifier binary
 //!
 //! Privacy guarantees:
 //! - Unlinkability: Same user proving to different employers cannot be correlated
@@ -12,13 +18,15 @@
 //! - No correlators: leaf_commitment never exposed
 
 pub mod binding;
-pub mod poseidon;
+pub mod merkle_hash;  // SHA-256 based Merkle hashing
+pub mod poseidon;     // Legacy - kept for backwards compat, use merkle_hash instead
 pub mod merkle;
 pub mod proof;
 pub mod jni;
 
 pub use binding::{compute_binding_hash_v4, hash_field, SCHEMA_VERSION_V4, DOMAIN_SEPARATOR_V4};
-pub use poseidon::{poseidon_hash_pair, poseidon_hash_bytes, PoseidonHasher, FieldElement};
+pub use merkle_hash::{hash_pair as merkle_hash_pair, hash_leaf, verify_proof as verify_merkle_proof, build_tree};
+pub use poseidon::{poseidon_hash_pair, poseidon_hash_bytes, PoseidonHasher, FieldElement};  // Legacy
 pub use merkle::{MerkleTree, MerklePath, PathSibling, verify_merkle_path};
 pub use proof::{MembershipProof, MembershipPublicInputs, MembershipWitness, prove_membership, verify_membership};
 
