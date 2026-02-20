@@ -26,6 +26,39 @@ from pydantic import BaseModel, Field
 
 router = APIRouter(tags=["membership"])
 
+# =============================================================================
+# Domain separators (must match Rust proof.rs and merkle_hash.rs)
+# =============================================================================
+
+LEAF_COMMITMENT_DOMAIN = b"leaf_commit:"
+MERKLE_DOMAIN = b"merkle:"
+NULLIFIER_DOMAIN = b"nullifier:"
+
+
+def compute_leaf_commitment(leaf_secret: bytes) -> bytes:
+    """
+    Compute leaf commitment from secret.
+    
+    leaf_commitment = SHA256("leaf_commit:" || leaf_secret)
+    
+    This matches the Rust implementation in proof.rs.
+    """
+    return hashlib.sha256(LEAF_COMMITMENT_DOMAIN + leaf_secret).digest()
+
+
+def compute_nullifier(leaf_secret: bytes, session_id: bytes) -> bytes:
+    """
+    Compute session-specific nullifier.
+    
+    nullifier = SHA256("nullifier:" || leaf_secret || session_id)
+    
+    Different sessions produce different nullifiers, preventing
+    cross-session linkability while allowing replay detection
+    within a session.
+    """
+    return hashlib.sha256(NULLIFIER_DOMAIN + leaf_secret + session_id).digest()
+
+
 # Feature flag - admin endpoints require this
 INTERNAL_ADMIN_ONLY = os.getenv("SBM_INTERNAL_ADMIN", "").lower() in ("true", "1", "yes")
 
@@ -622,8 +655,12 @@ def verify_did_signature(did: str, challenge: str, client_id: str, purpose: str,
     
     Payload format: challenge|client_id|did|purpose|root_id
     
-    For beta, we support did:key with Ed25519 (z6Mk prefix).
+    Supports did:key with Ed25519 (z6Mk prefix).
     """
+    # First verify the challenge exists and is valid
+    if not validate_challenge(challenge, client_id, did):
+        return False
+    
     # Construct expected payload
     payload = f"{challenge}|{client_id}|{did}|{purpose}|{root_id}"
     
@@ -637,20 +674,48 @@ def verify_did_signature(did: str, challenge: str, client_id: str, purpose: str,
         # For Ed25519 keys (z6Mk prefix), decode and verify
         if multibase_key.startswith("z6Mk"):
             import base64
+            import base58
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            from cryptography.exceptions import InvalidSignature
             
-            # Decode signature
+            # Decode signature from base64
             try:
                 sig_bytes = base64.b64decode(signature)
-            except:
+                if len(sig_bytes) != 64:
+                    return False
+            except Exception:
                 return False
             
-            # For beta: we trust the signature format
-            # TODO: Implement actual Ed25519 verification
-            # This requires the ed25519 library or calling Rust
-            
-            # For now, we verify the challenge exists and is valid
-            # Full cryptographic verification will be added
-            return validate_challenge(challenge, client_id, did)
+            # Decode public key from multibase (z = base58btc)
+            # z6Mk... is base58btc-encoded multicodec (0xed01 = Ed25519 public key)
+            try:
+                # Remove 'z' prefix (base58btc indicator)
+                multicodec_key = base58.b58decode(multibase_key[1:])
+                
+                # First two bytes are multicodec prefix for Ed25519 (0xed01)
+                if len(multicodec_key) < 34:
+                    return False
+                if multicodec_key[0:2] != bytes([0xed, 0x01]):
+                    return False
+                
+                # Remaining 32 bytes are the raw public key
+                raw_pubkey = multicodec_key[2:34]
+                if len(raw_pubkey) != 32:
+                    return False
+                
+                # Create Ed25519 public key object
+                pubkey = Ed25519PublicKey.from_public_bytes(raw_pubkey)
+                
+                # Verify signature over payload
+                payload_bytes = payload.encode('utf-8')
+                pubkey.verify(sig_bytes, payload_bytes)
+                
+                return True
+                
+            except InvalidSignature:
+                return False
+            except Exception:
+                return False
         
         return False
         
