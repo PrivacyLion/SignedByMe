@@ -190,18 +190,10 @@ class BreezWalletManager(private val context: Context) {
         val breezSdk = sdk ?: throw IllegalStateException("Breez SDK not initialized")
         
         try {
-            // Use Breez SDK to parse the invoice properly
-            val parsed = breezSdk.parseInput(bolt11)
-            
-            when (parsed) {
-                is InputType.Bolt11 -> {
-                    val invoice = parsed.invoice
-                    invoice.paymentHash
-                }
-                else -> {
-                    throw IllegalArgumentException("Input is not a BOLT11 invoice")
-                }
-            }
+            // Use Breez SDK Spark to parse the invoice
+            // Spark SDK uses bolt11Parse() which returns LnInvoice directly
+            val invoice = breezSdk.bolt11Parse(bolt11)
+            invoice.paymentHash
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse BOLT11 invoice: ${e.message}")
             throw IllegalArgumentException("Failed to extract payment hash: ${e.message}")
@@ -414,24 +406,17 @@ class BreezWalletManager(private val context: Context) {
             
             val breezSdk = sdk
             if (breezSdk != null) {
-                // Use Breez SDK for proper parsing
-                val parsed = breezSdk.parseInput(bolt11Invoice)
+                // Use Breez SDK Spark for proper parsing
+                // bolt11Parse() returns LnInvoice directly
+                val invoice = breezSdk.bolt11Parse(bolt11Invoice)
                 
-                when (parsed) {
-                    is InputType.Bolt11 -> {
-                        val invoice = parsed.invoice
-                        return@withContext Result.success(InvoiceDetails(
-                            amountSats = invoice.amountMsat?.let { it / 1000UL },
-                            description = invoice.description ?: "Lightning Payment",
-                            paymentHash = invoice.paymentHash,
-                            expiry = invoice.expiry,
-                            isExpired = invoice.isExpired
-                        ))
-                    }
-                    else -> {
-                        return@withContext Result.failure(Exception("Input is not a BOLT11 invoice"))
-                    }
-                }
+                return@withContext Result.success(InvoiceDetails(
+                    amountSats = invoice.amountMsat?.let { it / 1000UL },
+                    description = invoice.description ?: "Lightning Payment",
+                    paymentHash = invoice.paymentHash,
+                    expiry = invoice.expiry,
+                    isExpired = invoice.isExpired
+                ))
             } else {
                 // Fallback: Use native Rust decoder
                 try {
