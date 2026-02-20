@@ -896,8 +896,7 @@ mod tests {
     fn test_debug_round_by_round() {
         use super::super::poseidon2_m31::Poseidon2Hasher;
         use p3_field::PrimeField32;
-        use p3_poseidon2::{MDSMat4, mds_light_permutation};
-        use p3_symmetric::Permutation;
+        use p3_poseidon2::{MDSMat4, mds_light_permutation, add_rc_and_sbox_generic};
         
         let input: [M31; 16] = core::array::from_fn(|i| M31::new((i + 1) as u32));
         
@@ -913,40 +912,72 @@ mod tests {
         
         println!("After init linear (circuit):  {:?}", circuit_state.map(|x| x.as_canonical_u32()));
         println!("After init linear (plonky3):  {:?}", plonky3_state.map(|x| x.as_canonical_u32()));
+        assert_eq!(circuit_state, plonky3_state, "Init linear diverged!");
         
-        if circuit_state != plonky3_state {
-            println!("!!! DIVERGENCE at initial linear layer !!!");
+        // === Get Plonky3's actual round constants ===
+        // We need to see what constants Poseidon2Hasher actually uses
+        use rand_p3::SeedableRng;
+        let mut rng = rand_p3::rngs::StdRng::seed_from_u64(1);
+        
+        // Sample constants the same way Plonky3 does
+        use rand_p3::RngExt;
+        let mut plonky3_external_initial: Vec<[M31; 16]> = Vec::new();
+        let mut plonky3_external_terminal: Vec<[M31; 16]> = Vec::new();
+        
+        // Initial external constants (4 rounds × 16 elements)
+        for _ in 0..4 {
+            let rc: [M31; 16] = core::array::from_fn(|_| {
+                let val: u32 = rng.random();
+                M31::new(val)
+            });
+            plonky3_external_initial.push(rc);
+        }
+        // Terminal external constants (4 rounds × 16 elements)
+        for _ in 0..4 {
+            let rc: [M31; 16] = core::array::from_fn(|_| {
+                let val: u32 = rng.random();
+                M31::new(val)
+            });
+            plonky3_external_terminal.push(rc);
         }
         
-        // === Real Poseidon2Hasher full output ===
+        println!("\n=== Constants comparison ===");
+        println!("Plonky3 round 0 constants: {:?}", plonky3_external_initial[0].map(|x| x.as_canonical_u32())[..4].to_vec());
+        println!("Circuit round 0 constants: {:?}", (0..4).map(|i| external_rc(0, i).as_canonical_u32()).collect::<Vec<_>>());
+        
+        // === Step through first 4 external rounds ===
+        for round in 0..FULL_ROUNDS_FIRST {
+            // Apply to circuit state
+            for i in 0..WIDTH {
+                circuit_state[i] = circuit_state[i] + external_rc(round, i);
+            }
+            for i in 0..WIDTH {
+                circuit_state[i] = sbox(circuit_state[i]);
+            }
+            external_linear(&mut circuit_state);
+            
+            // Apply to plonky3 state with plonky3's constants
+            for i in 0..WIDTH {
+                add_rc_and_sbox_generic::<M31, M31, 5>(&mut plonky3_state[i], plonky3_external_initial[round][i]);
+            }
+            mds_light_permutation(&mut plonky3_state, &MDSMat4);
+            
+            println!("\nAfter external round {} (circuit):  {:?}", round, circuit_state.map(|x| x.as_canonical_u32())[..4].to_vec());
+            println!("After external round {} (plonky3):  {:?}", round, plonky3_state.map(|x| x.as_canonical_u32())[..4].to_vec());
+            
+            if circuit_state != plonky3_state {
+                println!("!!! DIVERGED at external round {} !!!", round);
+                break;
+            }
+        }
+        
+        // === Full outputs ===
         let hasher = Poseidon2Hasher::new();
         let mut real_state = input;
         hasher.permute(&mut real_state);
+        println!("\nReal Poseidon2Hasher output: {:?}", real_state.map(|x| x.as_canonical_u32())[..4].to_vec());
         
-        println!("\nReal output: {:?}", real_state.map(|x| x.as_canonical_u32()));
-        
-        // === Full circuit ===
         let witness = PermutationWitness::generate(input);
-        println!("Circuit output: {:?}", witness.output().map(|x| x.as_canonical_u32()));
-        
-        // === Test: are circuit constants == Poseidon2M31 constants? ===
-        // The hasher and circuit MUST use the exact same constants
-        // Generate a hasher and manually step through to check
-        println!("\n=== Checking if constants match ===");
-        
-        // Start from plonky3's init-linear state and apply our RC + sbox + linear
-        let mut test_state = plonky3_state;
-        for i in 0..WIDTH {
-            test_state[i] = test_state[i] + external_rc(0, i);
-        }
-        for i in 0..WIDTH {
-            test_state[i] = sbox(test_state[i]);
-        }
-        mds_light_permutation(&mut test_state, &MDSMat4);
-        println!("After round 0 with circuit constants: {:?}", test_state.map(|x| x.as_canonical_u32()));
-        
-        // Check internal diagonal
-        println!("\n=== Internal diagonal ===");
-        println!("{:?}", (0..WIDTH).map(|i| internal_diag(i).as_canonical_u32()).collect::<Vec<_>>());
+        println!("Circuit output: {:?}", witness.output().map(|x| x.as_canonical_u32())[..4].to_vec());
     }
 }
