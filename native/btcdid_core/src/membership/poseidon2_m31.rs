@@ -178,10 +178,10 @@ impl Default for Poseidon2Hasher {
 
 impl Poseidon2Hasher {
     /// Create hasher with Plonky3's verified round constants
-    /// Uses SmallRng with seed 1 (deterministic, matches test expectations)
+    /// Uses StdRng with seed 1 (deterministic, matches test expectations)
     pub fn new() -> Self {
         use rand_p3::SeedableRng;
-        let mut rng = rand_p3::rngs::SmallRng::seed_from_u64(1);
+        let mut rng = rand_p3::rngs::StdRng::seed_from_u64(1);
         let permutation = Poseidon2M31::new_from_rng_128(&mut rng);
         Self { permutation }
     }
