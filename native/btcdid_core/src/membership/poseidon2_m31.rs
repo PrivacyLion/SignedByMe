@@ -72,7 +72,7 @@
 //!
 //! This reduces constraints vs original Poseidon while maintaining security.
 
-use p3_field::PrimeField32;
+use p3_field::{PrimeField32, PrimeCharacteristicRing};
 use p3_mersenne_31::Mersenne31;
 use p3_poseidon2::Poseidon2;
 use p3_symmetric::Permutation;
@@ -101,13 +101,13 @@ pub mod domains {
     use super::Mersenne31;
     
     /// Leaf commitment: "LEAF" = 0x4C454146
-    pub const LEAF: Mersenne31 = Mersenne31::new_monty(0x4C454146);
+    pub const LEAF: Mersenne31 = Mersenne31::new(0x4C454146);
     
     /// Nullifier: "NULL" = 0x4E554C4C
-    pub const NULLIFIER: Mersenne31 = Mersenne31::new_monty(0x4E554C4C);
+    pub const NULLIFIER: Mersenne31 = Mersenne31::new(0x4E554C4C);
     
     /// Merkle hash: "MERK" = 0x4D45524B
-    pub const MERKLE: Mersenne31 = Mersenne31::new_monty(0x4D45524B);
+    pub const MERKLE: Mersenne31 = Mersenne31::new(0x4D45524B);
 }
 
 /// Output position in state array after permutation (single element)
@@ -153,7 +153,7 @@ impl Nullifier {
                     bytes[i * 4 + 2],
                     bytes[i * 4 + 3],
                 ]);
-                elements[i] = Mersenne31::from_canonical_u32(val & 0x7FFFFFFF);
+                elements[i] = Mersenne31::new(val & 0x7FFFFFFF);
             }
         }
         Self(elements)
@@ -285,7 +285,7 @@ impl LeafSecret {
                 bytes[start + 3],
             ]);
             // Reduce mod M31 prime (2^31 - 1)
-            elements[i] = Mersenne31::from_canonical_u32(val & 0x7FFFFFFF);
+            elements[i] = Mersenne31::new(val & 0x7FFFFFFF);
         }
         Self(elements)
     }
@@ -320,7 +320,7 @@ impl SessionId {
                 bytes[start + 2],
                 bytes[start + 3],
             ]);
-            elements[i] = Mersenne31::from_canonical_u32(val & 0x7FFFFFFF);
+            elements[i] = Mersenne31::new(val & 0x7FFFFFFF);
         }
         Self(elements)
     }
@@ -478,7 +478,7 @@ pub fn m31_from_bytes(bytes: &[u8]) -> Mersenne31 {
         return Mersenne31::ZERO;
     }
     let val = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-    Mersenne31::from_canonical_u32(val & 0x7FFFFFFF)
+    Mersenne31::new(val & 0x7FFFFFFF)
 }
 
 // =============================================================================
@@ -494,16 +494,16 @@ mod tests {
         let h1 = Poseidon2Hasher::new();
         let h2 = Poseidon2Hasher::new();
         
-        let a = Mersenne31::from_canonical_u32(123);
-        let b = Mersenne31::from_canonical_u32(456);
+        let a = Mersenne31::new(123);
+        let b = Mersenne31::new(456);
         
         assert_eq!(h1.hash_pair(a, b), h2.hash_pair(a, b));
     }
     
     #[test]
     fn test_hash_pair_order_matters() {
-        let a = Mersenne31::from_canonical_u32(123);
-        let b = Mersenne31::from_canonical_u32(456);
+        let a = Mersenne31::new(123);
+        let b = Mersenne31::new(456);
         
         let h1 = poseidon2_hash_pair(a, b);
         let h2 = poseidon2_hash_pair(b, a);
@@ -587,7 +587,7 @@ mod tests {
     #[test]
     fn test_merkle_tree_basic() {
         let leaves: Vec<Mersenne31> = (1..=4)
-            .map(|i| Mersenne31::from_canonical_u32(i))
+            .map(|i| Mersenne31::new(i))
             .collect();
         
         let root = build_merkle_tree(&leaves);
@@ -606,13 +606,13 @@ mod tests {
     #[test]
     fn test_merkle_wrong_leaf_fails() {
         let leaves: Vec<Mersenne31> = (1..=4)
-            .map(|i| Mersenne31::from_canonical_u32(i))
+            .map(|i| Mersenne31::new(i))
             .collect();
         
         let root = build_merkle_tree(&leaves);
         let (siblings, path_bits) = get_merkle_path(&leaves, 0);
         
-        let wrong_leaf = Mersenne31::from_canonical_u32(9999);
+        let wrong_leaf = Mersenne31::new(9999);
         assert!(
             !verify_merkle_proof(wrong_leaf, &siblings, &path_bits, root),
             "Wrong leaf should not verify"
@@ -626,11 +626,11 @@ mod tests {
         
         let mut state1 = [Mersenne31::ZERO; WIDTH];
         state1[0] = domains::LEAF;
-        state1[1] = Mersenne31::from_canonical_u32(42);
+        state1[1] = Mersenne31::new(42);
         
         let mut state2 = [Mersenne31::ZERO; WIDTH];
         state2[0] = domains::NULLIFIER;
-        state2[1] = Mersenne31::from_canonical_u32(42);
+        state2[1] = Mersenne31::new(42);
         
         hasher.permute(&mut state1);
         hasher.permute(&mut state2);
@@ -649,14 +649,14 @@ mod tests {
             894848333, 1437655012, 1200606629, 1690012884, 71131202, 1749206695, 1717947831,
             120589055, 19776022, 42382981, 1831865506, 724844064, 171220207, 1299207443, 227047920,
             1783754913,
-        ].map(Mersenne31::from_canonical_u32);
+        ].map(Mersenne31::new);
         
         // Expected output from Plonky3 test
         let expected: [Mersenne31; 16] = [
             1124552602, 2127602268, 1834113265, 1207687593, 1891161485, 245915620, 981277919,
             627265710, 1534924153, 1580826924, 887997842, 1526280482, 547791593, 1028672510,
             1803086471, 323071277,
-        ].map(Mersenne31::from_canonical_u32);
+        ].map(Mersenne31::new);
         
         let mut state = input;
         hasher.permute(&mut state);
