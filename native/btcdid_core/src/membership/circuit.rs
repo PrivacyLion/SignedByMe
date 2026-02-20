@@ -890,4 +890,58 @@ mod tests {
         assert_eq!(x2, M31::new(49), "x^2 wrong");
         assert_eq!(x5, expected, "x^5 wrong via intermediate");
     }
+    
+    /// Debug test: trace round-by-round to find divergence
+    #[test]
+    fn test_debug_round_by_round() {
+        use super::super::poseidon2_m31::Poseidon2Hasher;
+        use p3_field::PrimeField32;
+        
+        let input: [M31; 16] = core::array::from_fn(|i| M31::new((i + 1) as u32));
+        
+        // === Our circuit implementation (step by step) ===
+        let mut circuit_state = input;
+        
+        println!("\n=== Round-by-round comparison ===");
+        println!("Input: {:?}", input.map(|x| x.as_canonical_u32()));
+        
+        // Initial external linear layer
+        external_linear(&mut circuit_state);
+        println!("After init linear: {:?}", circuit_state.map(|x| x.as_canonical_u32()));
+        
+        // First external round (round 0)
+        for i in 0..WIDTH {
+            circuit_state[i] = circuit_state[i] + external_rc(0, i);
+        }
+        println!("After RC 0: {:?}", circuit_state.map(|x| x.as_canonical_u32()));
+        
+        for i in 0..WIDTH {
+            circuit_state[i] = sbox(circuit_state[i]);
+        }
+        println!("After SBOX 0: {:?}", circuit_state.map(|x| x.as_canonical_u32()));
+        
+        external_linear(&mut circuit_state);
+        println!("After linear 0: {:?}", circuit_state.map(|x| x.as_canonical_u32()));
+        
+        // === Real Poseidon2Hasher ===
+        let hasher = Poseidon2Hasher::new();
+        let mut real_state = input;
+        hasher.permute(&mut real_state);
+        
+        println!("\nReal output: {:?}", real_state.map(|x| x.as_canonical_u32()));
+        
+        // === Full circuit ===
+        let witness = PermutationWitness::generate(input);
+        println!("Circuit output: {:?}", witness.output().map(|x| x.as_canonical_u32()));
+        
+        // Check round constants match
+        println!("\n=== First few external constants ===");
+        for r in 0..2 {
+            println!("Round {}: {:?}", r, (0..4).map(|i| external_rc(r, i).as_canonical_u32()).collect::<Vec<_>>());
+        }
+        
+        // Check internal diagonal
+        println!("\n=== Internal diagonal ===");
+        println!("{:?}", (0..WIDTH).map(|i| internal_diag(i).as_canonical_u32()).collect::<Vec<_>>());
+    }
 }
