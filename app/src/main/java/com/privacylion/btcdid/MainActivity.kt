@@ -1012,9 +1012,13 @@ fun SignedByMeApp(
                                         )
                                         
                                         // Generate membership proof
-                                        // Convert sessionId to 32 bytes via SHA256 (consistent with server)
-                                        val sessionIdBytes = java.security.MessageDigest.getInstance("SHA-256")
-                                            .digest(sessionId.toByteArray(Charsets.UTF_8))
+                                        // sessionId is base64url-encoded 16 bytes - decode and zero-pad to 32
+                                        val sessionIdDecoded = android.util.Base64.decode(
+                                            sessionId, 
+                                            android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING
+                                        )
+                                        val sessionIdBytes = ByteArray(32)
+                                        sessionIdDecoded.copyInto(sessionIdBytes, 0, 0, minOf(sessionIdDecoded.size, 32))
                                         val proofBase64 = didMgr.generateMembershipProof(witness, bindingHash, sessionIdBytes)
                                         if (proofBase64 != null) {
                                             membershipBundle = MembershipBundle(
