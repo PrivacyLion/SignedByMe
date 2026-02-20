@@ -187,13 +187,10 @@ class BreezWalletManager(private val context: Context) {
      * @throws IllegalArgumentException if invoice cannot be parsed
      */
     suspend fun extractPaymentHash(bolt11: String): String = withContext(Dispatchers.IO) {
-        val breezSdk = sdk ?: throw IllegalStateException("Breez SDK not initialized")
-        
+        // Use native Rust decoder for BOLT11 parsing
+        // Spark SDK is for Lightning payments, not invoice parsing
         try {
-            // Use Breez SDK Spark to parse the invoice
-            // Spark SDK uses bolt11Parse() which returns LnInvoice directly
-            val invoice = breezSdk.bolt11Parse(bolt11)
-            invoice.paymentHash
+            NativeBridge.extractPaymentHashFromBolt11(bolt11)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse BOLT11 invoice: ${e.message}")
             throw IllegalArgumentException("Failed to extract payment hash: ${e.message}")
@@ -404,33 +401,21 @@ class BreezWalletManager(private val context: Context) {
                 return@withContext Result.failure(Exception("Not a valid Lightning invoice"))
             }
             
-            val breezSdk = sdk
-            if (breezSdk != null) {
-                // Use Breez SDK Spark for proper parsing
-                // bolt11Parse() returns LnInvoice directly
-                val invoice = breezSdk.bolt11Parse(bolt11Invoice)
-                
+            // Use native Rust decoder for BOLT11 parsing
+            // Spark SDK is for Lightning payments, not invoice parsing
+            try {
+                val paymentHash = NativeBridge.extractPaymentHashFromBolt11(bolt11Invoice)
+                // For full invoice details, we'd need a complete BOLT11 decoder
+                // For now, extract payment hash (the critical field) and use defaults
                 return@withContext Result.success(InvoiceDetails(
-                    amountSats = invoice.amountMsat?.let { it / 1000UL },
-                    description = invoice.description ?: "Lightning Payment",
-                    paymentHash = invoice.paymentHash,
-                    expiry = invoice.expiry,
-                    isExpired = invoice.isExpired
+                    amountSats = null,  // Would need full decoder
+                    description = "Lightning Payment",
+                    paymentHash = paymentHash,
+                    expiry = 3600UL,  // Default 1 hour
+                    isExpired = false
                 ))
-            } else {
-                // Fallback: Use native Rust decoder
-                try {
-                    val paymentHash = NativeBridge.extractPaymentHashFromBolt11(bolt11Invoice)
-                    return@withContext Result.success(InvoiceDetails(
-                        amountSats = null,
-                        description = "Lightning Payment",
-                        paymentHash = paymentHash,
-                        expiry = 3600UL,
-                        isExpired = false
-                    ))
-                } catch (e: Exception) {
-                    return@withContext Result.failure(Exception("Breez SDK not initialized and native decoder failed: ${e.message}"))
-                }
+            } catch (e: Exception) {
+                return@withContext Result.failure(Exception("Failed to parse invoice: ${e.message}"))
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse invoice", e)
