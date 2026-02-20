@@ -20,6 +20,10 @@ pub mod membership; // Merkle membership proofs
 #[cfg(feature = "real-stwo")]
 pub mod stwo_real;
 
+// SHA-256 circuit for STWO (only when feature enabled)
+#[cfg(feature = "real-stwo")]
+pub mod sha256_circuit;
+
 use key_manager::ManagedKey;
 use dlc_builder::{DlcContract, DlcOutcome, OracleInfo, PayoutSplit, oracle_sign_outcome};
 use stwo_prover::{StwoProver, CircuitType};
@@ -534,9 +538,126 @@ pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_getXOnlyPubkey(
 // REAL STWO PROVER JNI FUNCTIONS (only available with real-stwo feature)
 // ============================================================================
 
-/// Generate a REAL STWO identity proof v3 (cryptographically sound, full security bindings)
-/// This replaces the mock proof with actual Circle STARK verification
-/// Includes: amount_sats, expires_at, ea_domain, nonce for tamper-proof binding
+/// Generate a REAL STWO identity proof v4 (SHA-256 STARK circuit)
+/// This proves knowledge of the preimage that hashes to the binding hash.
+/// The circuit implements SHA-256 compression rounds as STARK constraints.
+/// Includes all v4 fields: client_id, session_id, purpose_id, root_id for full binding
+#[cfg(feature = "real-stwo")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_generateRealIdentityProofV4(
+    mut env: JNIEnv,
+    _clazz: JClass,
+    did_pubkey_hex: JString,
+    wallet_address: JString,
+    client_id: JString,
+    session_id: JString,
+    payment_hash_hex: JString,
+    amount_sats: jlong,
+    expires_at: jlong,
+    ea_domain: JString,
+    nonce_hex: JString,
+    purpose_id: jlong,
+    root_id: JString,
+) -> jstring {
+    use stwo_real::prove_identity_binding;
+    
+    let did_hex = env.get_string(&did_pubkey_hex)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let wallet = env.get_string(&wallet_address)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let client = env.get_string(&client_id)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let session = env.get_string(&session_id)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let payment_hex = env.get_string(&payment_hash_hex)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let domain = env.get_string(&ea_domain)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let nonce_str = env.get_string(&nonce_hex)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let root = env.get_string(&root_id)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    
+    // Parse hex inputs
+    let did_bytes = match hex::decode(&did_hex) {
+        Ok(b) => b,
+        Err(e) => {
+            let error_json = format!(r#"{{"status":"error","error":"Invalid DID hex: {}"}}"#, e);
+            return env.new_string(error_json).unwrap().into_raw();
+        }
+    };
+    
+    let payment_hash: [u8; 32] = match hex::decode(&payment_hex) {
+        Ok(b) if b.len() == 32 => {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&b);
+            arr
+        }
+        Ok(_) => {
+            let error_json = r#"{"status":"error","error":"Payment hash must be 32 bytes"}"#;
+            return env.new_string(error_json).unwrap().into_raw();
+        }
+        Err(e) => {
+            let error_json = format!(r#"{{"status":"error","error":"Invalid payment hash hex: {}"}}"#, e);
+            return env.new_string(error_json).unwrap().into_raw();
+        }
+    };
+    
+    let nonce: [u8; 16] = match hex::decode(&nonce_str) {
+        Ok(b) if b.len() == 16 => {
+            let mut arr = [0u8; 16];
+            arr.copy_from_slice(&b);
+            arr
+        }
+        Ok(_) => {
+            let error_json = r#"{"status":"error","error":"Nonce must be 16 bytes (32 hex chars)"}"#;
+            return env.new_string(error_json).unwrap().into_raw();
+        }
+        Err(e) => {
+            let error_json = format!(r#"{{"status":"error","error":"Invalid nonce hex: {}"}}"#, e);
+            return env.new_string(error_json).unwrap().into_raw();
+        }
+    };
+    
+    match prove_identity_binding(
+        &did_bytes,
+        &wallet,
+        &client,
+        &session,
+        &payment_hash,
+        amount_sats as u64,
+        expires_at as u64,
+        &domain,
+        &nonce,
+        purpose_id as u8,
+        &root,
+    ) {
+        Ok(proof) => {
+            match serde_json::to_string(&proof) {
+                Ok(json) => env.new_string(json).unwrap().into_raw(),
+                Err(e) => {
+                    let error_json = format!(r#"{{"status":"error","error":"JSON serialization failed: {}"}}"#, e);
+                    env.new_string(error_json).unwrap().into_raw()
+                }
+            }
+        }
+        Err(e) => {
+            let error_json = format!(r#"{{"status":"error","error":"{}"}}"#, e);
+            env.new_string(error_json).unwrap().into_raw()
+        }
+    }
+}
+
+/// Generate a REAL STWO identity proof v3 (legacy, redirects to v4)
+/// For backwards compatibility - calls v4 with default client/session/purpose/root
 #[cfg(feature = "real-stwo")]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_generateRealIdentityProofV3(
@@ -609,14 +730,19 @@ pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_generateRealIden
         }
     };
     
+    // Call v4 with default values for new fields
     match prove_identity_binding(
         &did_bytes,
         &wallet,
+        "legacy_v3",  // client_id
+        "legacy_v3",  // session_id
         &payment_hash,
         amount_sats as u64,
         expires_at as u64,
         &domain,
         &nonce,
+        0,   // purpose_id = none
+        "",  // root_id = empty
     ) {
         Ok(proof) => {
             match serde_json::to_string(&proof) {
