@@ -27,36 +27,104 @@ from pydantic import BaseModel, Field
 router = APIRouter(tags=["membership"])
 
 # =============================================================================
-# Domain separators (must match Rust proof.rs and merkle_hash.rs)
+# Poseidon2 Hashing via Rust CLI
 # =============================================================================
+#
+# ⚠️  ALL HASHING USES RUST CLI (poseidon_hash) ⚠️
+# This is the SINGLE SOURCE OF TRUTH. Do not implement hashing in Python.
+#
+# The Rust binary uses Plonky3's verified Poseidon2-M31 implementation.
+# State layout: [domain, inputs..., padding...], output from position 1.
+#
+# Domain separators (defined in Rust, referenced here for documentation):
+#   LEAF: 0x4C454146  NULLIFIER: 0x4E554C4C  MERKLE: 0x4D45524B
 
-LEAF_COMMITMENT_DOMAIN = b"leaf_commit:"
-MERKLE_DOMAIN = b"merkle:"
-NULLIFIER_DOMAIN = b"nullifier:"
+import subprocess
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Path to poseidon_hash binary (built from btcdid_core)
+# In production, this should be an absolute path or in PATH
+POSEIDON_HASH_BIN = os.getenv(
+    "POSEIDON_HASH_BIN", 
+    str(Path(__file__).resolve().parents[2] / "native" / "btcdid_core" / "target" / "release" / "poseidon_hash")
+)
+
+
+def _call_poseidon_hash(args: list) -> bytes:
+    """
+    Call the poseidon_hash Rust CLI binary.
+    
+    Returns the hex-decoded output (4 bytes for M31).
+    Raises RuntimeError on failure.
+    """
+    cmd = [POSEIDON_HASH_BIN] + args
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            error_msg = result.stderr.strip() or "Unknown error"
+            raise RuntimeError(f"poseidon_hash failed: {error_msg}")
+        
+        output_hex = result.stdout.strip()
+        return bytes.fromhex(output_hex)
+        
+    except FileNotFoundError:
+        raise RuntimeError(
+            f"poseidon_hash binary not found at {POSEIDON_HASH_BIN}. "
+            "Build with: cd native/btcdid_core && cargo build --release"
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("poseidon_hash timed out")
 
 
 def compute_leaf_commitment(leaf_secret: bytes) -> bytes:
     """
-    Compute leaf commitment from secret.
+    Compute leaf commitment from secret using Poseidon2.
     
-    leaf_commitment = SHA256("leaf_commit:" || leaf_secret)
+    Calls: poseidon_hash leaf_commit <secret_hex>
     
-    This matches the Rust implementation in proof.rs.
+    Input: 32-byte secret
+    Output: 4-byte M31 commitment (zero-padded to 32 bytes for compatibility)
     """
-    return hashlib.sha256(LEAF_COMMITMENT_DOMAIN + leaf_secret).digest()
+    if len(leaf_secret) != 32:
+        raise ValueError(f"leaf_secret must be 32 bytes, got {len(leaf_secret)}")
+    
+    secret_hex = leaf_secret.hex()
+    result = _call_poseidon_hash(["leaf_commit", secret_hex])
+    
+    # Zero-pad to 32 bytes for compatibility with existing code
+    return result.ljust(32, b'\x00')
 
 
 def compute_nullifier(leaf_secret: bytes, session_id: bytes) -> bytes:
     """
-    Compute session-specific nullifier.
+    Compute session-specific nullifier using Poseidon2.
     
-    nullifier = SHA256("nullifier:" || leaf_secret || session_id)
+    Calls: poseidon_hash nullifier <secret_hex> <session_hex>
     
     Different sessions produce different nullifiers, preventing
     cross-session linkability while allowing replay detection
     within a session.
+    
+    Output: 4-byte M31 nullifier (zero-padded to 32 bytes for compatibility)
     """
-    return hashlib.sha256(NULLIFIER_DOMAIN + leaf_secret + session_id).digest()
+    if len(leaf_secret) != 32:
+        raise ValueError(f"leaf_secret must be 32 bytes, got {len(leaf_secret)}")
+    if len(session_id) != 32:
+        raise ValueError(f"session_id must be 32 bytes, got {len(session_id)}")
+    
+    secret_hex = leaf_secret.hex()
+    session_hex = session_id.hex()
+    result = _call_poseidon_hash(["nullifier", secret_hex, session_hex])
+    
+    # Zero-pad to 32 bytes for compatibility
+    return result.ljust(32, b'\x00')
 
 
 # Feature flag - admin endpoints require this
@@ -311,16 +379,23 @@ class ListEnrollmentsResponse(BaseModel):
 
 def merkle_hash_pair(left: bytes, right: bytes) -> bytes:
     """
-    Compute Merkle tree internal node hash.
+    Compute Merkle tree internal node hash using Poseidon2.
     
-    Uses SHA-256 with domain separator for Merkle tree nodes.
-    This is NOT Poseidon - we use SHA-256 consistently across
-    the entire codebase for simplicity and compatibility.
+    Calls: poseidon_hash pair <left_hex> <right_hex>
     
-    The domain separator "merkle:" ensures this hash is distinct
-    from other SHA-256 uses in the system.
+    Input: Two values (first 4 bytes of each used as M31)
+    Output: 4-byte M31 hash (zero-padded to 32 bytes)
+    
+    ⚠️  Uses Poseidon2, not SHA-256. All tree operations must use this.
     """
-    return hashlib.sha256(b"merkle:" + left + right).digest()
+    # Extract first 4 bytes as M31 values
+    left_m31 = left[:4].hex() if len(left) >= 4 else left.ljust(4, b'\x00').hex()
+    right_m31 = right[:4].hex() if len(right) >= 4 else right.ljust(4, b'\x00').hex()
+    
+    result = _call_poseidon_hash(["pair", left_m31, right_m31])
+    
+    # Zero-pad to 32 bytes for compatibility
+    return result.ljust(32, b'\x00')
 
 
 def build_merkle_tree_with_witnesses(leaves: List[bytes]) -> tuple[bytes, List[dict]]:
@@ -425,7 +500,7 @@ def do_build_tree(client_id: str, purpose: str) -> Optional[dict]:
         "purpose": purpose,
         "purpose_id": get_purpose_id(purpose),
         "root": root_hex,
-        "hash_alg": "sha256-merkle",
+        "hash_alg": "poseidon2-m31",
         "depth": len(witnesses[0]["siblings"]) if witnesses else 0,
         "leaf_count": len(leaves),
         "client_id": client_id,

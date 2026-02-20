@@ -2,12 +2,12 @@
 """
 sbm-tree: Enterprise Merkle tree builder for SignedByMe
 
-Builds a Merkle tree from leaf commitments using SHA-256.
+Builds a Merkle tree from leaf commitments using Poseidon2-M31.
 Outputs root.json (for API publish) and witnesses/*.json (per-user).
 
-IMPORTANT: This tool uses SHA-256 with "merkle:" domain separator,
-matching the Rust implementation in merkle_hash.rs and the Python
-API in membership.py.
+⚠️  ALL HASHING USES RUST CLI (poseidon_hash) ⚠️
+This ensures consistency with the Rust library and ZK circuits.
+The Rust binary uses Plonky3's verified Poseidon2-M31 implementation.
 
 Usage:
     python sbm_tree.py build --client-id acme_corp --purpose allowlist \
@@ -16,13 +16,16 @@ Usage:
 Commitments CSV format (one hex commitment per line, no header):
     0x1234...
     0x5678...
+
+Environment variables:
+    POSEIDON_HASH_BIN - Path to poseidon_hash binary (defaults to ../native/btcdid_core/target/release/poseidon_hash)
 """
 
 import argparse
 import json
 import os
 import sys
-import hashlib
+import subprocess
 from pathlib import Path
 from typing import List, Tuple
 from dataclasses import dataclass
@@ -30,47 +33,91 @@ import time
 
 # Constants matching WITNESS_SPEC.md
 TREE_DEPTH = 20
-HASH_ALG = "sha256-merkle"  # Changed from "poseidon"
-WITNESS_VERSION = 1
+HASH_ALG = "poseidon2-m31"
+WITNESS_VERSION = 2  # Bumped for Poseidon2 change
 
-# Domain separators matching Rust merkle_hash.rs
-MERKLE_DOMAIN = b"merkle:"
-LEAF_DOMAIN = b"leaf:"
+# Path to poseidon_hash binary
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_BIN_PATH = SCRIPT_DIR.parents[1] / "native" / "btcdid_core" / "target" / "release" / "poseidon_hash"
+POSEIDON_HASH_BIN = os.getenv("POSEIDON_HASH_BIN", str(DEFAULT_BIN_PATH))
+
+
+# =============================================================================
+# Poseidon2 Hashing via Rust CLI
+# =============================================================================
+
+def _call_poseidon_hash(args: list) -> bytes:
+    """
+    Call the poseidon_hash Rust CLI binary.
+    
+    Returns the hex-decoded output (4 bytes for M31).
+    Raises RuntimeError on failure.
+    """
+    cmd = [POSEIDON_HASH_BIN] + args
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            error_msg = result.stderr.strip() or "Unknown error"
+            raise RuntimeError(f"poseidon_hash failed: {error_msg}")
+        
+        output_hex = result.stdout.strip()
+        return bytes.fromhex(output_hex)
+        
+    except FileNotFoundError:
+        raise RuntimeError(
+            f"poseidon_hash binary not found at {POSEIDON_HASH_BIN}. "
+            "Build with: cd native/btcdid_core && cargo build --release"
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("poseidon_hash timed out")
 
 
 def merkle_hash_pair(left: bytes, right: bytes) -> bytes:
     """
-    Hash two children to create a parent node.
+    Hash two children to create a parent node using Poseidon2.
     
-    Uses: SHA256("merkle:" || left || right)
+    Calls: poseidon_hash pair <left_hex> <right_hex>
     
-    This matches the Rust implementation in merkle_hash.rs:
-    ```rust
-    pub fn hash_pair(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(MERKLE_DOMAIN);  // b"merkle:"
-        hasher.update(left);
-        hasher.update(right);
-        hasher.finalize().into()
-    }
-    ```
+    Input: Two values (first 4 bytes of each used as M31)
+    Output: 4-byte M31 hash (zero-padded to 32 bytes)
     """
-    return hashlib.sha256(MERKLE_DOMAIN + left + right).digest()
+    # Extract first 4 bytes as M31 values
+    left_m31 = left[:4].hex() if len(left) >= 4 else left.ljust(4, b'\x00').hex()
+    right_m31 = right[:4].hex() if len(right) >= 4 else right.ljust(4, b'\x00').hex()
+    
+    result = _call_poseidon_hash(["pair", left_m31, right_m31])
+    
+    # Zero-pad to 32 bytes for compatibility
+    return result.ljust(32, b'\x00')
 
 
-def hash_leaf(value: bytes) -> bytes:
+def compute_leaf_commitment(leaf_secret: bytes) -> bytes:
     """
-    Hash a leaf value.
+    Compute leaf commitment from secret using Poseidon2.
     
-    Uses: SHA256("leaf:" || value)
+    Calls: poseidon_hash leaf_commit <secret_hex>
+    
+    Input: 32-byte secret
+    Output: 4-byte M31 commitment (zero-padded to 32 bytes)
     """
-    return hashlib.sha256(LEAF_DOMAIN + value).digest()
+    if len(leaf_secret) != 32:
+        raise ValueError(f"leaf_secret must be 32 bytes, got {len(leaf_secret)}")
+    
+    secret_hex = leaf_secret.hex()
+    result = _call_poseidon_hash(["leaf_commit", secret_hex])
+    
+    return result.ljust(32, b'\x00')
 
 
 @dataclass
 class PathSibling:
     """A sibling in the Merkle path"""
-    hash: bytes  # 32 bytes
+    hash: bytes  # 32 bytes (M31 in first 4, rest zero)
     is_right: bool  # True if sibling is on the right
 
 
@@ -93,7 +140,7 @@ class MerklePath:
 
 
 class MerkleTree:
-    """SHA-256 Merkle tree with zero padding"""
+    """Poseidon2-M31 Merkle tree with zero padding"""
     
     def __init__(self, leaves: List[bytes], depth: int = TREE_DEPTH):
         if not leaves:
@@ -113,8 +160,10 @@ class MerkleTree:
         padded = leaves + [zero_leaf] * (target_size - len(leaves))
         
         # Build layers bottom-up
+        print(f"Building tree with {len(padded)} leaves (original: {self.original_count})...")
         self.layers = [padded]
         
+        layer_num = 0
         while len(self.layers[-1]) > 1:
             prev = self.layers[-1]
             next_layer = []
@@ -122,6 +171,9 @@ class MerkleTree:
                 h = merkle_hash_pair(prev[i], prev[i + 1])
                 next_layer.append(h)
             self.layers.append(next_layer)
+            layer_num += 1
+            if layer_num % 5 == 0:
+                print(f"  Layer {layer_num}: {len(next_layer)} nodes")
         
         self.root = self.layers[-1][0]
     
@@ -181,9 +233,33 @@ def load_commitments(filepath: str) -> List[bytes]:
     return commitments
 
 
+def check_poseidon_binary():
+    """Verify the poseidon_hash binary is available."""
+    try:
+        result = subprocess.run(
+            [POSEIDON_HASH_BIN, "help"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        # Even --help might return non-zero, just check it ran
+        return True
+    except FileNotFoundError:
+        return False
+    except Exception:
+        return False
+
+
 def build_tree(args):
     """Build Merkle tree and output root + witnesses"""
     depth = args.depth
+    
+    # Check for poseidon_hash binary
+    if not check_poseidon_binary():
+        print(f"ERROR: poseidon_hash binary not found at {POSEIDON_HASH_BIN}", file=sys.stderr)
+        print(f"       Build with: cd native/btcdid_core && cargo build --release", file=sys.stderr)
+        print(f"       Or set POSEIDON_HASH_BIN environment variable", file=sys.stderr)
+        sys.exit(1)
     
     if depth != TREE_DEPTH:
         print(f"WARNING: Using depth={depth} (production requires depth={TREE_DEPTH})", file=sys.stderr)
@@ -198,11 +274,16 @@ def build_tree(args):
         sys.exit(1)
     
     print(f"Loaded {len(commitments)} commitments")
+    print(f"Hash algorithm: {HASH_ALG} (Plonky3 verified parameters)")
     
     # Build tree
-    print(f"Building depth-{depth} Merkle tree (SHA-256 with 'merkle:' domain)...")
+    print(f"Building depth-{depth} Merkle tree...")
     tree = MerkleTree(commitments, depth=depth)
-    print(f"Root: 0x{tree.root.hex()}")
+    
+    # Display root - only first 4 bytes are meaningful (M31)
+    root_m31 = tree.root[:4].hex()
+    print(f"Root (M31): 0x{root_m31}")
+    print(f"Root (full): 0x{tree.root.hex()}")
     
     # Create output directory
     output_dir = Path(args.output)
@@ -228,6 +309,7 @@ def build_tree(args):
         "purpose": args.purpose,
         "purpose_id": purpose_id,
         "root": "0x" + tree.root.hex(),
+        "root_m31": "0x" + root_m31,  # Explicit M31 value
         "hash_alg": HASH_ALG,
         "depth": depth,
         "not_before": now,
@@ -250,6 +332,8 @@ def build_tree(args):
         computed_root = path.compute_root(commitment)
         if computed_root != tree.root:
             print(f"ERROR: Path verification failed for leaf {i}!", file=sys.stderr)
+            print(f"  Expected: 0x{tree.root.hex()}", file=sys.stderr)
+            print(f"  Computed: 0x{computed_root.hex()}", file=sys.stderr)
             sys.exit(1)
         
         witness = {
@@ -263,19 +347,23 @@ def build_tree(args):
             "expires_at": root_json["expires_at"],
             # Note: leaf_index intentionally omitted (privacy)
             "siblings": ["0x" + s.hash.hex() for s in path.siblings],
+            "siblings_m31": ["0x" + s.hash[:4].hex() for s in path.siblings],  # Explicit M31
             "path_bits": [1 if s.is_right else 0 for s in path.siblings]
         }
         
         witness_path = witnesses_dir / f"witness_{i:06d}.json"
         with open(witness_path, 'w') as f:
             json.dump(witness, f, indent=2)
+        
+        if (i + 1) % 100 == 0:
+            print(f"  Generated {i + 1}/{len(commitments)} witnesses")
     
     print(f"Wrote {len(commitments)} witnesses to {witnesses_dir}/")
     
     # Summary
     print("\n=== Summary ===")
     print(f"Root ID: {root_id}")
-    print(f"Root: 0x{tree.root.hex()}")
+    print(f"Root (M31): 0x{root_m31}")
     print(f"Hash Algorithm: {HASH_ALG}")
     print(f"Members: {len(commitments)}")
     print(f"Depth: {depth}")
@@ -288,6 +376,11 @@ def build_tree(args):
 
 def verify_witness(args):
     """Verify a witness against a root"""
+    # Check for poseidon_hash binary
+    if not check_poseidon_binary():
+        print(f"ERROR: poseidon_hash binary not found at {POSEIDON_HASH_BIN}", file=sys.stderr)
+        sys.exit(1)
+    
     with open(args.witness, 'r') as f:
         witness = json.load(f)
     
@@ -307,22 +400,25 @@ def verify_witness(args):
     computed_root = path.compute_root(commitment)
     
     print(f"Commitment: {args.commitment}")
-    print(f"Hash Algorithm: {witness.get('hash_alg', 'sha256-merkle')}")
-    print(f"Computed root: 0x{computed_root.hex()}")
+    print(f"Hash Algorithm: {witness.get('hash_alg', HASH_ALG)}")
+    print(f"Computed root (M31): 0x{computed_root[:4].hex()}")
+    print(f"Computed root (full): 0x{computed_root.hex()}")
     
     if args.root:
         expected = parse_hex_commitment(args.root)
-        if computed_root == expected:
-            print("✓ Verification PASSED")
+        # Compare only first 4 bytes (M31) for meaningful comparison
+        if computed_root[:4] == expected[:4]:
+            print("✓ Verification PASSED (M31 match)")
         else:
             print(f"✗ Verification FAILED")
-            print(f"  Expected: {args.root}")
+            print(f"  Expected (M31): 0x{expected[:4].hex()}")
+            print(f"  Computed (M31): 0x{computed_root[:4].hex()}")
             sys.exit(1)
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="sbm-tree: Enterprise Merkle tree builder for SignedByMe"
+        description="sbm-tree: Enterprise Merkle tree builder for SignedByMe (Poseidon2-M31)"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     
