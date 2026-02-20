@@ -1,16 +1,17 @@
 //! Merkle membership proofs for SignedByMe
 //!
 //! This module provides:
-//! - V4 binding hash computation (must match Python exactly)
-//! - SHA-256 based Merkle tree hashing (consistent across all platforms)
+//! - V4 binding hash computation (SHA-256, must match Python exactly)
+//! - Poseidon2-M31 for ZK-internal operations (leaf commitment, nullifier, Merkle tree)
 //! - Merkle tree construction and path verification
 //! - Membership proof generation and verification
 //!
-//! IMPORTANT: We use SHA-256 (not Poseidon) for Merkle trees.
-//! This ensures consistency between:
-//! - Rust native library
-//! - Python API server
-//! - Verifier binary
+//! HASH FUNCTION STRATEGY:
+//! - SHA-256: External interfaces (binding hash, API communication)
+//! - Poseidon2-M31: ZK-internal operations (inside STWO circuit)
+//!
+//! This hybrid approach is standard (used by Starknet, zkSync, Polygon Miden).
+//! Python calls Rust CLI for Poseidon hashing (single source of truth).
 //!
 //! Privacy guarantees:
 //! - Unlinkability: Same user proving to different employers cannot be correlated
@@ -18,14 +19,21 @@
 //! - No correlators: leaf_commitment never exposed
 
 pub mod binding;
-pub mod merkle_hash;  // SHA-256 based Merkle hashing
-pub mod poseidon;     // Legacy - kept for backwards compat, use merkle_hash instead
+pub mod merkle_hash;     // SHA-256 based (for non-ZK tree operations)
+pub mod poseidon2_m31;   // Poseidon2 over M31 - ZK-friendly (Plonky3 parameters)
+pub mod poseidon;        // Legacy - kept for backwards compat
 pub mod merkle;
 pub mod proof;
 pub mod jni;
 
 pub use binding::{compute_binding_hash_v4, hash_field, SCHEMA_VERSION_V4, DOMAIN_SEPARATOR_V4};
 pub use merkle_hash::{hash_pair as merkle_hash_pair, hash_leaf, verify_proof as verify_merkle_proof, build_tree};
+pub use poseidon2_m31::{
+    M31, Poseidon2Params, LeafSecret, SessionId,
+    poseidon2_hash_pair, compute_leaf_commitment, compute_nullifier,
+    verify_merkle_proof as verify_poseidon_merkle_proof,
+    build_merkle_tree as build_poseidon_merkle_tree,
+};
 pub use poseidon::{poseidon_hash_pair, poseidon_hash_bytes, PoseidonHasher, FieldElement};  // Legacy
 pub use merkle::{MerkleTree, MerklePath, PathSibling, verify_merkle_path};
 pub use proof::{MembershipProof, MembershipPublicInputs, MembershipWitness, prove_membership, verify_membership};

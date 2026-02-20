@@ -19,6 +19,10 @@ path = "src/bin/membership_verifier.rs"
 name = "sbm_tree"
 path = "src/bin/sbm_tree.rs"
 
+[[bin]]
+name = "poseidon_hash"
+path = "src/bin/poseidon_hash.rs"
+
 [dependencies]
 # CLI argument parsing
 clap = { version = "4.4", features = ["derive"] }
@@ -60,6 +64,9 @@ serde_json = "1.0"
 [features]
 default = []
 real-stwo = ["stwo", "stwo-constraint-framework", "itertools", "num-traits", "tracing", "bincode"]
+
+[dev-dependencies]
+rand = "0.8"
 
 [profile.release]
 opt-level = "z"

@@ -309,6 +309,7 @@ dependencies = [
  "k256",
  "lightning-invoice",
  "num-traits",
+ "rand",
  "rand_core",
  "secp256k1 0.28.2",
  "serde",
