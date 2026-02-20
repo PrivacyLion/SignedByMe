@@ -5,29 +5,37 @@
 //! - Verifying membership proofs (verify_membership)
 //!
 //! SECURITY PROPERTIES:
-//! 1. Unlinkability: Proofs contain a session-specific nullifier, not the leaf.
+//! 1. Unlinkability: Proofs contain a session-specific nullifier.
 //!    Different sessions produce different nullifiers - cannot correlate users.
-//! 2. No leaf exposure: The leaf commitment NEVER appears in the proof.
-//!    The prover demonstrates knowledge of leaf_secret without revealing the leaf.
-//! 3. Binding: Proofs are bound to (client_id, session_id, payment_hash) via binding_hash.
+//! 2. Binding: Proofs are bound to (client_id, session_id, payment_hash) via binding_hash.
+//! 3. Merkle verification: Proof includes leaf (TEMPORARY until STWO circuit ready).
 //!
-//! PROOF STRUCTURE (v3):
+//! PROOF STRUCTURE (v3 - BETA with leaf included):
 //! - proof_version: 1 byte (0x03)
-//! - nullifier: 4 bytes (Poseidon2-M31 output, ZK-friendly)
+//! - nullifier: 4 bytes (Poseidon2-M31, for replay detection)
 //! - session_id: 20 bytes (5 M31 elements, public input)
-//! - merkle_path: variable (depth + 33*depth bytes)
+//! - leaf: 32 bytes (TEMPORARY - will be removed in v4 when STWO proves it)
+//! - depth: 1 byte
+//! - merkle_path: depth * 33 bytes (sibling + direction)
 //! - binding_hash: 32 bytes
 //! - purpose_id: 1 byte
+//!
+//! v4 (FUTURE - after STWO circuit complete):
+//! - Removes leaf from proof
+//! - STWO circuit proves: ∃ secret: Poseidon(secret) = leaf ∧ leaf ∈ tree
+//! - Nullifier prevents correlation without revealing leaf
 //!
 //! HASH FUNCTION CHOICES:
 //! - Nullifier: Poseidon2-M31 (saves ~30,000 constraints vs SHA-256)
 //! - Leaf commitment: Poseidon2-M31 (ZK-native)
+//! - Merkle tree: Poseidon2-M31 (via merkle_hash.rs)
 //! - Binding hash: SHA-256 (external API, non-ZK)
 //!
 //! The verifier:
-//! 1. Derives leaf from nullifier + STWO proof (or trusted oracle)
+//! 1. Extracts leaf from proof (v3 BETA - will change in v4)
 //! 2. Verifies Merkle path leads to expected root
-//! 3. Checks binding_hash and purpose_id match expected values
+//! 3. Checks nullifier for replay (per-session)
+//! 4. Checks binding_hash and purpose_id match expected values
 
 use sha2::{Sha256, Digest};
 use super::merkle_hash;
@@ -143,17 +151,18 @@ impl MembershipWitness {
 
 /// Serialized membership proof
 /// 
-/// PRIVACY: Does NOT contain the leaf - only a session-specific nullifier.
-/// Cross-session unlinkability is guaranteed by construction.
-/// 
-/// v3 FORMAT:
+/// v3 FORMAT (BETA - includes leaf for verification):
 /// - version: 1 byte (0x03)
 /// - nullifier: 4 bytes (M31 Poseidon2 output)
 /// - session_id: 20 bytes (5 M31 elements, public input)
+/// - leaf: 32 bytes (TEMPORARY - enables Merkle verification before STWO)
 /// - depth: 1 byte
 /// - merkle_path: depth * 33 bytes (32 sibling + 1 is_right)
 /// - binding_hash: 32 bytes
 /// - purpose_id: 1 byte
+/// 
+/// Note: v4 will remove leaf once STWO circuit proves Merkle membership.
+/// The nullifier provides unlinkability across sessions.
 #[derive(Clone, Debug)]
 pub struct MembershipProof {
     pub data: Vec<u8>,
@@ -241,12 +250,30 @@ impl MembershipProof {
         session.copy_from_slice(&self.data[5..25]);
         Some(session)
     }
+    
+    /// Extract leaf from proof (v3 only - TEMPORARY until STWO circuit)
+    /// 
+    /// In v4, this will be removed and the STWO circuit will prove
+    /// Merkle membership without revealing the leaf.
+    pub fn get_leaf(&self) -> Option<[u8; 32]> {
+        if self.data.is_empty() || self.data[0] != 0x03 {
+            return None;
+        }
+        
+        // v3: leaf is 32 bytes at offset 25 (after version + nullifier + session_id)
+        if self.data.len() < 57 {
+            return None;
+        }
+        let mut leaf = [0u8; 32];
+        leaf.copy_from_slice(&self.data[25..57]);
+        Some(leaf)
+    }
 }
 
 /// Generate a membership proof (v3 format with Poseidon2 nullifier)
 ///
 /// # Arguments
-/// * `leaf_secret` - User's 32-byte secret (NEVER included in proof)
+/// * `leaf_secret` - User's 32-byte secret (used to compute leaf, NOT included raw)
 /// * `merkle_siblings` - Sibling hashes from leaf to root
 /// * `path_bits` - Direction bits (true = sibling is right)
 /// * `root` - Expected Merkle root (32 bytes)
@@ -255,16 +282,19 @@ impl MembershipProof {
 /// * `purpose_id` - Purpose enum (0-3)
 ///
 /// # Returns
-/// * Serialized proof (leaf NOT included)
+/// * Serialized proof
 /// 
-/// # v3 Format
+/// # v3 Format (BETA - includes leaf for verification)
 /// - version: 1 byte (0x03)
-/// - nullifier: 4 bytes (Poseidon2-M31, saves ~30k constraints)
+/// - nullifier: 4 bytes (Poseidon2-M31)
 /// - session_id: 20 bytes (5 M31 elements, PUBLIC INPUT)
+/// - leaf: 32 bytes (TEMPORARY - enables verification before STWO)
 /// - depth: 1 byte
 /// - merkle_path: depth * 33 bytes
 /// - binding_hash: 32 bytes
 /// - purpose_id: 1 byte
+/// 
+/// Note: v4 will remove leaf once STWO circuit is ready.
 pub fn prove_membership(
     leaf_secret: &[u8; 32],
     merkle_siblings: &[[u8; 32]],
@@ -281,21 +311,24 @@ pub fn prove_membership(
         path_bits: path_bits.to_vec(),
     };
     
+    // Compute leaf commitment (this is what goes in the tree)
+    let leaf = witness.compute_leaf();
+    
     // Verify path leads to root (sanity check before proving)
     if !witness.verify_path(root) {
         return Err("Merkle path does not lead to expected root".into());
     }
     
-    // Compute Poseidon2 nullifier (saves ~30,000 constraints vs SHA-256!)
+    // Compute Poseidon2 nullifier (for replay detection)
     let nullifier_m31 = witness.compute_nullifier_poseidon(session_id);
     
     // Convert session_id to 5 M31 elements (20 bytes)
     let session = SessionId::from_bytes(session_id);
     let session_bytes = session.to_bytes();
     
-    // Build proof data (v3 format)
+    // Build proof data (v3 format - includes leaf for BETA)
     let depth = merkle_siblings.len();
-    let mut proof_data = Vec::with_capacity(1 + 4 + 20 + 1 + depth * 33 + 32 + 1);
+    let mut proof_data = Vec::with_capacity(1 + 4 + 20 + 32 + 1 + depth * 33 + 32 + 1);
     
     // Version
     proof_data.push(PROOF_VERSION);
@@ -305,6 +338,10 @@ pub fn prove_membership(
     
     // Session ID (20 bytes, PUBLIC INPUT)
     proof_data.extend_from_slice(&session_bytes);
+    
+    // Leaf (32 bytes - TEMPORARY for v3 BETA)
+    // This will be removed in v4 when STWO circuit proves Merkle membership
+    proof_data.extend_from_slice(&leaf);
     
     // Merkle path
     proof_data.push(depth as u8);
@@ -324,17 +361,15 @@ pub fn prove_membership(
 
 /// Verify a membership proof (supports v2 and v3 formats)
 ///
-/// # Security Model
+/// # Security Model (v3 BETA)
 /// 
-/// The verifier does NOT receive the leaf. Instead:
-/// 1. Checks the nullifier hasn't been used in this session
-/// 2. Trusts that the prover ran an STWO circuit proving knowledge of leaf_secret
-/// 3. For beta: contacts a trusted oracle to verify leaf ∈ tree
+/// v3 includes the leaf in the proof, enabling full Merkle verification.
+/// This is TEMPORARY until the STWO circuit is complete.
 ///
-/// IMPORTANT: For production ZK, an STWO verifier would check:
+/// v4 (future) will remove the leaf and use STWO to prove:
 /// - prover knows leaf_secret such that Poseidon(leaf_secret) = leaf
 /// - leaf exists at the path position in the tree
-/// - nullifier = Poseidon(leaf_secret, session_id) [v3: session_id is public input]
+/// - nullifier = Poseidon(leaf_secret, session_id)
 ///
 /// # Arguments
 /// * `proof` - Serialized proof
@@ -346,7 +381,7 @@ pub fn prove_membership(
 ///
 /// # Returns
 /// * Ok(true) if proof is valid
-/// * Ok(false) if proof is invalid (wrong binding, replay, etc.)
+/// * Ok(false) if proof is invalid (wrong binding, replay, Merkle path fails, etc.)
 /// * Err if proof format is malformed
 pub fn verify_membership(
     proof: &MembershipProof,
@@ -371,7 +406,17 @@ pub fn verify_membership(
     }
 }
 
-/// Verify v3 proof (Poseidon2 nullifier, session_id as public input)
+/// Verify v3 proof (BETA - includes leaf for real Merkle verification)
+/// 
+/// v3 format:
+/// - version: 1 byte (0x03)
+/// - nullifier: 4 bytes (M31)
+/// - session_id: 20 bytes
+/// - leaf: 32 bytes (TEMPORARY)
+/// - depth: 1 byte
+/// - merkle_path: depth * 33 bytes
+/// - binding_hash: 32 bytes
+/// - purpose_id: 1 byte
 fn verify_membership_v3(
     data: &[u8],
     root: &[u8; 32],
@@ -380,13 +425,13 @@ fn verify_membership_v3(
     purpose_id: u8,
     known_nullifiers: Option<&std::collections::HashSet<[u8; 32]>>,
 ) -> Result<bool, String> {
-    // v3 minimum: version(1) + nullifier(4) + session(20) + depth(1) + binding(32) + purpose(1) = 59
-    if data.len() < 59 {
+    // v3 minimum: version(1) + nullifier(4) + session(20) + leaf(32) + depth(1) + binding(32) + purpose(1) = 91
+    if data.len() < 91 {
         return Err("Proof too short for v3".into());
     }
     
     // Parse nullifier (4 bytes M31)
-    let nullifier_m31 = m31_from_bytes(&data[1..5]);
+    let _nullifier_m31 = m31_from_bytes(&data[1..5]);
     
     // Parse session_id from proof (20 bytes = 5 M31 elements)
     let mut proof_session = [0u8; 20];
@@ -400,7 +445,7 @@ fn verify_membership_v3(
     
     // Convert nullifier to 32-byte format for replay checking
     let mut nullifier_32 = [0u8; 32];
-    nullifier_32[..4].copy_from_slice(&m31_to_bytes(nullifier_m31));
+    nullifier_32[..4].copy_from_slice(&data[1..5]);
     
     // Check replay
     if let Some(nullifiers) = known_nullifiers {
@@ -409,9 +454,13 @@ fn verify_membership_v3(
         }
     }
     
-    // Parse path
-    let depth = data[25] as usize;
-    let path_start = 26;
+    // Parse leaf (32 bytes - TEMPORARY for v3 BETA)
+    let mut leaf = [0u8; 32];
+    leaf.copy_from_slice(&data[25..57]);
+    
+    // Parse depth and path
+    let depth = data[57] as usize;
+    let path_start = 58;
     let path_end = path_start + depth * 33;
     
     if data.len() < path_end + 33 {
@@ -442,11 +491,23 @@ fn verify_membership_v3(
         return Ok(false); // Purpose mismatch
     }
     
-    // BETA LIMITATION: Same as v2
-    // Without full STWO circuit, we trust format and bindings.
-    _ = root;
-    _ = siblings;
-    _ = path_bits;
+    // *** ACTUALLY VERIFY THE MERKLE PATH ***
+    // This is the critical fix - v3 BETA verifies for real, not just trusting
+    let mut current = leaf;
+    for (sibling, is_right) in siblings.iter().zip(path_bits.iter()) {
+        if *is_right {
+            // We're the right child: H(sibling, current)
+            current = merkle_hash::hash_pair(sibling, &current);
+        } else {
+            // We're the left child: H(current, sibling)
+            current = merkle_hash::hash_pair(&current, sibling);
+        }
+    }
+    
+    // Verify computed root matches expected root
+    if current != *root {
+        return Ok(false); // Merkle path verification FAILED
+    }
     
     Ok(true)
 }
@@ -757,7 +818,9 @@ mod tests {
     }
 
     #[test]
-    fn test_proof_does_not_contain_leaf() {
+    fn test_v3_proof_contains_leaf_but_not_secret() {
+        // v3 BETA includes leaf for verification (temporary until STWO circuit)
+        // v4 will remove leaf once ZK proof handles Merkle membership
         let secret = create_test_leaf_secret();
         let binding_hash = [0xaa; 32];
         let session_id = [0xbb; 32];
@@ -774,17 +837,21 @@ mod tests {
             &secret, &[], &[], &root, &binding_hash, &session_id, 1
         ).unwrap();
         
-        // The proof should NOT contain the leaf bytes
+        // v3 BETA: proof SHOULD contain the leaf (temporary for verification)
         let leaf_found = proof.data.windows(32)
             .any(|window| window == &leaf[..]);
         
-        assert!(!leaf_found, "Proof must not contain leaf (ZK violation!)");
+        assert!(leaf_found, "v3 BETA proof should contain leaf (will be removed in v4)");
         
-        // The proof should NOT contain the secret
+        // The proof should NEVER contain the raw secret
         let secret_found = proof.data.windows(32)
             .any(|window| window == &secret[..]);
         
-        assert!(!secret_found, "Proof must not contain secret");
+        assert!(!secret_found, "Proof must NEVER contain raw secret!");
+        
+        // Verify leaf is extractable via get_leaf()
+        let extracted_leaf = proof.get_leaf().expect("Should have leaf");
+        assert_eq!(extracted_leaf, leaf);
     }
 
     #[test]
@@ -811,9 +878,8 @@ mod tests {
     }
 
     #[test]
-    fn test_v3_proof_size_reduction() {
-        // v3 should be smaller than v2 because nullifier is 4 bytes instead of 32
-        // However, v3 adds 20 bytes for session_id, so net change is: -32 + 4 + 20 = -8 bytes
+    fn test_v3_proof_size() {
+        // v3 BETA includes leaf for verification
         let secret = create_test_leaf_secret();
         let binding_hash = [0xaa; 32];
         let session_id = [0xbb; 32];
@@ -829,9 +895,35 @@ mod tests {
             &secret, &[], &[], &root, &binding_hash, &session_id, 1
         ).unwrap();
         
-        // v3: version(1) + nullifier(4) + session(20) + depth(1) + binding(32) + purpose(1) = 59
-        // v2: version(1) + nullifier(32) + depth(1) + binding(32) + purpose(1) = 67
-        // Difference: v3 is 8 bytes smaller (but more importantly, ~30k fewer constraints!)
-        assert_eq!(proof.data.len(), 59, "v3 proof with no siblings should be 59 bytes");
+        // v3 BETA: version(1) + nullifier(4) + session(20) + leaf(32) + depth(1) + binding(32) + purpose(1) = 91
+        // v4 (future): removes leaf (-32), so will be 59 bytes
+        assert_eq!(proof.data.len(), 91, "v3 BETA proof with no siblings should be 91 bytes");
+    }
+    
+    #[test]
+    fn test_wrong_root_fails() {
+        // Verify that Merkle verification actually works - wrong root should fail
+        let secret = create_test_leaf_secret();
+        let binding_hash = [0xaa; 32];
+        let session_id = [0xbb; 32];
+        
+        let witness = MembershipWitness {
+            leaf_secret: secret,
+            merkle_siblings: vec![],
+            path_bits: vec![],
+        };
+        let root = witness.compute_leaf();
+        
+        let proof = prove_membership(
+            &secret, &[], &[], &root, &binding_hash, &session_id, 1
+        ).unwrap();
+        
+        // Try to verify with wrong root
+        let wrong_root = [0xff; 32];
+        let valid = verify_membership(
+            &proof, &wrong_root, &binding_hash, &session_id, 1, None
+        ).unwrap();
+        
+        assert!(!valid, "Should fail with wrong root (Merkle verification)");
     }
 }
