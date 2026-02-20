@@ -76,8 +76,6 @@ use p3_field::{PrimeField32, PrimeCharacteristicRing};
 use p3_mersenne_31::Mersenne31;
 use p3_poseidon2::Poseidon2;
 use p3_symmetric::Permutation;
-use rand::SeedableRng;
-use rand_xoshiro::Xoroshiro128Plus;
 
 // Re-export M31 type for external use
 pub use p3_mersenne_31::Mersenne31 as M31;
@@ -180,9 +178,10 @@ impl Default for Poseidon2Hasher {
 
 impl Poseidon2Hasher {
     /// Create hasher with Plonky3's verified round constants
-    /// Uses Xoroshiro128Plus with seed 1 (matches Plonky3 test vectors)
+    /// Uses SmallRng with seed 1 (deterministic, matches test expectations)
     pub fn new() -> Self {
-        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
+        use rand_p3::SeedableRng;
+        let mut rng = rand_p3::rngs::SmallRng::seed_from_u64(1);
         let permutation = Poseidon2M31::new_from_rng_128(&mut rng);
         Self { permutation }
     }

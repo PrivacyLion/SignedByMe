@@ -69,8 +69,8 @@ p3-poseidon2 = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
 p3-symmetric = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
 
 # PRNG for Poseidon2 round constant generation (matches Plonky3 0.4.2+)
-rand = "0.9"
-rand_xoshiro = "0.7"
+# p3 uses rand 0.10 / rand_core 0.10
+rand_p3 = { package = "rand", version = "0.10", features = ["small_rng"] }
 
 [features]
 default = []
