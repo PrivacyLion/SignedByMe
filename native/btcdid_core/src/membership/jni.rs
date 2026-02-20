@@ -39,6 +39,26 @@ pub extern "system" fn Java_com_privacylion_btcdid_NativeBridge_proveMembership<
     purpose_id: jint,
 ) -> jbyteArray {
     let result = (|| -> Result<Vec<u8>, String> {
+        // Null checks for all parameters (JNI can pass null from Kotlin)
+        if leaf_secret.is_null() {
+            return Err("leaf_secret is null".into());
+        }
+        if merkle_siblings.is_null() {
+            return Err("merkle_siblings is null".into());
+        }
+        if path_bits.is_null() {
+            return Err("path_bits is null".into());
+        }
+        if root.is_null() {
+            return Err("root is null".into());
+        }
+        if binding_hash.is_null() {
+            return Err("binding_hash is null".into());
+        }
+        if session_id.is_null() {
+            return Err("session_id is null".into());
+        }
+        
         // Parse leaf_secret
         let leaf_secret_vec = env.convert_byte_array(&leaf_secret)
             .map_err(|e| e.to_string())?;
