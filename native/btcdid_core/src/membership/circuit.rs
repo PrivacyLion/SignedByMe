@@ -1622,7 +1622,7 @@ mod tests {
         // =========================================================================
         // Need log_blowup_factor >= 2 for degree-3 constraints (x² * x² * x)
         // Default is 1 (blowup=2), we need 2 (blowup=4) for eval domain = 256*4 = 1024
-        use stwo::core::pcs::FriConfig;
+        use stwo::core::fri::FriConfig;
         let config = PcsConfig {
             pow_bits: 10,
             fri_config: FriConfig {
