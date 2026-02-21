@@ -1620,7 +1620,17 @@ mod tests {
         // =========================================================================
         // Step 3: Setup STWO prover
         // =========================================================================
-        let config = PcsConfig::default();
+        // Need log_blowup_factor >= 2 for degree-3 constraints (x² * x² * x)
+        // Default is 1 (blowup=2), we need 2 (blowup=4) for eval domain = 256*4 = 1024
+        use stwo::core::pcs::FriConfig;
+        let config = PcsConfig {
+            pow_bits: 10,
+            fri_config: FriConfig {
+                log_blowup_factor: 2,  // blowup = 4 (was 1 = blowup 2)
+                log_last_layer_degree_bound: 0,
+                n_queries: 3,
+            },
+        };
         
         let twiddles = CpuBackend::precompute_twiddles(
             CanonicCoset::new(LOG_N_ROWS + 1 + config.fri_config.log_blowup_factor)
