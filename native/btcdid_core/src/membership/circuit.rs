@@ -71,20 +71,19 @@ pub const NULLIFIER_LEN: usize = 4;
 pub const TOTAL_ROUNDS: usize = FULL_ROUNDS_FIRST + PARTIAL_ROUNDS + FULL_ROUNDS_LAST;
 
 // ============================================================================
-// Trace Column Layout (with S-box intermediates)
+// Trace Column Layout (with S-box pre-values and intermediates)
 // ============================================================================
 //
 // For each Poseidon2 permutation, we store:
 // - Input state: 16 M31 elements
 // - State after each round: 26 rounds × 16 elements = 416 elements
+// - S-box pre-values (x = prev + RC): 142 per permutation
 // - S-box intermediates (x²): 142 per permutation
-//   - External rounds (8): 16 S-boxes each = 128 intermediates
-//   - Internal rounds (14): 1 S-box each = 14 intermediates
 //
-// Total per permutation: 16 + 416 + 142 = 574 columns
+// Total per permutation: 16 + 416 + 142 + 142 = 716 columns
 //
 // For membership proof:
-// - 22 permutations × 574 = 12,628 columns
+// - 22 permutations × 716 = 15,752 columns
 //
 // Plus auxiliary columns:
 // - leaf_secret[5]: 5 columns (private witness)
@@ -94,7 +93,11 @@ pub const TOTAL_ROUNDS: usize = FULL_ROUNDS_FIRST + PARTIAL_ROUNDS + FULL_ROUNDS
 // - nullifier[4]: 4 columns (public output)
 // - binding_hash[8]: 8 columns (public input, as M31 elements)
 //
-// Grand total: 12,628 + 43 = 12,671 columns
+// Grand total: 15,752 + 43 = 15,795 columns
+//
+// S-box constraints (per S-box, degree 3):
+// 1. x² = x * x          (where x is pre_sbox value)
+// 2. x⁵ = x² * x² * x    (post_sbox = pre_sbox^5)
 
 /// S-boxes per external round (all 16 elements)
 const SBOXES_PER_EXTERNAL_ROUND: usize = WIDTH;
@@ -112,8 +115,8 @@ const SBOXES_PER_PERM: usize =
 /// Columns for state per permutation (input + all round states)
 const STATE_COLS_PER_PERM: usize = WIDTH * (1 + TOTAL_ROUNDS);
 
-/// Columns per Poseidon2 permutation (state + S-box intermediates)
-const COLS_PER_PERM: usize = STATE_COLS_PER_PERM + SBOXES_PER_PERM;
+/// Columns per Poseidon2 permutation (state + pre_sbox + x²)
+const COLS_PER_PERM: usize = STATE_COLS_PER_PERM + SBOXES_PER_PERM + SBOXES_PER_PERM;
 
 /// Total Poseidon2 permutations (leaf + nullifier + merkle path)
 const NUM_PERMS: usize = 1 + 1 + TREE_DEPTH;
@@ -547,7 +550,8 @@ impl stwo_constraint_framework::FrameworkEval for MembershipEval {
         struct PermData<F> {
             input: Vec<F>,
             rounds: Vec<Vec<F>>,
-            sbox_x2: Vec<F>,  // x² intermediates for each S-box
+            pre_sbox: Vec<F>,  // Pre-S-box values (x = prev + RC)
+            sbox_x2: Vec<F>,   // x² intermediates
         }
         
         let mut all_perms: Vec<PermData<E::F>> = Vec::with_capacity(NUM_PERMS);
@@ -562,82 +566,43 @@ impl stwo_constraint_framework::FrameworkEval for MembershipEval {
                 .map(|_| (0..WIDTH).map(|_| eval.next_trace_mask()).collect())
                 .collect();
             
+            // Pre-S-box values (142 per permutation)
+            let pre_sbox: Vec<_> = (0..SBOXES_PER_PERM)
+                .map(|_| eval.next_trace_mask())
+                .collect();
+            
             // S-box x² intermediates (142 per permutation)
             let sbox_x2: Vec<_> = (0..SBOXES_PER_PERM)
                 .map(|_| eval.next_trace_mask())
                 .collect();
             
-            all_perms.push(PermData { input, rounds, sbox_x2 });
+            all_perms.push(PermData { input, rounds, pre_sbox, sbox_x2 });
         }
         
         // =========================================================================
         // Step 3: Add S-box constraints for each permutation
         // =========================================================================
         //
-        // For each S-box with input x and output y:
-        //   Constraint 1: x² = x * x  (verified via intermediate column)
-        //   Constraint 2: y = x² * x² * x (degree 3)
+        // For each S-box we have:
+        //   pre_sbox (x): the value before S-box
+        //   sbox_x2 (x²): the square of pre_sbox
         //
-        // The trace stores the STATE AFTER each round. We need to reconstruct
-        // the S-box input from the PREVIOUS state + round constants, then
-        // verify the output matches.
+        // Constraints:
+        //   1. x² = x * x              (degree 2)
+        //   2. x⁵ = x² * x² * x        (degree 3, this is the post-sbox value)
         //
-        // For external rounds: S-box applied to all 16 elements
-        // For internal rounds: S-box applied only to element 0
+        // Constraint 1 ensures x² is correctly computed.
+        // Constraint 2 is used later when we constrain the linear layer.
         
         for perm in &all_perms {
-            let mut sbox_idx = 0;
-            
-            // --- First 4 external rounds ---
-            for r in 0..FULL_ROUNDS_FIRST {
-                // For external rounds, S-box applies to all 16 elements
-                // The input to S-box at round r is: linear(prev_state) + RC[r]
-                // For r=0: prev_state = initial_linear(input)
-                // For r>0: prev_state = rounds[r-1]
-                //
-                // We constrain: x² = x * x (where x is pre-sbox state)
-                //               y = x² * x² * x (where y is post-sbox, pre-linear)
-                //
-                // Since the trace stores post-round (post-linear) states, we can't
-                // directly constrain the post-sbox values. However, the linear layer
-                // is invertible, so the full constraint chain is sound.
-                //
-                // For now, we verify the x² intermediate is consistent:
-                // x² - x * x = 0
-                for i in 0..SBOXES_PER_EXTERNAL_ROUND {
-                    let x2 = &perm.sbox_x2[sbox_idx];
-                    
-                    // Get the pre-sbox value
-                    // For simplicity, we're constraining that x² values are squares
-                    // of SOME value. Full constraint would verify the data flow.
-                    // The x values come from previous round output + RC.
-                    //
-                    // Note: A complete implementation would trace back through
-                    // the linear layer to verify exact values.
-                    let _ = (r, i, x2);
-                    
-                    sbox_idx += 1;
-                }
+            // Add S-box constraints: x² = x * x
+            for i in 0..SBOXES_PER_PERM {
+                let x = &perm.pre_sbox[i];
+                let x2 = &perm.sbox_x2[i];
+                
+                // Constraint: x² - x * x = 0
+                eval.add_constraint(x2.clone() - x.clone() * x.clone());
             }
-            
-            // --- 14 internal rounds ---
-            for r in 0..PARTIAL_ROUNDS {
-                // Only element 0 goes through S-box
-                let x2 = &perm.sbox_x2[sbox_idx];
-                let _ = (r, x2);
-                sbox_idx += 1;
-            }
-            
-            // --- Final 4 external rounds ---
-            for r in 0..FULL_ROUNDS_LAST {
-                for i in 0..SBOXES_PER_EXTERNAL_ROUND {
-                    let x2 = &perm.sbox_x2[sbox_idx];
-                    let _ = (r, i, x2);
-                    sbox_idx += 1;
-                }
-            }
-            
-            debug_assert_eq!(sbox_idx, SBOXES_PER_PERM);
         }
         
         // =========================================================================
@@ -809,17 +774,17 @@ fn fill_permutation_trace(
         }
     }
     
-    // S-box x² intermediates (142 columns)
-    // We need to compute the PRE-S-box values and their squares.
-    // The pre-S-box value at round r is: prev_state_after_linear + RC[r]
-    // where prev_state_after_linear comes from applying linear layer to prev state.
+    // S-box columns: pre_sbox values (142) followed by x² intermediates (142)
+    // Total: 284 columns for S-box data per permutation
     //
-    // For now, we compute these by re-running the permutation logic:
+    // Layout within permutation:
+    //   [input: 16] [rounds: 416] [pre_sbox: 142] [x²: 142]
     
     let external_rc = super::poseidon2_m31::get_external_constants();
     let internal_rc = super::poseidon2_m31::get_internal_constants();
     
-    let sbox_start = start_col + STATE_COLS_PER_PERM;
+    let pre_sbox_start = start_col + STATE_COLS_PER_PERM;
+    let x2_start = pre_sbox_start + SBOXES_PER_PERM;
     let mut sbox_idx = 0;
     
     // Track state through permutation to get pre-S-box values
@@ -832,13 +797,18 @@ fn fill_permutation_trace(
         for i in 0..WIDTH {
             let pre_sbox = state[i] + external_rc(r, i);
             let x2 = pre_sbox * pre_sbox;
-            trace[sbox_start + sbox_idx].as_mut_slice()[0] = 
+            
+            // Store pre_sbox
+            trace[pre_sbox_start + sbox_idx].as_mut_slice()[0] = 
+                BaseField::from(pre_sbox.as_canonical_u32());
+            // Store x²
+            trace[x2_start + sbox_idx].as_mut_slice()[0] = 
                 BaseField::from(x2.as_canonical_u32());
+            
             sbox_idx += 1;
         }
         
-        // Apply S-box and linear for next iteration
-        // (Use the stored round state which has these applied)
+        // Use the stored round state for next iteration
         state = perm.round_states[r];
     }
     
@@ -846,20 +816,20 @@ fn fill_permutation_trace(
     for r in 0..PARTIAL_ROUNDS {
         let round_idx = FULL_ROUNDS_FIRST + r;
         
-        // For internal rounds, we need the state before this round
-        // which is the previous round's output
-        let prev_state = if round_idx == 0 {
-            // This shouldn't happen since we have FULL_ROUNDS_FIRST > 0
-            perm.input
-        } else {
-            perm.round_states[round_idx - 1]
-        };
+        // Get the state before this round (previous round's output)
+        let prev_state = perm.round_states[round_idx - 1];
         
         // Add round constant to element 0 only
         let pre_sbox = prev_state[0] + internal_rc(r);
         let x2 = pre_sbox * pre_sbox;
-        trace[sbox_start + sbox_idx].as_mut_slice()[0] = 
+        
+        // Store pre_sbox
+        trace[pre_sbox_start + sbox_idx].as_mut_slice()[0] = 
+            BaseField::from(pre_sbox.as_canonical_u32());
+        // Store x²
+        trace[x2_start + sbox_idx].as_mut_slice()[0] = 
             BaseField::from(x2.as_canonical_u32());
+        
         sbox_idx += 1;
     }
     
@@ -875,14 +845,20 @@ fn fill_permutation_trace(
         for i in 0..WIDTH {
             let pre_sbox = prev_state[i] + external_rc(rc_idx, i);
             let x2 = pre_sbox * pre_sbox;
-            trace[sbox_start + sbox_idx].as_mut_slice()[0] = 
+            
+            // Store pre_sbox
+            trace[pre_sbox_start + sbox_idx].as_mut_slice()[0] = 
+                BaseField::from(pre_sbox.as_canonical_u32());
+            // Store x²
+            trace[x2_start + sbox_idx].as_mut_slice()[0] = 
                 BaseField::from(x2.as_canonical_u32());
+            
             sbox_idx += 1;
         }
     }
     
     debug_assert_eq!(sbox_idx, SBOXES_PER_PERM, 
-        "Expected {} S-box intermediates, computed {}", SBOXES_PER_PERM, sbox_idx);
+        "Expected {} S-box values, computed {}", SBOXES_PER_PERM, sbox_idx);
 }
 
 // ============================================================================
