@@ -128,7 +128,9 @@ const AUX_COLS: usize = LEAF_SECRET_LEN + SESSION_ID_LEN + TREE_DEPTH + 1 + NULL
 pub const N_TRACE_COLS: usize = COLS_PER_PERM * NUM_PERMS + AUX_COLS;
 
 /// Log2 of number of rows
-pub const LOG_N_ROWS: u32 = 5; // 32 rows
+/// Must be large enough for STWO's FRI to work with degree-3 constraints
+/// Minimum ~8 for proper constraint evaluation domain
+pub const LOG_N_ROWS: u32 = 8; // 256 rows
 
 // ============================================================================
 // Round Constants (loaded from poseidon2_m31.rs)
@@ -933,6 +935,17 @@ pub fn generate_trace(witness: &MembershipWitness) -> Vec<Col<CpuBackend, BaseFi
     for perm in &witness.merkle_perms {
         fill_permutation_trace(&mut trace, perm_col, perm);
         perm_col += COLS_PER_PERM;
+    }
+    
+    // CRITICAL: Copy row 0 to all other rows
+    // STWO evaluates constraints on ALL rows, so they must all contain valid data
+    // that satisfies the constraints. Since our proof is for a single membership,
+    // we duplicate the data across all rows.
+    for col in &mut trace {
+        let row0_val = col.as_slice()[0];
+        for row in 1..n_rows {
+            col.as_mut_slice()[row] = row0_val;
+        }
     }
     
     trace
