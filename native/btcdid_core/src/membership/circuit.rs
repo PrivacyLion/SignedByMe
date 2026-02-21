@@ -580,29 +580,214 @@ impl stwo_constraint_framework::FrameworkEval for MembershipEval {
         }
         
         // =========================================================================
-        // Step 3: Add S-box constraints for each permutation
+        // Step 3: Add Poseidon2 round constraints for each permutation
         // =========================================================================
         //
         // For each S-box we have:
         //   pre_sbox (x): the value before S-box
         //   sbox_x2 (x²): the square of pre_sbox
+        //   post_sbox = x⁵ = x² * x² * x (computed symbolically)
+        //
+        // For external rounds:
+        //   round_output = external_linear(post_sbox)
+        //   where external_linear applies M4 circulant + cross-group sums
+        //
+        // For internal rounds:
+        //   post_sbox[0] = x⁵, post_sbox[i>0] = prev_state[i] (no S-box)
+        //   round_output = internal_linear(post_sbox)
         //
         // Constraints:
-        //   1. x² = x * x              (degree 2)
-        //   2. x⁵ = x² * x² * x        (degree 3, this is the post-sbox value)
-        //
-        // Constraint 1 ensures x² is correctly computed.
-        // Constraint 2 is used later when we constrain the linear layer.
+        //   1. x² = x * x (degree 2)
+        //   2. round_output[i] = linear_layer(post_sbox)[i] (degree 3)
         
         for perm in &all_perms {
-            // Add S-box constraints: x² = x * x
+            // =====================================================================
+            // Constraint 1: x² = x * x for all S-boxes
+            // =====================================================================
             for i in 0..SBOXES_PER_PERM {
                 let x = &perm.pre_sbox[i];
                 let x2 = &perm.sbox_x2[i];
-                
-                // Constraint: x² - x * x = 0
                 eval.add_constraint(x2.clone() - x.clone() * x.clone());
             }
+            
+            // =====================================================================
+            // Constraint 2: External round transitions (first 4 rounds)
+            // =====================================================================
+            // 
+            // For external round r:
+            //   post_sbox[i] = x²[i] * x²[i] * pre_sbox[i]  (S-box output)
+            //   round_output = external_linear(post_sbox)
+            //
+            // external_linear:
+            //   1. Apply M4 = circ(2,3,1,1) to each group of 4
+            //   2. Add sums of corresponding positions across groups
+            //
+            // Result for element i (group g = i/4, position j = i%4):
+            //   output[i] = Σ_{k=0..3} M4[j][k] * (post_sbox[4g+k] + T_k)
+            //   where T_k = Σ_{h=0..3} post_sbox[4h+k]
+            //
+            // M4 circulant rows:
+            //   j=0: [2,3,1,1]
+            //   j=1: [1,2,3,1]
+            //   j=2: [1,1,2,3]
+            //   j=3: [3,1,1,2]
+            
+            for r in 0..FULL_ROUNDS_FIRST {
+                let sbox_base = r * WIDTH;
+                
+                for i in 0..WIDTH {
+                    let g = i / 4;
+                    let j = i % 4;
+                    
+                    // M4 coefficients for row j
+                    let m4_row: [u32; 4] = match j {
+                        0 => [2, 3, 1, 1],
+                        1 => [1, 2, 3, 1],
+                        2 => [1, 1, 2, 3],
+                        3 => [3, 1, 1, 2],
+                        _ => unreachable!(),
+                    };
+                    
+                    // Helper to compute post_sbox symbolically: x⁵ = x² * x² * x
+                    let ps = |idx: usize| -> E::F {
+                        let x2 = &perm.sbox_x2[sbox_base + idx];
+                        let x = &perm.pre_sbox[sbox_base + idx];
+                        x2.clone() * x2.clone() * x.clone()
+                    };
+                    
+                    // Compute T_k = sum of post_sbox at position k across all groups
+                    let t0 = ps(0) + ps(4) + ps(8) + ps(12);
+                    let t1 = ps(1) + ps(5) + ps(9) + ps(13);
+                    let t2 = ps(2) + ps(6) + ps(10) + ps(14);
+                    let t3 = ps(3) + ps(7) + ps(11) + ps(15);
+                    
+                    // Compute output[i] = Σ_{k=0..3} m4[j][k] * (post_sbox[4g+k] + T_k)
+                    // Using repeated addition for multiplication by constant
+                    let term0 = ps(4*g + 0) + t0.clone();
+                    let term1 = ps(4*g + 1) + t1.clone();
+                    let term2 = ps(4*g + 2) + t2.clone();
+                    let term3 = ps(4*g + 3) + t3.clone();
+                    
+                    // Scale each term by its M4 coefficient (using repeated addition)
+                    let scaled0 = scale_by(term0, m4_row[0]);
+                    let scaled1 = scale_by(term1, m4_row[1]);
+                    let scaled2 = scale_by(term2, m4_row[2]);
+                    let scaled3 = scale_by(term3, m4_row[3]);
+                    
+                    let expected = scaled0 + scaled1 + scaled2 + scaled3;
+                    eval.add_constraint(perm.rounds[r][i].clone() - expected);
+                }
+            }
+            
+            // =====================================================================
+            // Constraint 3: Internal round transitions (14 rounds)
+            // =====================================================================
+            //
+            // For internal round r:
+            //   post_sbox[0] = x⁵ (element 0 through S-box)
+            //   post_sbox[i>0] = prev_round[i] (other elements unchanged)
+            //   round_output = internal_linear(post_sbox)
+            //
+            // internal_linear: output[i] = post_sbox[i] * V[i] + sum(post_sbox)
+            //   where V = [-2,1,2,4,8,16,32,64,128,256,1024,4096,8192,16384,32768,65536]
+            //
+            // For -2: output = -(2*x) = sum - 2*x - x = sum - 3*x + x - 2*x = ...
+            // Actually: -2*x = sum - sum - 2*x, but we need sum + (-2)*x
+            // Let's express: output[0] = V[0]*post_sbox[0] + sum = -2*post_sbox[0] + sum
+            //              = sum - 2*post_sbox[0] - post_sbox[0] + post_sbox[0]
+            //              = sum - post_sbox[0] - post_sbox[0]
+            // But that's sum - 2*ps[0], and we need -2*ps[0] + sum
+            // These are the same! So: output[0] = sum - ps[0] - ps[0]
+            
+            for r in 0..PARTIAL_ROUNDS {
+                let round_idx = FULL_ROUNDS_FIRST + r;
+                let sbox_idx = FULL_ROUNDS_FIRST * WIDTH + r;
+                
+                let prev_round = &perm.rounds[round_idx - 1];
+                
+                // post_sbox[0] = x² * x² * pre_sbox
+                let x2_0 = &perm.sbox_x2[sbox_idx];
+                let x_0 = &perm.pre_sbox[sbox_idx];
+                let ps0 = x2_0.clone() * x2_0.clone() * x_0.clone();
+                
+                // sum(post_sbox) = ps0 + Σ_{i=1..15} prev_round[i]
+                let mut sum = ps0.clone();
+                for i in 1..WIDTH {
+                    sum = sum + prev_round[i].clone();
+                }
+                
+                // V values (positive only for now, handle -2 specially)
+                const V_POS: [u32; 16] = [
+                    2, 1, 2, 4, 8, 16, 32, 64, 128, 256, 1024, 4096, 8192, 16384, 32768, 65536
+                ];
+                
+                // Element 0: output = -2*ps0 + sum = sum - 2*ps0
+                let expected_0 = sum.clone() - ps0.clone() - ps0.clone();
+                eval.add_constraint(perm.rounds[round_idx][0].clone() - expected_0);
+                
+                // Elements 1..15: output[i] = V[i]*prev_round[i] + sum
+                for i in 1..WIDTH {
+                    let expected = scale_by(prev_round[i].clone(), V_POS[i]) + sum.clone();
+                    eval.add_constraint(perm.rounds[round_idx][i].clone() - expected);
+                }
+            }
+            
+            // =====================================================================
+            // Constraint 4: Final external rounds (last 4 rounds)
+            // =====================================================================
+            
+            for r in 0..FULL_ROUNDS_LAST {
+                let round_idx = FULL_ROUNDS_FIRST + PARTIAL_ROUNDS + r;
+                // S-box indices: first 64 (4*16), then 14 internal, then 64 more
+                let sbox_base = FULL_ROUNDS_FIRST * WIDTH + PARTIAL_ROUNDS + r * WIDTH;
+                
+                for i in 0..WIDTH {
+                    let g = i / 4;
+                    let j = i % 4;
+                    
+                    let m4_row: [u32; 4] = match j {
+                        0 => [2, 3, 1, 1],
+                        1 => [1, 2, 3, 1],
+                        2 => [1, 1, 2, 3],
+                        3 => [3, 1, 1, 2],
+                        _ => unreachable!(),
+                    };
+                    
+                    let ps = |idx: usize| -> E::F {
+                        let x2 = &perm.sbox_x2[sbox_base + idx];
+                        let x = &perm.pre_sbox[sbox_base + idx];
+                        x2.clone() * x2.clone() * x.clone()
+                    };
+                    
+                    let t0 = ps(0) + ps(4) + ps(8) + ps(12);
+                    let t1 = ps(1) + ps(5) + ps(9) + ps(13);
+                    let t2 = ps(2) + ps(6) + ps(10) + ps(14);
+                    let t3 = ps(3) + ps(7) + ps(11) + ps(15);
+                    
+                    let term0 = ps(4*g + 0) + t0.clone();
+                    let term1 = ps(4*g + 1) + t1.clone();
+                    let term2 = ps(4*g + 2) + t2.clone();
+                    let term3 = ps(4*g + 3) + t3.clone();
+                    
+                    let expected = scale_by(term0, m4_row[0]) 
+                        + scale_by(term1, m4_row[1])
+                        + scale_by(term2, m4_row[2]) 
+                        + scale_by(term3, m4_row[3]);
+                    
+                    eval.add_constraint(perm.rounds[round_idx][i].clone() - expected);
+                }
+            }
+        }
+        
+        // Helper: multiply expression by positive integer via repeated addition
+        #[inline]
+        fn scale_by<F: Clone + std::ops::Add<Output = F>>(expr: F, coeff: u32) -> F {
+            debug_assert!(coeff > 0, "scale_by requires positive coefficient");
+            let mut result = expr.clone();
+            for _ in 1..coeff {
+                result = result + expr.clone();
+            }
+            result
         }
         
         // =========================================================================
