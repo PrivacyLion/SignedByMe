@@ -965,8 +965,8 @@ fn fill_permutation_trace(
     // Layout within permutation:
     //   [input: 16] [rounds: 416] [pre_sbox: 142] [x²: 142]
     
-    let external_rc = super::poseidon2_m31::get_external_constants();
-    let internal_rc = super::poseidon2_m31::get_internal_constants();
+    // Use the module-level external_rc() and internal_rc() functions
+    // which handle indexing into the round constants
     
     let pre_sbox_start = start_col + STATE_COLS_PER_PERM;
     let x2_start = pre_sbox_start + SBOXES_PER_PERM;
