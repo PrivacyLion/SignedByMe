@@ -1619,6 +1619,9 @@ mod tests {
         let mut commitment_scheme =
             CommitmentSchemeProver::<CpuBackend, Blake2sM31MerkleChannel>::new(config, &twiddles);
         
+        // CRITICAL: Must store polynomial coefficients for prover to work
+        commitment_scheme.set_store_polynomials_coefficients();
+        
         // Empty preprocessed trace
         let mut tree_builder = commitment_scheme.tree_builder();
         tree_builder.extend_evals(vec![]);
