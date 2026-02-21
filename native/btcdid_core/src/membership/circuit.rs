@@ -1620,13 +1620,13 @@ mod tests {
         // =========================================================================
         // Step 3: Setup STWO prover
         // =========================================================================
-        // Need log_blowup_factor >= 2 for degree-3 constraints (x² * x² * x)
-        // Default is 1 (blowup=2), we need 2 (blowup=4) for eval domain = 256*4 = 1024
+        // Testing with higher blowup to diagnose constraint degree
+        // Index 1110 > 1024 suggests degree > 3
         use stwo::core::fri::FriConfig;
         let config = PcsConfig {
             pow_bits: 10,
             fri_config: FriConfig {
-                log_blowup_factor: 2,  // blowup = 4 (was 1 = blowup 2)
+                log_blowup_factor: 3,  // blowup = 8, domain = 256*8 = 2048
                 log_last_layer_degree_bound: 0,
                 n_queries: 3,
             },
@@ -1668,6 +1668,9 @@ mod tests {
             SecureField::zero(),
         );
         
+        // Diagnostic: print constraint degree bounds
+        let sizes = component.trace_log_degree_bounds();
+        println!("Trace log degree bounds: {:?}", sizes);
         println!("✓ Component created, generating proof...");
         
         let proof = prove::<CpuBackend, Blake2sM31MerkleChannel>(
