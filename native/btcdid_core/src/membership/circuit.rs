@@ -1525,12 +1525,12 @@ mod tests {
     fn test_stwo_membership_prove_verify() {
         use itertools::Itertools;
         use num_traits::Zero;
+        use stwo::core::air::Component;
         use stwo::core::channel::Blake2sM31Channel;
         use stwo::core::fields::qm31::SecureField;
         use stwo::core::pcs::{CommitmentSchemeVerifier, PcsConfig};
         use stwo::core::poly::circle::CanonicCoset;
         use stwo::core::vcs_lifted::blake2_merkle::Blake2sM31MerkleChannel;
-        use stwo::core::vcs::blake2_hash::Blake2sHasherGeneric;
         use stwo::core::verifier::verify;
         use stwo::prover::backend::CpuBackend;
         use stwo::prover::poly::circle::{CircleEvaluation, PolyOps};
