@@ -1516,4 +1516,171 @@ mod tests {
         let witness = PermutationWitness::generate(input);
         println!("Circuit output: {:?}", witness.output().map(|x| x.as_canonical_u32())[..4].to_vec());
     }
+    
+    /// End-to-end STWO prove/verify test for Poseidon2 membership circuit
+    /// 
+    /// This is the critical integration test that proves the full pipeline works:
+    /// witness → trace → constraints → STWO proof → verification
+    #[test]
+    fn test_stwo_membership_prove_verify() {
+        use itertools::Itertools;
+        use num_traits::Zero;
+        use stwo::core::channel::Blake2sM31Channel;
+        use stwo::core::fields::qm31::SecureField;
+        use stwo::core::pcs::{CommitmentSchemeVerifier, PcsConfig};
+        use stwo::core::poly::circle::CanonicCoset;
+        use stwo::core::vcs_lifted::blake2_merkle::Blake2sM31MerkleChannel;
+        use stwo::core::vcs::blake2_hash::Blake2sHasherGeneric;
+        use stwo::core::verifier::verify;
+        use stwo::prover::backend::CpuBackend;
+        use stwo::prover::poly::circle::{CircleEvaluation, PolyOps};
+        use stwo::prover::poly::BitReversedOrder;
+        use stwo::prover::{prove, CommitmentSchemeProver};
+        use stwo_constraint_framework::{FrameworkComponent, TraceLocationAllocator};
+        
+        // =========================================================================
+        // Step 1: Create test witness
+        // =========================================================================
+        let leaf_secret: [M31; LEAF_SECRET_LEN] = [
+            M31::new(0x12345678), M31::new(0x23456789), M31::new(0x3456789A & 0x7FFFFFFF),
+            M31::new(0x456789AB & 0x7FFFFFFF), M31::new(0x56789ABC & 0x7FFFFFFF)
+        ];
+        let session_id: [M31; SESSION_ID_LEN] = [
+            M31::new(0xAABBCCDD & 0x7FFFFFFF), M31::new(0xBBCCDDEE & 0x7FFFFFFF),
+            M31::new(0xCCDDEEFF & 0x7FFFFFFF), M31::new(0xDDEEFF00 & 0x7FFFFFFF),
+            M31::new(0xEEFF0011 & 0x7FFFFFFF)
+        ];
+        
+        // Create siblings and path (all zeros for simplicity)
+        let siblings = vec![M31::new(0); TREE_DEPTH];
+        let path_bits = vec![false; TREE_DEPTH];
+        
+        // Compute the expected root by following the Merkle path
+        let mut leaf_input = [M31::new(0); WIDTH];
+        leaf_input[0] = M31::new(DOMAIN_LEAF);
+        for i in 0..LEAF_SECRET_LEN {
+            leaf_input[1 + i] = leaf_secret[i];
+        }
+        let leaf_perm = PermutationWitness::generate(leaf_input);
+        let mut current = leaf_perm.output()[1];
+        
+        for i in 0..TREE_DEPTH {
+            let mut merkle_input = [M31::new(0); WIDTH];
+            merkle_input[0] = M31::new(DOMAIN_MERK);
+            merkle_input[1] = current;
+            merkle_input[2] = siblings[i];
+            let perm = PermutationWitness::generate(merkle_input);
+            current = perm.output()[1];
+        }
+        let root = current;
+        let binding_hash = [M31::new(0); 8];
+        
+        // Generate full witness
+        let witness = MembershipWitness::generate(
+            leaf_secret,
+            session_id,
+            siblings,
+            path_bits,
+            root,
+            binding_hash,
+        ).expect("Witness generation should succeed");
+        
+        println!("✓ Witness generated");
+        println!("  Nullifier: {:?}", witness.nullifier.map(|x| x.as_canonical_u32()));
+        println!("  Root: {}", root.as_canonical_u32());
+        
+        // =========================================================================
+        // Step 2: Generate trace
+        // =========================================================================
+        let trace_cols = generate_trace(&witness);
+        assert_eq!(trace_cols.len(), N_TRACE_COLS, 
+            "Trace should have {} columns, got {}", N_TRACE_COLS, trace_cols.len());
+        println!("✓ Trace generated ({} columns)", trace_cols.len());
+        
+        // Convert to CircleEvaluations
+        let domain = CanonicCoset::new(LOG_N_ROWS).circle_domain();
+        let trace: Vec<CircleEvaluation<CpuBackend, BaseField, BitReversedOrder>> = trace_cols
+            .into_iter()
+            .map(|col| CircleEvaluation::new(domain, col))
+            .collect_vec();
+        
+        // =========================================================================
+        // Step 3: Setup STWO prover
+        // =========================================================================
+        let config = PcsConfig::default();
+        
+        let twiddles = CpuBackend::precompute_twiddles(
+            CanonicCoset::new(LOG_N_ROWS + 1 + config.fri_config.log_blowup_factor)
+                .circle_domain()
+                .half_coset,
+        );
+        
+        let prover_channel = &mut Blake2sM31Channel::default();
+        let mut commitment_scheme =
+            CommitmentSchemeProver::<CpuBackend, Blake2sM31MerkleChannel>::new(config, &twiddles);
+        
+        // Empty preprocessed trace
+        let mut tree_builder = commitment_scheme.tree_builder();
+        tree_builder.extend_evals(vec![]);
+        tree_builder.commit(prover_channel);
+        
+        // Commit the main trace
+        let mut tree_builder = commitment_scheme.tree_builder();
+        tree_builder.extend_evals(trace);
+        tree_builder.commit(prover_channel);
+        
+        println!("✓ Trace committed");
+        
+        // =========================================================================
+        // Step 4: Create component and generate proof
+        // =========================================================================
+        type MembershipComponent = FrameworkComponent<MembershipEval>;
+        
+        let component = MembershipComponent::new(
+            &mut TraceLocationAllocator::default(),
+            MembershipEval { log_n_rows: LOG_N_ROWS },
+            SecureField::zero(),
+        );
+        
+        println!("✓ Component created, generating proof...");
+        
+        let proof = prove::<CpuBackend, Blake2sM31MerkleChannel>(
+            &[&component],
+            prover_channel,
+            commitment_scheme,
+        ).expect("Proof generation should succeed");
+        
+        println!("✓ Proof generated!");
+        
+        // =========================================================================
+        // Step 5: Verify the proof
+        // =========================================================================
+        let verifier_channel = &mut Blake2sM31Channel::default();
+        let commitment_scheme = &mut CommitmentSchemeVerifier::<Blake2sM31MerkleChannel>::new(config);
+        
+        // Recreate component for verification
+        let component = MembershipComponent::new(
+            &mut TraceLocationAllocator::default(),
+            MembershipEval { log_n_rows: LOG_N_ROWS },
+            SecureField::zero(),
+        );
+        
+        let sizes = component.trace_log_degree_bounds();
+        
+        // Commit to the proof's commitments
+        commitment_scheme.commit(proof.0.commitments[0].clone(), &sizes[0], verifier_channel);
+        commitment_scheme.commit(proof.0.commitments[1].clone(), &sizes[1], verifier_channel);
+        
+        let result = verify(
+            &[&component],
+            verifier_channel,
+            commitment_scheme,
+            proof,
+        );
+        
+        match result {
+            Ok(_) => println!("✓ Proof VERIFIED successfully!"),
+            Err(e) => panic!("✗ Verification FAILED: {:?}", e),
+        }
+    }
 }
